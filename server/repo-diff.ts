@@ -88,7 +88,7 @@ export function contextOf(options: RepoDiffOptions): Context {
   };
 }
 
-function gitEnvironment(noLazyFetch: boolean): Record<string, string> {
+export function gitEnvironment(noLazyFetch: boolean): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) {
     // a repository the server itself was started inside (a hook, a test runner) is not the one asked about
