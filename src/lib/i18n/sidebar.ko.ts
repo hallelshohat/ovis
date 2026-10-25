@@ -1,6 +1,6 @@
 /**
  * Korean for the keys only the sidebar files use:
- * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx.
+ * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx, components/BoardTasks.tsx.
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_KO: Record<string, string> = {
@@ -69,7 +69,16 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Remove task…": "작업 제거…",
   "Remove task {task}?": "작업 {task}을(를) 제거할까요?",
   "The task leaves the board with its description and reviews, and its worktree is removed. Work in it that is not saved or not merged is kept.": "작업이 설명과 리뷰와 함께 보드에서 빠지고 워크트리도 제거됩니다. 저장되지 않았거나 병합되지 않은 작업은 남습니다.",
-  "Archive done tasks ({n})": "완료된 작업 보관 ({n})",
   "Archive done tasks in every repo ({n})": "모든 저장소의 완료된 작업 보관 ({n})",
   "Undo": "실행 취소",
+  "Allow request": "요청 허용",
+  "Archive done tasks in {repo} ({n})": "{repo}의 완료된 작업 보관 ({n})",
+  "Board tasks": "보드 작업",
+  "Board tasks on {name}": "{name}의 보드 작업",
+  "No tasks on the board": "보드에 작업이 없습니다",
+  "Approving…": "승인 중…",
+  "Archiving…": "보관 중…",
+  "Merging…": "병합 중…",
+  "Removing…": "제거 중…",
+  "Restoring…": "복원 중…",
 };
