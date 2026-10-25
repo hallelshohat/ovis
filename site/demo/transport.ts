@@ -15,7 +15,7 @@
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
 import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, DevicePairedEvent, DevicesRevokedAll, HealthAuth, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PairedDevice, PairingCode, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, SecuritySummary, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, TabMovedToWorkspace, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
-import type { PushSubscriptionStatus, RepoBranchComparison, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
+import type { PushSubscriptionStatus, RepoBranchComparison, RepoDiffFile, RepoDiffFileContents, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
 import { normalizeThemeChange, sharedPreferencesBody, type SharedPreferences } from "../../shared/preferences.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
@@ -951,7 +951,7 @@ const DEMO_DIFF: { file: RepoDiffFile; patch: string | null }[] = [
     "index 3f1c2aa..9b7d410 100644",
     "--- a/src/money.ts",
     "+++ b/src/money.ts",
-    "@@ -1,5 +1,8 @@",
+    "@@ -1,8 +1,11 @@",
     " export type Cents = number;",
     " ",
     "+/** Rounds half away from zero, so 10.075 is 1008 cents and not 1007. */",
@@ -961,9 +961,58 @@ const DEMO_DIFF: { file: RepoDiffFile; patch: string | null }[] = [
     "+  const rounded = Math.round(scaled + Number.EPSILON * scaled);",
     "+  return Math.sign(amount) * rounded;",
     " }",
+    " ",
+    " export function fromCents(cents: Cents): number {",
+    "   return cents / 100;",
     "",
   ].join("\n") },
 ];
+
+/** What follows the hunk in both sides of the demo's money.ts: the lines a separator expands into. */
+const DEMO_MONEY_TAIL = [
+  "export function fromCents(cents: Cents): number {",
+  "  return cents / 100;",
+  "}",
+  "",
+  "export function formatCents(cents: Cents, currency = \"USD\"): string {",
+  "  return new Intl.NumberFormat(\"en-US\", { style: \"currency\", currency }).format(fromCents(cents));",
+  "}",
+  "",
+  "export function sum(values: readonly Cents[]): Cents {",
+  "  return values.reduce((total, value) => total + value, 0);",
+  "}",
+  "",
+];
+/** The routes' leading lines, above the branch's hunk at line 12. */
+const DEMO_PAYMENTS_HEAD = [
+  "import { charge } from \"../billing.ts\";",
+  "import { lookup, remember } from \"../lib/idempotency.ts\";",
+  "import type { Payment, PaymentRequest } from \"../types.ts\";",
+  "",
+  "/**",
+  " * POST /payments. A client that retries with the same Idempotency-Key",
+  " * gets the first response back, never a second charge.",
+  " */",
+  "",
+  "",
+  "export async function createPayment(request: PaymentRequest): Promise<Payment> {",
+];
+const DEMO_PAYMENTS_TAIL = ["export async function refund(id: string): Promise<void> {", "  await charge({ refund: id });", "}", ""];
+
+/**
+ * Both whole sides of the demo files a separator can expand (GET /api/workspace/diff/contents), each
+ * the patch's own lines with what lies around its hunk.
+ */
+const DEMO_CONTENTS: Record<string, { old: string; new: string }> = {
+  "src/money.ts": {
+    old: ["export type Cents = number;", "", "export function toCents(amount: number): Cents {", "  return amount * 100;", "}", "", ...DEMO_MONEY_TAIL].join("\n"),
+    new: ["export type Cents = number;", "", "/** Rounds half away from zero, so 10.075 is 1008 cents and not 1007. */", "export function toCents(amount: number): Cents {", "  const scaled = Math.abs(amount) * 100;", "  const rounded = Math.round(scaled + Number.EPSILON * scaled);", "  return Math.sign(amount) * rounded;", "}", "", ...DEMO_MONEY_TAIL].join("\n"),
+  },
+  "src/routes/payments.ts": {
+    old: [...DEMO_PAYMENTS_HEAD, "  const key = request.headers.get(\"idempotency-key\");", "  return charge(request.body);", "}", "", ...DEMO_PAYMENTS_TAIL].join("\n"),
+    new: [...DEMO_PAYMENTS_HEAD, "  const key = request.headers.get(\"idempotency-key\");", "  if (key === null) return charge(request.body);", "  const earlier = await lookup(key);", "  return earlier ?? remember(key, await charge(request.body));", "}", "", ...DEMO_PAYMENTS_TAIL].join("\n"),
+  },
+};
 
 /**
  * The demo repository's HEAD, and the branches a base picker is offered (GET /api/workspace/diff/refs):
@@ -1834,7 +1883,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/voice") return json({ configured: false, source: null, ...VOICE_DEFAULTS } satisfies VoiceStatus, 200, { "cache-control": "no-store" });
   if (path === "/api/voice/config") return error("demo", "the demo saves no OpenAI key", 409);
   if (path === "/api/voice/transcribe") return error("voice_not_configured", "transcription is unavailable in the demo", 409);
-  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file" || path === "/api/workspace/diff/refs") {
+  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file" || path === "/api/workspace/diff/contents" || path === "/api/workspace/diff/refs") {
     const root = snapshot().panes.find((pane) => pane.pane_id === paneId)?.cwd ?? query.get("directory") ?? "/home/demo/checkout-api";
     // a worktree's checkout is on its own branch, as the sidebar and the footer say
     const branch = [...repositories.values()].flatMap((repo) => repo.checkouts).find((checkout) => checkout.path === root)?.branch ?? "main";
@@ -1856,7 +1905,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
         if (identity.repository_root !== root) return error("comparison_changed", "the repository or its HEAD is no longer the one this comparison was made on; refresh the list", 409);
       } else {
         const base = query.get("base") ?? "";
-        if (path === "/api/workspace/diff/file") return error("invalid_comparison", "a branch patch needs the comparison its list answered with", 400);
+        if (path !== "/api/workspace/diff/files") return error("invalid_comparison", "a branch patch needs the comparison its list answered with", 400);
         if (base === "") return error("invalid_revision", "scope=branch needs a base branch or commit", 400);
         if (!/^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]{0,199}$/.test(base) || base.includes("..")) return error("invalid_revision", "base must name one commit", 400);
         if (!["main", "origin/main", "refs/heads/main", "refs/remotes/origin/main", DEMO_MAIN].includes(base)) return error("revision_not_found", "base names no commit in this repository", 404);
@@ -1872,6 +1921,10 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     }
     const entry = changed.find((candidate) => candidate.file.path === query.get("path"));
     if (!entry) return error("not_found", "nothing changed at that path in this comparison", 404);
+    if (path === "/api/workspace/diff/contents") {
+      const contents = DEMO_CONTENTS[entry.file.path];
+      return json({ repository, scope: compared, comparison, file: entry.file, old: contents?.old ?? null, new: contents?.new ?? null, unavailable: contents ? null : entry.patch === null ? "binary" : "unsupported", limits: { max_bytes: DEMO_DIFF_LIMITS.max_patch_bytes } } satisfies RepoDiffFileContents);
+    }
     return json({ ...shared, file: entry.file, patch: entry.patch, unavailable: entry.patch === null ? "binary" : null, truncated: false, limits: { max_patch_bytes: DEMO_DIFF_LIMITS.max_patch_bytes, context_lines: DEMO_DIFF_LIMITS.context_lines } } satisfies RepoDiffFilePatch);
   }
   if (path.startsWith("/api/fs/")) return error("not_found", "the demo has no files to open", 404);

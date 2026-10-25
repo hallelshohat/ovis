@@ -40,6 +40,7 @@ import type {
   RepoBranchComparison,
   RepoDiffFileList,
   RepoDiffFilePatch,
+  RepoDiffFileContents,
   RepoDiffRefs,
   RepoDiffScope,
   PaneSplit,
@@ -723,6 +724,14 @@ export async function fetchRepoDiffFile(query: RepoDiffQuery, path: string, oldP
   params.set("path", path);
   if (oldPath !== null) params.set("old_path", oldPath);
   return getJson<RepoDiffFilePatch>(machinePath(machineId, `workspace/diff/file?${params.toString()}`));
+}
+
+/** GET /api/workspace/diff/contents: both whole sides of one changed file, for expanding its unchanged lines. */
+export async function fetchRepoDiffContents(query: RepoDiffQuery, path: string, oldPath: string | null, machineId = "local"): Promise<RepoDiffFileContents> {
+  const params = repoDiffQuery(query);
+  params.set("path", path);
+  if (oldPath !== null) params.set("old_path", oldPath);
+  return getJson<RepoDiffFileContents>(machinePath(machineId, `workspace/diff/contents?${params.toString()}`));
 }
 
 export type { CreateTabRequest, CreateWorkspaceRequest } from "../../shared/protocol.ts";
