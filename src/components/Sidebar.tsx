@@ -146,33 +146,36 @@ const PR_ICONS = { open: GitPullRequest, draft: GitPullRequestDraft, merged: Git
 const repoPages = new Map<string, Promise<string | null>>();
 
 /** The web page of the workspace's repository, once its PC has said it; null until then, and when it has none. */
-function useRepoPage(workspace: WorkspaceInfo, wanted: boolean): string | null {
+function useRepoPage(workspace: WorkspaceInfo | undefined, wanted: boolean): string | null {
   const machineId = useMachineId();
   const { worktreeRemote } = useMachineApi();
-  const key = `${machineId}\n${workspace.worktree?.repo_key ?? workspace.workspace_id}`;
+  const workspaceId = workspace?.workspace_id ?? "";
+  const key = `${machineId}\n${workspace?.worktree?.repo_key ?? workspaceId}`;
   const [known, setKnown] = useState<{ key: string; url: string | null } | null>(null);
   useEffect(() => {
-    if (!wanted) return;
+    if (!wanted || workspaceId === "") return;
     let live = true;
     let page = repoPages.get(key);
     if (page === undefined) {
-      page = worktreeRemote(workspace.workspace_id).then((answer) => answer.url, () => { repoPages.delete(key); return null; });
+      page = worktreeRemote(workspaceId).then((answer) => answer.url, () => { repoPages.delete(key); return null; });
       repoPages.set(key, page);
     }
     void page.then((url) => { if (live) setKnown({ key, url }); });
     return () => { live = false; };
-  }, [key, wanted, worktreeRemote, workspace.workspace_id]);
+  }, [key, wanted, worktreeRemote, workspaceId]);
   return known?.key === key ? known.url : null;
 }
 
 /**
  * The workspace's pull request, as the PR plugin reports it in the workspace's tokens
  * (shared/pr-status.ts), linked to its page on GitHub; nothing without one. Compact is the state's
- * mark and the number, for an agent row; else the checks, the review and the diff follow.
+ * mark and the number, for an agent row; else the checks, the review and the diff follow. `nested`
+ * is for a row that is itself a control (a command palette option), which can hold no link: a
+ * `<span>` that opens the page itself and keeps the click from the row.
  */
-export function PrBadge({ workspace, compact = false }: { workspace: WorkspaceInfo; compact?: boolean }) {
+export function PrBadge({ workspace, compact = false, nested = false }: { workspace: WorkspaceInfo | undefined; compact?: boolean; nested?: boolean }) {
   const t = useT();
-  const pr = prStatus(workspace.tokens);
+  const pr = prStatus(workspace?.tokens);
   const repo = useRepoPage(workspace, pr !== null);
   if (pr === null) return null;
   const Icon = PR_ICONS[pr.state];
@@ -182,16 +185,29 @@ export function PrBadge({ workspace, compact = false }: { workspace: WorkspaceIn
     : pr.state === "draft" ? [t("Pull request #{number}, draft", number), t("Draft")]
     : [t("Pull request #{number}, open", number), null];
   const title = [label, pr.checks, pr.review?.text, pr.diff].filter(Boolean).join(" · ");
+  const parts = <>
+    <span className="pr-badge-mark"><Icon aria-hidden="true" />#{pr.number}</span>
+    {!compact && <>
+      {word !== null && <span className="pr-badge-state">{word}</span>}
+      {pr.checks !== null && <span className="pr-badge-part" data-tone={pr.checksTone}>{pr.checks}</span>}
+      {pr.review !== null && <span className="pr-badge-part" data-tone={pr.review.tone}>{pr.review.text}</span>}
+      {pr.diff !== null && <span className="pr-badge-part">{pr.diff}</span>}
+    </>}
+  </>;
+  const className = `pr-badge${compact ? " is-compact" : ""}`;
+  const href = repo === null ? undefined : `${repo}/pull/${pr.number}`;
+  if (nested) {
+    const open = (event: MouseEvent): void => {
+      if (href === undefined) return;
+      event.stopPropagation();
+      window.open(href, "_blank", "noopener,noreferrer");
+    };
+    return <span className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge" data-href={href} title={title} onClick={open}>{parts}<span className="visually-hidden">{title}</span></span>;
+  }
   return (
-    <a className={`pr-badge${compact ? " is-compact" : ""}`} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge"
-      href={repo === null ? undefined : `${repo}/pull/${pr.number}`} target="_blank" rel="noreferrer" title={title} aria-label={title}>
-      <span className="pr-badge-mark"><Icon aria-hidden="true" />#{pr.number}</span>
-      {!compact && <>
-        {word !== null && <span className="pr-badge-state">{word}</span>}
-        {pr.checks !== null && <span className="pr-badge-part" data-tone={pr.checksTone}>{pr.checks}</span>}
-        {pr.review !== null && <span className="pr-badge-part" data-tone={pr.review.tone}>{pr.review.text}</span>}
-        {pr.diff !== null && <span className="pr-badge-part">{pr.diff}</span>}
-      </>}
+    <a className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge"
+      href={href} target="_blank" rel="noreferrer" title={title} aria-label={title}>
+      {parts}
     </a>
   );
 }
@@ -870,7 +886,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
       </nav>
       {menu && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={menu.title} subtitle={menu.place} items={menuItems(menu)} onClose={closeMenu} />}
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={confirm.action ?? t("Close")} onConfirm={confirm.run} escalation={confirm.escalation} onClose={() => setConfirm(null)} />}
-      {worktreeDialog && <WorktreeDialog mode={worktreeDialog.mode} workspace={worktreeDialog.workspace} onClose={() => setWorktreeDialog(null)} onOpened={(opened) => {
+      {worktreeDialog && <WorktreeDialog mode={worktreeDialog.mode} workspace={worktreeDialog.workspace} workspaces={snapshot?.workspaces ?? []} onClose={() => setWorktreeDialog(null)} onOpened={(opened) => {
         rememberOpened(opened);
         revealOpenedWorkspace.current = opened.workspace_id;
         const repoKey = worktreeDialog.workspace.worktree?.repo_key;
