@@ -47,7 +47,7 @@ describe("the palette's worktree dialog", () => {
   });
 
   const dialog = (workspace: WorkspaceInfo, onOpened: () => void = () => undefined) => <SettingsProvider>
-    <WorktreeRequestDialog request={{ machineId: "local", workspace, mode: "create" }} onClose={() => undefined} onOpened={onOpened} onOpenPane={() => undefined} />
+    <WorktreeRequestDialog workspaces={[]} request={{ machineId: "local", workspace, mode: "create" }} onClose={() => undefined} onOpened={onOpened} onOpenPane={() => undefined} />
   </SettingsProvider>;
   const branchField = (): ReactTestInstance => renderer!.root.findAll((node) => node.type === "input" && String(node.props.className).includes("worktree-code-input"))[0]!;
 
@@ -77,7 +77,7 @@ describe("the palette's worktree dialog", () => {
   it("names the PC it was asked for by its name in the title, not by its id", async () => {
     await act(async () => {
       renderer = create(<SettingsProvider>
-        <WorktreeRequestDialog request={{ machineId: "4f1c2d9e-0b7a-4c55-9a39-2f6d1e8b7c10", machineName: "Office PC", workspace: repository("api"), mode: "create" }} onClose={() => undefined} onOpened={() => undefined} onOpenPane={() => undefined} />
+        <WorktreeRequestDialog workspaces={[]} request={{ machineId: "4f1c2d9e-0b7a-4c55-9a39-2f6d1e8b7c10", machineName: "Office PC", workspace: repository("api"), mode: "create" }} onClose={() => undefined} onOpened={() => undefined} onOpenPane={() => undefined} />
       </SettingsProvider>);
     });
     expect(renderer!.root.findByType("h2").props.children).toBe("New worktree · api · Office PC");
