@@ -5,6 +5,8 @@
  */
 interface CapacitorBridge {
   isNativePlatform?: () => boolean;
+  /** "ios" or "android" in the app */
+  getPlatform?: () => string;
   nativePromise?: (plugin: string, method: string, options?: Record<string, unknown>) => Promise<unknown>;
   /** the app's native plugins, announced to the page before its first script runs */
   PluginHeaders?: ReadonlyArray<{ name?: unknown }>;
@@ -20,6 +22,11 @@ function bridge(): CapacitorBridge | undefined {
 /** Whether this page runs inside the iOS app rather than a browser. */
 export function inNativeApp(): boolean {
   return bridge()?.isNativePlatform?.() === true;
+}
+
+/** Whether this page runs inside the Android app, whose WebView draws no menu of its own for a long-pressed link. */
+export function inAndroidApp(): boolean {
+  return inNativeApp() && bridge()?.getPlatform?.() === "android";
 }
 
 /**
