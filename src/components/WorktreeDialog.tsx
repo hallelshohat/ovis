@@ -151,7 +151,7 @@ export function WorktreeDialog({ mode, workspace, workspaces, onClose, onOpened 
   // modal: Tab and Shift+Tab stay among the dialog's own fields and buttons
   const onKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>): void => {
     if (event.key !== "Tab" || !surface.current) return;
-    const stops = [...surface.current.querySelectorAll<HTMLElement>("input:not(:disabled), button:not(:disabled)")];
+    const stops = [...surface.current.querySelectorAll<HTMLElement>("input:not(:disabled), button:not(:disabled), a[href]")];
     if (stops.length === 0) return;
     const index = stops.indexOf(document.activeElement as HTMLElement);
     const next = event.shiftKey ? (index <= 0 ? stops.length - 1 : index - 1) : (index < 0 || index === stops.length - 1 ? 0 : index + 1);
