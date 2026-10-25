@@ -1643,8 +1643,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `Too long to highlight`. Changed lines get the package's word-level emphasis (`word-alt`).
   The separators between and after hunks expand, twenty lines per press: the first press reads
   both whole sides once (`GET /api/workspace/diff/contents`, capped as a patch is) and hands them
-  to the package's `loadDiffFiles`, but only when every line the patch holds is still at its
-  number, with its text, on both sides (`contentsMatchPatch`). A file changed on disk since the
+  to the package's `loadDiffFiles`, but only when the patch applied to the old side gives the new
+  side exactly, the collapsed lines between and around its hunks included (`contentsMatchPatch`). A file changed on disk since the
   patch was read is never mixed into its rows: nothing expands, and the meta line says `The file
   changed since this diff was read; reopen it to show unchanged lines.` The package draws its
   expand controls as unnamed `div role=button`s, so each gets a tab stop, a name (`Show unchanged

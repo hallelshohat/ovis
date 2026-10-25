@@ -117,12 +117,40 @@ export function diffChanges(lines: readonly DiffFindLine[]): DiffFindLine[] {
 }
 
 /**
- * Whether both whole sides of a file are the ones a patch was read from: every line the patch
- * holds is at its number, with its text, on its side. A file changed on disk since the patch
- * (an edit, a line added above a hunk) fails, and is never mixed into the patch's rows.
+ * Whether both whole sides of a file are the ones a patch was read from: the patch applied to the
+ * old side gives the new side exactly, every line between and around its hunks included. A file
+ * changed since the patch was read (an edit inside or outside a hunk, a line added above or
+ * appended below) fails, and is never mixed into the patch's rows. Line endings are compared
+ * without their carriage return, and a final newline the sides differ in alone is no change.
  */
 export function contentsMatchPatch(lines: readonly DiffFindLine[], old: string, next: string): boolean {
-  const sides = { old: old.split("\n"), new: next.split("\n") };
-  const at = (side: DiffSide, line: number | null, text: string): boolean => line === null || (sides[side][line - 1] ?? "").replace(/\r$/, "") === text && line <= sides[side].length;
-  return lines.every((line) => at("old", line.oldLine, line.text) && at("new", line.newLine, line.text));
+  const split = (text: string): string[] => {
+    const parts = text.split("\n").map((line) => line.replace(/\r$/, ""));
+    if (parts.at(-1) === "") parts.pop();
+    return parts;
+  };
+  const oldLines = split(old);
+  const newLines = split(next);
+  const rebuilt: string[] = [];
+  // the next old line not yet copied, 1-based
+  let at = 1;
+  for (const line of lines) {
+    // the unchanged lines before this one are the old side's, copied as they are
+    const until = line.oldLine ?? at + (line.newLine! - 1 - rebuilt.length);
+    while (at < until) {
+      if (at > oldLines.length) return false;
+      rebuilt.push(oldLines[at - 1]!);
+      at += 1;
+    }
+    if (line.oldLine !== null) {
+      if (oldLines[at - 1] !== line.text) return false;
+      at += 1;
+    }
+    if (line.newLine !== null) {
+      if (rebuilt.length + 1 !== line.newLine) return false;
+      rebuilt.push(line.text);
+    }
+  }
+  while (at <= oldLines.length) { rebuilt.push(oldLines[at - 1]!); at += 1; }
+  return rebuilt.length === newLines.length && rebuilt.every((line, index) => line === newLines[index]);
 }

@@ -163,4 +163,37 @@ describe("whole files against their patch", () => {
     expect(contentsMatchPatch(lines, old.replace("return amount * 100;", "return amount * 999;"), next)).toBe(false);
     expect(contentsMatchPatch(lines, old, "export type Cents = number;\n")).toBe(false);
   });
+
+  it("refuses a file changed between, before or after the hunks, where the rows are collapsed", () => {
+    const base = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`);
+    const edited = base.map((line, index) => (index === 4 ? "line five" : line));
+    const patch = [
+      "diff --git a/a.txt b/a.txt", "--- a/a.txt", "+++ b/a.txt",
+      "@@ -2,7 +2,7 @@", " line 2", " line 3", " line 4", "-line 5", "+line five", " line 6", " line 7", " line 8", "",
+    ].join("\n");
+    const hunkLines = diffFindLines(patch);
+    const text = (rows: string[]) => `${rows.join("\n")}\n`;
+    expect(contentsMatchPatch(hunkLines, text(base), text(edited))).toBe(true);
+    // the reviewer's cases: line 35 edited, a line appended after the final hunk, the old side's line 1 changed
+    expect(contentsMatchPatch(hunkLines, text(base), text(edited.map((line, index) => (index === 34 ? "line 35 changed" : line))))).toBe(false);
+    expect(contentsMatchPatch(hunkLines, text(base), text([...edited, "appended"]))).toBe(false);
+    expect(contentsMatchPatch(hunkLines, text(["first", ...base.slice(1)]), text(edited))).toBe(false);
+    // a line between two hunks
+    const two = [
+      "diff --git a/a.txt b/a.txt", "--- a/a.txt", "+++ b/a.txt",
+      "@@ -4,3 +4,3 @@", " line 4", "-line 5", "+line five", " line 6",
+      "@@ -30,3 +30,4 @@", " line 30", "+inserted", " line 31", " line 32", "",
+    ].join("\n");
+    const twice = [...edited.slice(0, 30), "inserted", ...edited.slice(30)];
+    expect(contentsMatchPatch(diffFindLines(two), text(base), text(twice))).toBe(true);
+    expect(contentsMatchPatch(diffFindLines(two), text(base), text(twice.map((line, index) => (index === 19 ? "line 20 changed" : line))))).toBe(false);
+    // only the final newline differs: no change to show
+    expect(contentsMatchPatch(hunkLines, text(base), edited.join("\n"))).toBe(true);
+  });
+
+  it("takes a new file and a deleted one against their one side", () => {
+    const added = ["diff --git a/n.txt b/n.txt", "new file mode 100644", "--- /dev/null", "+++ b/n.txt", "@@ -0,0 +1,2 @@", "+one", "+two", ""].join("\n");
+    expect(contentsMatchPatch(diffFindLines(added), "", "one\ntwo\n")).toBe(true);
+    expect(contentsMatchPatch(diffFindLines(added), "", "one\ntwo\nthree\n")).toBe(false);
+  });
 });
