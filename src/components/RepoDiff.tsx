@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_VIRTUAL_FILE_METRICS, parsePatchFiles, trimPatchContext, type FileDiffMetadata, type VirtualizedFileDiff, type Virtualizer as VirtualizerInstance } from "@pierre/diffs";
+import { DEFAULT_VIRTUAL_FILE_METRICS, parsePatchFiles, trimPatchContext, type FileDiffLoadedFiles, type FileDiffMetadata, type VirtualizedFileDiff, type Virtualizer as VirtualizerInstance } from "@pierre/diffs";
 import { FileDiff, useVirtualizer, Virtualizer, type FileDiffOptions } from "@pierre/diffs/react";
 
 import { DiffWorkerPool } from "./DiffWorkerPool.tsx";
+import type { RepoDiffFileContents } from "../../shared/protocol.ts";
 import { useT } from "../lib/i18n.ts";
 import { diffFindLines, type DiffSide } from "../lib/repoDiffFind.ts";
 import type { DiffStyle } from "../lib/settings.ts";
@@ -24,9 +25,11 @@ export interface RepoDiffProps {
   active?: DiffMark | null;
   /** the active match is on a line the folded context leaves out: the host shows the context whole */
   onUnfold?: () => void;
+  /** both whole sides of the file, read when a separator is first expanded; without it nothing between hunks expands */
+  loadContents?: () => Promise<RepoDiffFileContents>;
 }
 
-/** A logical line of the patch (an unchanged line is anchored to the new side) and the columns of a match in it. */
+/** A logical line of the patch (an unchanged line is anchored to the new side) and the columns of a match in it; `start === end` marks the row alone (a change, not a match). */
 export interface DiffMark {
   side: DiffSide;
   line: number;
@@ -88,6 +91,9 @@ function revealColumns(row: HTMLElement, mark: DiffMark): void {
   scroller.scrollLeft += (match.left + match.right) / 2 - (left + right) / 2;
 }
 
+/** How many unchanged lines one press of a separator's expand control shows. */
+const EXPANSION_LINES = 20;
+
 /** The fewest context lines the package's trimmer keeps correct (at 0 it miscounts the lines it drops). */
 export const FOLDED_CONTEXT_LINES = 1;
 
@@ -131,7 +137,7 @@ function parseFile(text: string): FileDiffMetadata | null {
  * the virtualizer renders by identity, and its host fills the scroll root so it has a box before
  * the first anchor pass (the contracts VirtualSource measured).
  */
-export default function RepoDiff({ patch, style, folded, wrap, theme, colored, active = null, onUnfold }: RepoDiffProps) {
+export default function RepoDiff({ patch, style, folded, wrap, theme, colored, active = null, onUnfold, loadContents }: RepoDiffProps) {
   const t = useT();
   const hostRef = useRef<HTMLDivElement>(null);
   const [lineHeight, setLineHeight] = useState<number | null>(null);
@@ -169,7 +175,7 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     for (const marked of shadow?.querySelectorAll("[data-find-active]") ?? []) if (marked !== row) marked.removeAttribute("data-find-active");
     row?.setAttribute("data-find-active", "");
     if (typeof CSS === "undefined" || !("highlights" in CSS) || typeof Highlight === "undefined") return;
-    const range = row === null || mark === null ? null : textRange(row, mark.start, mark.end);
+    const range = row === null || mark === null || mark.start === mark.end ? null : textRange(row, mark.start, mark.end);
     if (range === null) CSS.highlights.delete(FIND_HIGHLIGHT);
     else CSS.highlights.set(FIND_HIGHLIGHT, new Highlight(range));
   }, []);
@@ -198,7 +204,7 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     if (pending === null || file === null || !(root instanceof HTMLElement) || shadow === null) return;
     const row = markRow(shadow, pending.mark);
     // across first: a mounted row's text may lie past the scroller's right edge, also in a diff too short to scroll down
-    if (row !== null) revealColumns(row, pending.mark);
+    if (row !== null && pending.mark.start !== pending.mark.end) revealColumns(row, pending.mark);
     // the file's height arrives with its first rows: until then there is nothing to scroll, and the next render settles
     if (root.scrollHeight <= root.clientHeight + 1) return;
     const view = root.getBoundingClientRect();
@@ -252,6 +258,12 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
   }, [activeSide, activeLine, activeStart, activeEnd, style, wrap, theme, folded, paint, settle]);
   useEffect(() => () => { if (typeof CSS !== "undefined" && "highlights" in CSS) CSS.highlights.delete(FIND_HIGHLIGHT); }, []);
   const selected = useMemo(() => activeSide === null || activeLine === null ? null : { start: activeLine, end: activeLine, side: activeSide === "old" ? "deletions" as const : "additions" as const }, [activeSide, activeLine]);
+  const loadDiffFiles = useMemo(() => loadContents === undefined ? undefined : async (diff: FileDiffMetadata): Promise<FileDiffLoadedFiles> => {
+    const answer = await loadContents();
+    // the package only asks for a change or a changed rename, which has both sides
+    if (answer.old === null || answer.new === null) throw new Error(`the whole file can't be read (${answer.unavailable ?? "one side missing"})`);
+    return { oldFile: { name: diff.prevName ?? diff.name, contents: answer.old }, newFile: { name: diff.name, contents: answer.new } };
+  }, [loadContents]);
   const options = useMemo<Options>(() => ({
     disableFileHeader: true,
     diffStyle: style,
@@ -263,8 +275,12 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     lineHoverHighlight: "disabled",
     enableLineSelection: false,
     unsafeCSS: DIFF_SHADOW_CSS,
+    // as VS Code's diff: word emphasis inside changed lines, and twenty more unchanged lines per expand
+    lineDiffType: "word-alt",
+    expansionLineCount: EXPANSION_LINES,
+    loadDiffFiles,
     onPostRender,
-  }), [style, wrap, theme, colored, onPostRender]);
+  }), [style, wrap, theme, colored, onPostRender, loadDiffFiles]);
   const metrics = useMemo(() => (lineHeight === null ? null : { ...DEFAULT_VIRTUAL_FILE_METRICS, lineHeight }), [lineHeight]);
 
   if (fileDiff === null || fileDiff.hunks.length === 0) return <p className="repo-diff-note">{t("No lines changed.")}</p>;

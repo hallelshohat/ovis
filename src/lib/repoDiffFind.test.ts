@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { trimPatchContext } from "@pierre/diffs";
 
-import { DIFF_FIND_MAX_QUERY, diffFindLines, findInDiff, matchKey, stepMatch } from "./repoDiffFind.ts";
+import { DIFF_FIND_MAX_QUERY, diffChanges, diffFindLines, findInDiff, matchKey, stepMatch } from "./repoDiffFind.ts";
 
 const MONEY = [
   "diff --git a/src/money.ts b/src/money.ts",
@@ -113,5 +113,36 @@ describe("find in a diff", () => {
     expect(where(lines, "changed")).toEqual(["addition new:20 8-15"]);
     expect(stepMatch(2, 3, 1)).toBe(0);
     expect(stepMatch(0, 3, -1)).toBe(2);
+  });
+});
+
+describe("changes in a diff", () => {
+  it("counts a run of removed and added lines as one change, each hunk's runs apart", () => {
+    const patch = [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1,6 +1,6 @@",
+      "-first",
+      "+first!",
+      " two",
+      " three",
+      "+inserted",
+      " four",
+      "-five",
+      " six",
+      "@@ -40,2 +40,3 @@",
+      " forty",
+      "+forty-one",
+      " forty-two",
+      "",
+    ].join("\n");
+    expect(diffChanges(diffFindLines(patch)).map((line) => `${line.kind} ${line.side}:${line.line}`)).toEqual([
+      "deletion old:1",
+      "addition new:4",
+      "deletion old:5",
+      "addition new:41",
+    ]);
+    expect(diffChanges(diffFindLines(null))).toEqual([]);
   });
 });

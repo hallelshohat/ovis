@@ -106,3 +106,12 @@ export function stepMatch(index: number | null, total: number, direction: 1 | -1
   if (index === null) return direction === 1 ? 0 : total - 1;
   return (index + direction + total) % total;
 }
+
+/**
+ * The first line of each change, as VS Code's diff counts them: a run of removed and added lines
+ * with no unchanged line between them is one change. Hunks are always split by unchanged lines,
+ * so a run never spans two.
+ */
+export function diffChanges(lines: readonly DiffFindLine[]): DiffFindLine[] {
+  return lines.filter((line, index) => line.kind !== "context" && (index === 0 || lines[index - 1]!.kind === "context"));
+}
