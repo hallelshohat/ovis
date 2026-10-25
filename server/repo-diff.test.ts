@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { parsePatchFiles } from "@pierre/diffs";
 
-import type { ApiError, RepoBranchComparison, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs } from "../shared/protocol.ts";
+import type { ApiError, RepoBranchComparison, RepoDiffFileContents, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs } from "../shared/protocol.ts";
 import { DeviceStore } from "./devices.ts";
 import { createServer } from "./index.ts";
-import { REPO_DIFF_CONTEXT_LINES, REPO_DIFF_MAX_FILES, REPO_DIFF_MAX_LIST_BYTES, REPO_DIFF_MAX_PATCH_BYTES, REPO_DIFF_MAX_REFS, repoDiffFile, repoDiffFiles, repoDiffRefs } from "./repo-diff.ts";
+import { REPO_DIFF_CONTEXT_LINES, REPO_DIFF_MAX_FILES, REPO_DIFF_MAX_LIST_BYTES, REPO_DIFF_MAX_PATCH_BYTES, REPO_DIFF_MAX_REFS, repoDiffContents, repoDiffFile, repoDiffFiles, repoDiffRefs } from "./repo-diff.ts";
 
 /**
  * Real git repositories in a temp folder: the routes are only as right as what git prints, so a
@@ -513,6 +513,65 @@ describe("a branch against a base", () => {
   });
 });
 
+describe("both whole sides of a file, for expanding", () => {
+  let root: string;
+  let first: string;
+  let second: string;
+  beforeAll(() => {
+    root = repository("contents");
+    writeFileSync(join(root, "a.txt"), lines(30));
+    writeFileSync(join(root, "gone.txt"), "going\n");
+    writeFileSync(join(root, "moved-from.txt"), lines(12));
+    writeFileSync(join(root, "pic.bin"), new Uint8Array([0, 1, 2]));
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "first");
+    first = git(root, "rev-parse", "HEAD").trim();
+    writeFileSync(join(root, "a.txt"), lines(30).replace("line 15\n", "committed 15\n"));
+    git(root, "commit", "-q", "-a", "-m", "second");
+    second = git(root, "rev-parse", "HEAD").trim();
+    // staged: a rename with an edit; unstaged: an edit on top of the index, a deletion and an untracked file
+    git(root, "mv", "moved-from.txt", "moved-to.txt");
+    writeFileSync(join(root, "moved-to.txt"), lines(12).replace("line 3\n", "line three\n"));
+    writeFileSync(join(root, "a.txt"), lines(30).replace("line 15\n", "staged 15\n"));
+    git(root, "add", "moved-to.txt", "a.txt");
+    writeFileSync(join(root, "a.txt"), lines(30).replace("line 15\n", "worktree 15\n"));
+    rmSync(join(root, "gone.txt"));
+    writeFileSync(join(root, "new.txt"), "fresh\n");
+    writeFileSync(join(root, "pic.bin"), new Uint8Array([9, 0, 9]));
+  });
+
+  it("reads each side from where the scope compares it", async () => {
+    const workspace = await repoDiffContents(root, query({ path: "a.txt" }));
+    expect(workspace).toMatchObject({ scope: "workspace", unavailable: null, limits: { max_bytes: REPO_DIFF_MAX_PATCH_BYTES } });
+    expect([workspace.old, workspace.new]).toEqual([lines(30).replace("line 15\n", "staged 15\n"), lines(30).replace("line 15\n", "worktree 15\n")]);
+    const staged = await repoDiffContents(root, query({ scope: "staged", path: "a.txt" }));
+    expect([staged.old, staged.new]).toEqual([lines(30).replace("line 15\n", "committed 15\n"), lines(30).replace("line 15\n", "staged 15\n")]);
+    const commit = await repoDiffContents(root, query({ scope: "commit", base: first, head: second, path: "a.txt" }));
+    expect([commit.old, commit.new]).toEqual([lines(30), lines(30).replace("line 15\n", "committed 15\n")]);
+    // a rename's old side is read at its old path
+    const renamed = await repoDiffContents(root, query({ scope: "staged", path: "moved-to.txt", old_path: "moved-from.txt" }));
+    expect([renamed.old, renamed.new]).toEqual([lines(12), lines(12).replace("line 3\n", "line three\n")]);
+  });
+
+  it("has no old side for a new file, no new side for a deleted one, and neither for binary or too large", async () => {
+    expect(await repoDiffContents(root, query({ path: "new.txt" }))).toMatchObject({ old: null, new: "fresh\n", unavailable: null });
+    expect(await repoDiffContents(root, query({ path: "gone.txt" }))).toMatchObject({ old: "going\n", new: null, unavailable: null });
+    expect(await repoDiffContents(root, query({ path: "pic.bin" }))).toMatchObject({ old: null, new: null, unavailable: "binary" });
+    expect(await repoDiffContents(root, query({ path: "a.txt" }), { maxPatchBytes: 16 })).toMatchObject({ old: null, new: null, unavailable: "too_large" });
+    await expect(repoDiffContents(root, query({ path: "absent.txt" }))).rejects.toMatchObject({ code: "not_found", status: 404 });
+    await expect(repoDiffContents(root, query({ path: "../x" }))).rejects.toMatchObject({ code: "invalid_path", status: 400 });
+  });
+
+  it("reads a branch from its pinned merge base, and refuses once HEAD moved", async () => {
+    const list = await repoDiffFiles(root, query({ scope: "branch", base: first }));
+    const pinned = (values: Record<string, string>) => query({ scope: "branch", comparison: JSON.stringify(list.comparison), ...values });
+    const branch = await repoDiffContents(root, pinned({ path: "a.txt" }));
+    expect([branch.old, branch.new, branch.comparison]).toEqual([lines(30), lines(30).replace("line 15\n", "worktree 15\n"), list.comparison]);
+    const moved = { ...list.comparison!, head_oid: first };
+    await expect(repoDiffContents(root, query({ scope: "branch", comparison: JSON.stringify(moved), path: "a.txt" }))).rejects.toMatchObject({ code: "comparison_changed", status: 409 });
+  });
+});
+
 describe("repositories in an unusual state", () => {
   it("reads a repository with no commit yet: nothing, then untracked, then staged", async () => {
     const root = repository("unborn");
@@ -715,6 +774,10 @@ describe("GET /api/workspace/diff/*", () => {
     expect(response.status).toBe(200);
     const answer = await response.json() as RepoDiffFilePatch;
     expect(parsed(answer.patch).map((file) => [file.name, file.type])).toEqual([["a.txt", "change"]]);
+    const contents = await fetch(`${base}/api/workspace/diff/contents?${directory()}&path=a.txt`, { headers: owner });
+    expect(contents.status).toBe(200);
+    expect(contents.headers.get("cache-control")).toBe("private, no-store");
+    expect(await contents.json() as RepoDiffFileContents).toMatchObject({ old: "one\n", new: "two\n", unavailable: null });
   });
 
   it("lists the branches and compares the branch against one, the patch by the list's identity", async () => {
@@ -783,7 +846,7 @@ describe("GET /api/workspace/diff/*", () => {
     expect(crossSiteRefs.status).toBe(403);
     expect((await crossSiteRefs.json() as ApiError).error.code).toBe("cross_site");
     expect((await fetch(`${base}/api/session`, { headers: { cookie: watchCookie } })).status).not.toBe(401);
-    for (const path of ["workspace/diff/files", "workspace/diff/file", "workspace/diff/refs", "machines/pc1/workspace/diff/files", "machines/pc1/workspace/diff/file", "machines/pc1/workspace/diff/refs", "machines/local/workspace/diff/file"]) {
+    for (const path of ["workspace/diff/files", "workspace/diff/file", "workspace/diff/contents", "workspace/diff/refs", "machines/pc1/workspace/diff/files", "machines/pc1/workspace/diff/file", "machines/pc1/workspace/diff/refs", "machines/local/workspace/diff/file"]) {
       const response = await fetch(`${base}/api/${path}?${directory()}&path=a.txt`, { headers: { cookie: watchCookie } });
       expect([path, response.status]).toEqual([path, 403]);
       expect((await response.json() as ApiError).error.code).toBe("read_only");
