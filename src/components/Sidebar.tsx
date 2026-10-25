@@ -1,11 +1,12 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type AnimationEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
-import { ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Square, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
 
 import "./Sidebar.css";
 
 import type { AgentStatus, PaneInfo, PlanSummary, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
 import { paneTitle } from "../../shared/notify-policy.ts";
 import { prStatus } from "../../shared/pr-status.ts";
+import { boardTaskOf, boardTaskRepo, type BoardActionRequest, type BoardTask } from "../../shared/board-tasks.ts";
 import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
 import { useMachineApi, useMachineId, useReorderCoordinator } from "../lib/machineContext.tsx";
 import type { AppActions } from "../lib/actions.ts";
@@ -38,6 +39,8 @@ import { PANE_DRAG_TYPE, paneDragData } from "../lib/split.ts";
 import { currentSidebarPins, pinnedGroupIds, pinnedWorkspaceIds, pruneWorkspacePins, reorderWorkspacePins, setSidebarPins, splitPinnedGroups, subscribeSidebarPins, toggleSidebarPin, workspacePinKey, type WorkspaceGroup } from "../lib/sidebarPins.ts";
 
 const ERROR_NOTE_MS = 5000;
+/** long enough to reach Undo */
+const BOARD_NOTE_MS = 10000;
 
 const worktreeCollapsedKey = (machineId: string, repoKey: string) => `ovis:worktree-group-collapsed:${machineId}:${repoKey}`;
 function storedWorktreeCollapsed(machineId: string, repoKeys: string[]): Set<string> {
@@ -222,6 +225,9 @@ interface InlineError {
   detail: string | null;
 }
 
+/** the board's own words after an action, with Undo after an archive; a refusal stays until dismissed */
+interface BoardNote { message: string; failed: boolean; undo?: () => void }
+
 /**
  * A workspace right-click opens herdr's workspace menu at the pointer without moving focus.
  * Dismissal restores the prior input. A name editor keeps the browser's paste menu.
@@ -264,7 +270,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
   const twoLine = settings.sidebarRows === "two";
   const machineId = useMachineId();
   const activity = useSidebarActivity();
-  const { closeWorkspace, listWorktrees, moveWorkspace, removeWorktree, renameWorkspace } = useMachineApi();
+  const { boardAction, closeWorkspace, fetchBoardTasks, listWorktrees, moveWorkspace, removeWorktree, renameWorkspace } = useMachineApi();
   // the row menu's Earlier sessions needs the PC's bridge to list them (lib/useSessionHistoryOffered.ts)
   const historyOffered = useSessionHistoryOffered(online);
   // the roster's wait is a live region in the list from its first render, clipped while empty (never
@@ -462,6 +468,34 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
+  // the herdr-projects board's tasks (server/board-routes.ts), read again each time a row menu opens
+  // and after each action: a row that is a task's space gets the board's actions. A PC without the
+  // board answers 404, and its menus stay as they were
+  const [boardTasks, setBoardTasks] = useState<BoardTask[] | null>(null);
+  const [boardNote, setBoardNote] = useState<BoardNote | null>(null);
+  const refreshBoard = useCallback(() => fetchBoardTasks().then(setBoardTasks, () => setBoardTasks(null)), [fetchBoardTasks]);
+  const menuWorkspaceId = menu?.workspace.workspace_id;
+  useEffect(() => { if (menuWorkspaceId !== undefined && !watching) void refreshBoard(); }, [menuWorkspaceId, watching, refreshBoard]);
+  useEffect(() => {
+    if (boardNote === null || boardNote.failed) return;
+    const timer = window.setTimeout(() => setBoardNote(null), BOARD_NOTE_MS);
+    return () => window.clearTimeout(timer);
+  }, [boardNote]);
+  /** the board does it and says so; a refusal throws, for a confirmation's dialog to show */
+  const boardDo = async (request: BoardActionRequest, undo?: BoardActionRequest): Promise<void> => {
+    try {
+      const { message } = await boardAction(request);
+      setBoardNote({ message, failed: false, undo: undo && (() => boardRun(undo)) });
+    } finally {
+      void refreshBoard();
+    }
+  };
+  /** an action without a question: its refusal shows in the note */
+  const boardRun = (request: BoardActionRequest, undo?: BoardActionRequest): void => {
+    setBoardNote(null);
+    boardDo(request, undo).catch((error: unknown) => setBoardNote({ message: error instanceof ApiError ? error.detail : userErrorMessage(error).message, failed: true }));
+  };
+
   // A close takes the workspace with it, so it asks first, as herdr's ui.confirm_close does.
   // The row is gone afterwards, so focus moves to the header's workspace-list toggle.
   const leave = async (close: () => Promise<void>): Promise<void> => {
@@ -510,6 +544,33 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
         + (otherHeads ? ` ${t("The other workspaces open on this repository's main checkout close too.")}` : ""),
       run: () => leave(() => closeWorkspace(workspace.workspace_id, sameRepo.length > 0)),
     }) };
+    // the board's actions on a task's space, and on a repository's row its done tasks at once
+    const task = boardTasks && !watching ? boardTaskOf(workspace, boardTasks) : null;
+    const taskName = task ? `${task.id} “${task.title}”` : "";
+    const boardItems: RowMenuItem[] = task ? [
+      { id: "board-archive", label: t("Archive task"), icon: Archive, divider: true, run: () => boardRun({ action: "archive", id: task.id }, { action: "restore", id: task.id }) },
+      ...(task.state === "working" ? [{ id: "board-stop", label: t("Stop agent"), icon: Square, run: () => boardRun({ action: "stop", id: task.id }) }] : []),
+      ...(task.stage === "plan" ? [{ id: "board-approve-plan", label: t("Approve plan"), icon: Check, run: () => boardRun({ action: "approve", id: task.id }) }] : []),
+      ...(task.stage === "approval" ? [{ id: "board-approve", label: t("Approve and merge…"), icon: GitMerge, run: () => setConfirm({
+        title: t("Merge {task}?", { task: taskName }),
+        body: t("The board merges the task's finished work into its main branch, and closes its space."),
+        action: t("Merge"),
+        run: () => leave(() => boardDo({ action: "approve", id: task.id })),
+      }) }] : []),
+      { id: "board-clear", label: t("Remove task…"), icon: Trash2, danger: true, run: () => setConfirm({
+        title: t("Remove task {task}?", { task: taskName }),
+        body: t("The task leaves the board with its description and reviews, and its worktree is removed. Work in it that is not saved or not merged is kept."),
+        action: t("Remove"),
+        run: () => leave(() => boardDo({ action: "clear", id: task.id })),
+      }) },
+    ] : [];
+    const headRepo = !linked && !watching ? workspace.worktree?.repo_name : undefined;
+    const done = headRepo !== undefined ? (boardTasks ?? []).filter((candidate) => candidate.state === "done") : [];
+    const doneHere = done.filter((candidate) => boardTaskRepo(candidate) === headRepo).length;
+    const archiveDoneItems: RowMenuItem[] = [
+      ...(doneHere > 0 ? [{ id: "board-archive-done", label: t("Archive done tasks ({n})", { n: doneHere }), icon: Archive, divider: true, run: () => boardRun({ action: "archive-done", repo: headRepo }) }] : []),
+      ...(done.length > doneHere ? [{ id: "board-archive-all-done", label: t("Archive done tasks in every repo ({n})", { n: done.length }), icon: Archive, divider: doneHere === 0, run: () => boardRun({ action: "archive-done" }) }] : []),
+    ];
     // One native workspace menu for both the pointer and the explicit ⋯ button.
     const folded = repoKey !== undefined && worktreesFolded(repoKey, worktrees);
     const pinned = pinnedIds.includes(workspace.workspace_id);
@@ -523,6 +584,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
       { ...closeItem, label: t(sameRepo.length > 0 ? "Close group" : "Close workspace"), divider: false },
       ...worktreeItems, ...deleteItems,
       ...(worktrees.length > 0 && repoKey ? [{ id: "fold", label: t(folded ? "Expand" : "Collapse"), icon: folded ? ChevronRight : ChevronDown, run: () => toggleWorktrees(repoKey, folded) }] : []),
+      ...boardItems, ...archiveDoneItems,
     ];
   };
 
@@ -881,6 +943,13 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           <ul className="workspace-list">{visibleGroups.rest.map(renderGroup)}</ul>
           {inlineError && inlineError.workspaceId === undefined && (
             <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>
+          )}
+          {boardNote && (
+            <p className={`sidebar-board-note${boardNote.failed ? " is-failed" : ""}`} role={boardNote.failed ? "alert" : "status"}>
+              <span className="sidebar-board-note-text">{boardNote.message}</span>
+              {boardNote.undo && <button type="button" className="btn btn-ghost sidebar-board-note-action" onClick={boardNote.undo}>{t("Undo")}</button>}
+              <button type="button" className="sidebar-board-note-dismiss" aria-label={t("Dismiss")} onClick={() => setBoardNote(null)}><X aria-hidden="true" /></button>
+            </p>
           )}
         </>
       </nav>

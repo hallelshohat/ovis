@@ -37,6 +37,8 @@ const BASE: Record<string, string> = {
   "No matches": "无匹配",
   "{current} of {total}": "第 {current} 个，共 {total} 个",
   "Recent folders": "最近的文件夹",
+  "Stop agent": "停止 Agent",
+  "Remove": "移除",
   "Dismiss": "关闭",
   "Input line": "输入框",
   // ---- settings ----
