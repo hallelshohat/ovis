@@ -10,6 +10,7 @@ import { keepDismissed, noticeKey, readDismissed, waitingMachines, writeDismisse
 import type { AppActions } from "../lib/actions.ts";
 import { Sidebar } from "./Sidebar.tsx";
 import { MachineHeader, useMachineFold } from "./MachineHeader.tsx";
+import { BoardTasksButton } from "./BoardTasks.tsx";
 import { AgentSidebar } from "./AgentSidebar.tsx";
 import { SidebarSplit } from "./SidebarSplit.tsx";
 import { storedSidebarSplit, storeSidebarSplit, type SplitFold, type SplitOrder } from "../lib/sidebarSplit.ts";
@@ -484,7 +485,10 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
       agents={online && agentCount > 0 ? { count: agentCount, words: agentCount === 1 ? t("1 agent") : t("{n} agents", { n: agentCount }) } : null}
       dot={online ? null : { state: machineDotState(machine), title: quiet ? dotWords : stateWords }}
       actions={machine.kind !== "local" && <button ref={manageButton} type="button" className="sidebar-row-action machine-manage" aria-label={t("Manage {name}", { name: machine.name })} title={t("Manage PC")} aria-haspopup={sheet ? "dialog" : "menu"} aria-expanded={menu !== null} onClick={(event) => setMenu(menu === null ? event.currentTarget : null)}><SlidersHorizontal aria-hidden="true" /></button>}
-      end={<button className="sidebar-row-action machine-new" disabled={!canCreate} aria-label={t("New workspace on {name}", { name: machine.name })} title={createTitle} onClick={() => props.onNew(machine.id)}><Plus aria-hidden="true" /></button>} />}
+      end={<>
+        <MachineContext.Provider value={machine.id}><BoardTasksButton machineName={machine.name} enabled={online && !props.watching} /></MachineContext.Provider>
+        <button className="sidebar-row-action machine-new" disabled={!canCreate} aria-label={t("New workspace on {name}", { name: machine.name })} title={createTitle} onClick={() => props.onNew(machine.id)}><Plus aria-hidden="true" /></button>
+      </>} />}
     {/* C3 pin 2 (#16): the hosted app's own PC, new in the account: its tag and one-tap removal on the row itself */}
     {machine.kind === "local" && <NewPcRowTag serverId={machine.server_id ?? undefined} />}
     {noticed && <MachineActionNotice machine={machine} onSetup={props.onSetup} />}
