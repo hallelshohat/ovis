@@ -12,6 +12,40 @@ bun run dev      # Vite on :5173, proxies /api and /ws
 
 `bun run server` and `bun run dev` never update themselves; only `bun run start` and the plugin run the update supervisor.
 
+### Run a fork as the herdr plugin
+
+To make herdr run Ovis from a checkout (a fork or a branch) in place of the GitHub install:
+
+```bash
+sh scripts/local-plugin.sh link            # build this checkout, link it, restart Ovis
+sh scripts/local-plugin.sh link ~/code/ovis   # or another checkout
+sh scripts/local-plugin.sh unlink          # back to devswha/ovis at its latest release
+sh scripts/local-plugin.sh unlink v0.4.15  # or at a tag
+```
+
+Run `link` again after each change: it rebuilds and restarts. `herdr plugin list` shows
+`local:<path>` while linked. The startup hook, actions, phone setup pane, browser and phone
+clients, and an app installed from the same address then all run that checkout.
+The plugin's `env`/`.env`, its state dir and `~/.config/ovis` (paired devices, push, remote PCs)
+are kept by plugin id, so neither way sets anything up again. The in-app updater installs nothing
+on a checkout that is not a clean `main`, so it never replaces the fork.
+
+The Rust PTY host comes from the release named by `package.json`'s version, and only when the
+checkout's `crates/pty-sidecar` matches it. A fork that changes either gets the Node sidecar,
+unless it builds the host itself (`cargo build --release --manifest-path crates/pty-sidecar/Cargo.toml`).
+So do not mark a fork by its version: `herdr plugin list` already says where Ovis runs from.
+
+To bring upstream into the fork's branch (`upstream` is `devswha/ovis`, `origin` the fork):
+
+```bash
+git remote add upstream https://github.com/devswha/ovis.git   # once
+git switch hallel/custom
+git fetch upstream --tags
+git merge upstream/main        # or a release: git merge v0.4.16
+git push origin hallel/custom
+sh scripts/local-plugin.sh link
+```
+
 ## Connection diagnostics
 
 Transport failures write one JSON line to the server's standard error, with an ISO timestamp,
