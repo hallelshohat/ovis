@@ -455,6 +455,7 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *  GET    /api/worktree/inventory?workspace_id=&workspace_id=... -> WorktreeInventory (the same listing for up to
  *         MAX_INVENTORY_WORKSPACES workspaces in one read, each with its listing or the error the list route would give;
  *         400 missing_workspace_id, too_many_workspaces; a bridge from before it answers 404 not_found)
+ *  GET    /api/worktree/remote?workspace_id= -> WorktreeRemote (the repo's `origin` as a web page, for a pull request link)
  *  POST   /api/worktree/open   { workspace_id, path | branch, label? } -> WorktreeOpened
  *         (worktree.open: an existing checkout as a workspace; already_open names the one it has)
  *  POST   /api/worktree/remove { workspace_id, force? } -> WorktreeRemoved (worktree.remove: deletes the
@@ -815,7 +816,7 @@ export type { AgentKind } from "./agents.ts";
 
 export type { AgentIntegration, IntegrationsResponse } from "./integrations.ts";
 
-export type { CreateWorkspaceRequest, MoveTabRequest, TabMoved, MoveTabToWorkspaceRequest, TabMovedToWorkspace, CreateTabRequest, CreateWorktreeRequest, OpenWorktreeRequest, WorktreeOpened, RemoveWorktreeRequest, WorktreeRemoved, WorktreeEntry, WorktreeListing, WorktreeInventory, WorktreeInventoryEntry, WorkspaceCreated, TabCreated } from "./workspace-lifecycle.ts";
+export type { CreateWorkspaceRequest, MoveTabRequest, TabMoved, MoveTabToWorkspaceRequest, TabMovedToWorkspace, CreateTabRequest, CreateWorktreeRequest, OpenWorktreeRequest, WorktreeOpened, RemoveWorktreeRequest, WorktreeRemoved, WorktreeEntry, WorktreeListing, WorktreeRemote, WorktreeInventory, WorktreeInventoryEntry, WorkspaceCreated, TabCreated } from "./workspace-lifecycle.ts";
 
 /** POST /api/agent/rename: the live name of the agent in the pane; null clears it. */
 export interface AgentRenameRequest {

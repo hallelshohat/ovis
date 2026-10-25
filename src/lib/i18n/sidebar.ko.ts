@@ -72,4 +72,11 @@ export const SIDEBAR_KO: Record<string, string> = {
   "{count} need you": "{count}개가 기다림",
   "Move to {group}": "{group}(으)로 옮기기",
   "Remove from {group}": "{group}에서 빼기",
+  "Pull request #{number}, open": "풀 리퀘스트 #{number}, 열림",
+  "Pull request #{number}, draft": "풀 리퀘스트 #{number}, 초안",
+  "Pull request #{number}, merged": "풀 리퀘스트 #{number}, 병합됨",
+  "Pull request #{number}, closed": "풀 리퀘스트 #{number}, 닫힘",
+  "Draft": "초안",
+  "Merged": "병합됨",
+  "Closed": "닫힘",
 };

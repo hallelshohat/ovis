@@ -72,4 +72,11 @@ export const SIDEBAR_JA: Record<string, string> = {
   "{count} need you": "{count} 件が対応待ち",
   "Move to {group}": "{group} に移動",
   "Remove from {group}": "{group} から外す",
+  "Pull request #{number}, open": "プルリクエスト #{number}、オープン",
+  "Pull request #{number}, draft": "プルリクエスト #{number}、下書き",
+  "Pull request #{number}, merged": "プルリクエスト #{number}、マージ済み",
+  "Pull request #{number}, closed": "プルリクエスト #{number}、クローズ済み",
+  "Draft": "下書き",
+  "Merged": "マージ済み",
+  "Closed": "クローズ済み",
 };
