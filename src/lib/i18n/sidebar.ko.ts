@@ -87,4 +87,11 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Stopped": "멈춤",
   "Stop agents it called ({count})": "부른 에이전트 모두 멈추기 ({count})",
   "Some agents it called were not stopped. Try again.": "부른 에이전트 일부를 멈추지 못했습니다. 다시 시도하세요.",
+  "Pull request #{number}, open": "풀 리퀘스트 #{number}, 열림",
+  "Pull request #{number}, draft": "풀 리퀘스트 #{number}, 초안",
+  "Pull request #{number}, merged": "풀 리퀘스트 #{number}, 병합됨",
+  "Pull request #{number}, closed": "풀 리퀘스트 #{number}, 닫힘",
+  "Draft": "초안",
+  "Merged": "병합됨",
+  "Closed": "닫힘",
 };

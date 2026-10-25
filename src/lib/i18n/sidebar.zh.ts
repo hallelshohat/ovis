@@ -87,4 +87,11 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Stopped": "已停止",
   "Stop agents it called ({count})": "停止它调用的全部 Agent（{count}）",
   "Some agents it called were not stopped. Try again.": "部分被调用的 Agent 未能停止。请重试。",
+  "Pull request #{number}, open": "拉取请求 #{number}，开放中",
+  "Pull request #{number}, draft": "拉取请求 #{number}，草稿",
+  "Pull request #{number}, merged": "拉取请求 #{number}，已合并",
+  "Pull request #{number}, closed": "拉取请求 #{number}，已关闭",
+  "Draft": "草稿",
+  "Merged": "已合并",
+  "Closed": "已关闭",
 };

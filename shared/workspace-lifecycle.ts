@@ -133,6 +133,10 @@ export type WorktreeInventoryEntry =
 export interface WorktreeInventory {
   entries: WorktreeInventoryEntry[];
 }
+/** GET /api/worktree/remote: the web page of the workspace's repository, from its `origin`; null when it has none on a host. */
+export interface WorktreeRemote {
+  url: string | null;
+}
 
 /** POST /api/workspace/create: the workspace herdr made and the pane the agent (if any) runs in. */
 export interface WorkspaceCreated {

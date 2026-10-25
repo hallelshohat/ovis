@@ -8,8 +8,9 @@ import { isAbsolute, resolve } from "node:path";
 import { MAX_LABEL_CHARS } from "../shared/labels.ts";
 import { MAX_INVENTORY_WORKSPACES, type WorktreeInventoryEntry } from "../shared/workspace-lifecycle.ts";
 import { hasNoControlCharacters, firstMessageFault } from "../shared/launch-rules.ts";
-import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved, TabMovedToWorkspace, WorkspaceMoved } from "../shared/protocol.ts";
+import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved, TabMovedToWorkspace, WorkspaceMoved, WorktreeRemote } from "../shared/protocol.ts";
 import type { FirstMessageAsk } from "./pending-input.ts";
+import { remoteWebUrl } from "../shared/pr-status.ts";
 import type { MoveReceipt } from "./order-sequence.ts";
 import { agentFault, agentLaunch, type AgentPayload } from "./agent-launch.ts";
 import { createDirectory, expandedDirectory, listDirectories } from "./directories.ts";
@@ -17,9 +18,20 @@ import { HerdrError, paneMoveToNewTab, sessionSnapshot, tabClose, tabCreate, tab
 import { badRequest, conflictResponse, errorResponse, isJsonObject, jsonResponse, readJsonObject, requestFault, setRequestRoute, wordedHeaders } from "./http.ts";
 import { paneContext } from "./pane-context.ts";
 import { PullRequestError, mergeInputOf, mergePullRequest, pullRequestLog, pullRequestView } from "./pull-request.ts";
-import { repoDiffResponse } from "./repo-diff.ts";
+import { gitEnvironment, repoDiffResponse } from "./repo-diff.ts";
 import { repoLogResponse } from "./repo-log.ts";
 import type { ShellAgentLocator } from "./shell-agent.ts";
+
+/** `git remote get-url origin` in `cwd`; null when git has none or cannot answer */
+async function originRemote(cwd: string): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["git", "-C", cwd, "remote", "get-url", "origin"], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: gitEnvironment(), timeout: 5_000 });
+    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    return code === 0 ? out.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 async function routeFolder(paneId: string | null, directory: string): Promise<string | Response> {
   if (!paneId && directory === "") return badRequest("missing_directory", "pane_id or directory query parameter is required");
@@ -260,6 +272,22 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     try {
       const listing = await worktreeList(workspaceId);
       return jsonResponse({ source: listing.source, worktrees: listing.worktrees });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  // the web page of the workspace's repository, from its `origin`, for a link to the pull request
+  // the PR plugin names in the workspace's tokens (shared/pr-status.ts)
+  if (pathname === "/api/worktree/remote") {
+    setRequestRoute(pathname);
+    if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+    const workspaceId = url.searchParams.get("workspace_id") ?? "";
+    if (workspaceId === "") return badRequest("missing_workspace_id", "workspace_id is required");
+    try {
+      const listing = await worktreeList(workspaceId);
+      const remote = await originRemote(listing.source.source_checkout_path);
+      return jsonResponse({ url: remote === null ? null : remoteWebUrl(remote) } satisfies WorktreeRemote);
     } catch (error) {
       return errorResponse(error);
     }
