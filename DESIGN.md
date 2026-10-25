@@ -1077,7 +1077,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   colour; merged is purple (`--syntax-meta`); closed is dim and struck through, draft dim. Each
   state has its own mark, so colour never says it alone, and the link's name and tooltip say the
   state and every part in words. An agent row draws only the mark and number (`.pr-badge.is-compact`),
-  before its state. The link opens `https://<host>/<owner>/<repo>/pull/<n>` in a new tab; the
+  before its state. The Open worktree dialog draws an open checkout's badge as a link of its own
+  under its row, aligned with the branch, since the row's button opens the checkout. The command
+  palette draws a workspace section's whole status as a link on a line of its own under its heading,
+  and the mark and number beside each pane's state; a pane row is a listbox option, which holds no
+  link, so there the badge is a `<span>` that opens the page itself on a click or tap and keeps it
+  from the row (the row's Enter still selects the pane). The link opens `https://<host>/<owner>/<repo>/pull/<n>` in a new tab; the
   repository comes from the checkout's `origin` (`GET /api/worktree/remote`, asked once per
   repository and page load), and until it is known the badge is drawn without a link. It follows the
   token changes live with the rest of the snapshot, and a workspace without the tokens (no PR, or no
