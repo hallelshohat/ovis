@@ -265,6 +265,12 @@ export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupR
  *         `base`: the patch is read from its pinned merge base, so a base branch that moved on
  *         changes nothing, and 409 comparison_changed says the repository or HEAD is no longer
  *         the one listed (refresh the list); 400 invalid_comparison for one of another shape)
+ *  GET    /api/workspace/diff/contents?(the parameters of /diff/file) -> RepoDiffFileContents
+ *         (both whole sides of that file, for expanding the unchanged lines between hunks: the
+ *         old side from the index, HEAD, the base commit or the pinned merge base, the new one from
+ *         the working tree, the index or the head commit; each side capped as a patch is, and a
+ *         binary, too large or non-regular side answers `unavailable` with neither side. The same
+ *         refusals as /diff/file)
  *  GET    /api/workspace/diff/refs?pane_id=&directory= -> RepoDiffRefs (the local and remote
  *         branches of that repository, as full refnames with their commits, for choosing a base:
  *         at most `limits.max_refs`, sorted, a remote's symbolic HEAD left out; nothing is fetched)
@@ -495,7 +501,7 @@ export type { DirectoryListing, CreateDirectoryRequest, DirectoryCreated } from 
 
 export type { FileKind, FileInfo, ProjectFavicon } from "./files.ts";
 
-export type { RepoDiffScope, RepoBranchComparison, RepoDiffRefs, RepoDiffStatus, RepoDiffRepository, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch } from "./repo-diff.ts";
+export type { RepoDiffScope, RepoBranchComparison, RepoDiffRefs, RepoDiffStatus, RepoDiffRepository, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffFileContents } from "./repo-diff.ts";
 
 export type { AgentKind } from "./agents.ts";
 
