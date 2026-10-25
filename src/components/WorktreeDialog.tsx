@@ -16,6 +16,7 @@ import type { AgentKind, WorkspaceInfo, WorktreeEntry, WorktreeOpened } from "..
 import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
 import { ApiError } from "../lib/api.ts";
 import { AgentPicker, rememberAgent, rememberedAgent } from "./AgentPicker.tsx";
+import { PrBadge } from "./Sidebar.tsx";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
@@ -29,6 +30,8 @@ export type WorktreeDialogMode = "create" | "open";
 interface Props {
   mode: WorktreeDialogMode;
   workspace: WorkspaceInfo;
+  /** the PC's workspaces, for the pull request of a checkout that is already open (its tokens) */
+  workspaces: readonly WorkspaceInfo[];
   onClose: () => void;
   onOpened: (opened: WorktreeOpened) => void;
 }
@@ -36,7 +39,7 @@ interface Props {
 /** herdr's own words about a refused worktree (a branch that exists, a folder that is no repository) */
 const said = (reason: unknown): string => reason instanceof ApiError ? reason.detail : reason instanceof Error ? reason.message : String(reason);
 
-export function WorktreeDialog({ mode, workspace, onClose, onOpened }: Props) {
+export function WorktreeDialog({ mode, workspace, workspaces, onClose, onOpened }: Props) {
   const t = useT();
   const { settings } = useSettings();
   const id = useId();
@@ -210,6 +213,8 @@ export function WorktreeDialog({ mode, workspace, onClose, onOpened }: Props) {
                     </span>
                     {entry.open_workspace_id ? <span className="pill">{t("Already open")}</span> : entry.is_prunable && <span className="pill">{t("Checkout missing")}</span>}
                   </button>
+                  {/* an open checkout's pull request, a link of its own beside the row's button */}
+                  <PrBadge workspace={workspaces.find((candidate) => candidate.workspace_id === entry.open_workspace_id)} />
                 </li>
               ))}
             </ul>

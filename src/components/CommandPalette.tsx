@@ -16,7 +16,7 @@ import { Ownership, runPluginActionToEnd } from "../lib/pluginRun.ts";
 import { shortcutDisplayKeys, formatKeys, type ShortcutId } from "../lib/shortcuts.ts";
 import { useSettings } from "../lib/settings.ts";
 import { AgentMark } from "./AgentMark.tsx";
-import { displayPaneTitle, StatusBadge } from "./Sidebar.tsx";
+import { displayPaneTitle, PrBadge, StatusBadge } from "./Sidebar.tsx";
 import { PAGES } from "./SettingsDialog.tsx";
 import { folderName, placeLine } from "../lib/paneName.ts";
 import { agentTabName } from "../lib/sidebarAgents.ts";
@@ -646,6 +646,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
                 {section.machineName && <span className="palette-section-machine">{section.machineName}</span>}
                 <span className="palette-section-name">{section.heading}</span>
                 {section.branch && <span className="palette-section-branch">{section.branch}</span>}
+                {section.workspaceId !== undefined && <PrBadge link={false} workspace={machines.find((machine) => machine.id === section.machineId)?.snapshot?.workspaces.find((workspace) => workspace.workspace_id === section.workspaceId)} />}
                 <span className="palette-section-count">{section.rows.length}</span>
               </div>
               {section.rows.map((row) => {
@@ -687,6 +688,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
                   <button key={targetKey(row)} data-machine={row.machineId} data-pane={pane.pane_id} id={`palette-item-${index}`} type="button" role="option" className="menu-item palette-pane" aria-selected={activeIndex === index} aria-current={selected ? "true" : undefined} onFocus={() => select(index)} onMouseMove={() => select(index)} onClick={() => runPane(row)}>
                     <span className="palette-mark"><AgentMark agent={pane.agent ?? "shell"} /></span>
                     <span className="menu-item-main"><span className="palette-row-title">{displayPaneTitle(pane)}{selected && <span className="palette-selected">{t("Selected")}</span>}</span><span className="palette-row-subtitle">{place}</span></span>
+                    <PrBadge link={false} compact workspace={workspace} />
                     <StatusBadge status={paneStatus(pane)} />
                   </button>
                 );
