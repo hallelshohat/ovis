@@ -243,7 +243,7 @@ it("refuses a path with an empty segment instead of forwarding it as another rou
 it("forwards a repository diff or history read with its query and the bridge's own credential, and nothing of the browser's", async () => {
   const before = diffAsked.length;
   const search = "?pane_id=w1%3Ap1&scope=commit&base=HEAD~1&path=dir%20with%20space%2Fa.txt";
-  const routes = ["diff/files", "diff/file", "diff/refs", "git/log", "git/branches", "git/show"];
+  const routes = ["diff/files", "diff/file", "diff/contents", "diff/refs", "git/log", "git/branches", "git/show"];
   for (const route of routes) {
     const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/workspace/${route}${search}`, {
       headers: { cookie: "ovis_token=browser-secret; ovis_device=device-secret", authorization: "Bearer browser-secret", "x-forwarded-for": "203.0.113.9" },
@@ -254,7 +254,7 @@ it("forwards a repository diff or history read with its query and the bridge's o
     expect(await response.json()).toEqual({ files: [], total: 0, truncated: false });
   }
   expect(diffAsked.slice(before)).toEqual(routes.map((route) => ({ path: `/api/workspace/${route}`, search, authorization: "Bearer remote-token", cookie: null, forwarded: null })));
-  // only the three reads are routes: nothing else under that name reaches the PC
+  // Only the listed reads reach the PC.
   for (const path of ["workspace/diff", "workspace/diff/file/extra", "workspace/diff/apply", "workspace/diffs/file", "workspace/git", "workspace/git/log/extra", "workspace/git/checkout"]) {
     const response = await handleMachineRequest(new Request(`http://127.0.0.1/api/machines/pc1/${path}${search}`), manager);
     expect(response.status).toBe(404);
