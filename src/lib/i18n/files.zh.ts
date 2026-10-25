@@ -117,4 +117,10 @@ export const FILES_ZH: Record<string, string> = {
   "Collapse all folders": "折叠所有文件夹",
   "Expand all folders": "展开所有文件夹",
   "Browse folders in the palette": "在命令面板中浏览文件夹",
+  "Previous change": "上一处更改",
+  "Next change": "下一处更改",
+  "Change {current} of {total}": "第 {current} 处更改，共 {total} 处",
+  "Previous file": "上一个文件",
+  "Next file": "下一个文件",
+  "File {current} of {total}": "第 {current} 个文件，共 {total} 个",
 };

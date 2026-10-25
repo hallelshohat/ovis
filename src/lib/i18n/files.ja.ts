@@ -117,4 +117,10 @@ export const FILES_JA: Record<string, string> = {
   "Collapse all folders": "すべてのフォルダを折りたたむ",
   "Expand all folders": "すべてのフォルダを展開",
   "Browse folders in the palette": "パレットでフォルダを参照",
+  "Previous change": "前の変更",
+  "Next change": "次の変更",
+  "Change {current} of {total}": "変更 {current}/{total}",
+  "Previous file": "前のファイル",
+  "Next file": "次のファイル",
+  "File {current} of {total}": "ファイル {current}/{total}",
 };

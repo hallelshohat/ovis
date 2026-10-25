@@ -153,7 +153,9 @@
 }
 
 .repo-diff-actions,
-.repo-diff-group {
+.repo-diff-group,
+.repo-diff-changes,
+.repo-diff-stepper {
   display: flex;
   align-items: center;
 }
@@ -163,7 +165,9 @@
   gap: var(--space-4);
 }
 
-.repo-diff-group { gap: var(--space-1); }
+.repo-diff-group,
+.repo-diff-changes,
+.repo-diff-stepper { gap: var(--space-1); }
 
 .repo-diff-action[aria-pressed="true"] {
   background: var(--bg-hover);
@@ -174,6 +178,101 @@
 .repo-diff-styles > button:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+/* the change and file steppers' counts: quiet mono beside their buttons, and room kept so the buttons do not move */
+.repo-diff-change-count,
+.repo-diff-file-count {
+  min-width: 7ch;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.repo-diff-change-count:empty { min-width: 0; }
+.repo-diff-file-count { min-width: 0; text-align: center; }
+
+/* the file column beside the rows, as VS Code's changes list beside its diff */
+.repo-diff-panes {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.repo-diff-files {
+  flex: 0 0 260px;
+  min-width: 0;
+  overflow-y: auto;
+  border-right: var(--hairline) solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.repo-diff-files ul {
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+}
+
+.repo-diff-pick {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .repo-diff-pick:hover { background: var(--bg-hover); }
+}
+
+.repo-diff-pick[aria-current="page"] {
+  background: var(--accent-tint);
+  color: var(--text-strong);
+}
+
+.repo-diff-pick .repo-change-mark { align-self: center; }
+
+.repo-diff-pick-name {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* the folder gives way first, from its start, as the header's does */
+.repo-diff-pick-folder {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+}
+
+.repo-diff-pick-counts {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  gap: var(--space-1);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .repo-diff-body {
@@ -295,6 +394,28 @@
   .repo-diff-header .repo-diff-actions {
     grid-area: actions;
     justify-content: space-between;
+  }
+  /* two rows: the layout switch with the file stepper, then the change steppers with the actions */
+  .repo-diff-header .repo-diff-actions:has(.repo-diff-changes) {
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-template-areas: "styles stepper" "changes group";
+    justify-content: space-between;
+    align-items: center;
+    row-gap: var(--space-2);
+  }
+  .repo-diff-actions > .repo-diff-styles { grid-area: styles; }
+  .repo-diff-actions > .repo-diff-stepper { grid-area: stepper; }
+  .repo-diff-actions > .repo-diff-changes { grid-area: changes; }
+  .repo-diff-actions > .repo-diff-group { grid-area: group; }
+  /* the change count is said, not shown, where the row has no room for it */
+  .repo-diff-change-count {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
   /* the row holds the layout switch and four 44px actions only with the switch's words gone from
      view (a screen reader still has them); Split is declined on a phone anyway */

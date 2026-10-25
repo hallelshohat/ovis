@@ -117,4 +117,10 @@ export const FILES_KO: Record<string, string> = {
   "Collapse all folders": "모든 폴더 접기",
   "Expand all folders": "모든 폴더 펼치기",
   "Browse folders in the palette": "팔레트에서 폴더 탐색",
+  "Previous change": "이전 변경",
+  "Next change": "다음 변경",
+  "Change {current} of {total}": "변경 {total}개 중 {current}",
+  "Previous file": "이전 파일",
+  "Next file": "다음 파일",
+  "File {current} of {total}": "파일 {total}개 중 {current}",
 };
