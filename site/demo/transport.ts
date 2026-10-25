@@ -1391,6 +1391,8 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/push" || path.startsWith("/api/push/")) return pushRoute(path, method, init);
   if (path === "/api/alerts/webhook" || path === "/api/alerts/webhook/test") return alertWebhookRoute(path, method, init);
   if (path === "/api/memory" || path.startsWith("/api/memory/")) return memoryRoute(path, method, init);
+  // the demo has no herdr-projects board, as a PC without it: its rows keep their usual menus
+  if (path === "/api/board/tasks" || path === "/api/board/action") return error("board_unavailable", "the demo has no work board", 404);
   if (path === "/api/machines/settings") return json({ auto_update_bridges: true });
   if (path.startsWith("/api/machines/")) return error("demo", "remote PCs need a real machine", 404);
 
