@@ -53,4 +53,11 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Collapse": "접기",
   "Expand": "펼치기",
   "Shell": "셸",
+  "Pull request #{number}, open": "풀 리퀘스트 #{number}, 열림",
+  "Pull request #{number}, draft": "풀 리퀘스트 #{number}, 초안",
+  "Pull request #{number}, merged": "풀 리퀘스트 #{number}, 병합됨",
+  "Pull request #{number}, closed": "풀 리퀘스트 #{number}, 닫힘",
+  "Draft": "초안",
+  "Merged": "병합됨",
+  "Closed": "닫힘",
 };

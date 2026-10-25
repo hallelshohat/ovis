@@ -711,6 +711,69 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   height: var(--space-3);
 }
 
+/* A workspace's pull request (PrBadge): a link to its page, on a line under the row, aligned with
+   the name (a worktree's indent and a top row's face are each one box); on an agent row only its mark and number, before the state. Colours are herdr's
+   sidebar's: green passed or approved, amber pending, red failing or changes requested; merged is
+   purple, closed and draft dim. The mark differs per state, so colour never says it alone. */
+.pr-badge {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  min-width: 0;
+  margin: 0 var(--space-2) var(--space-1) calc(var(--side-box) * 2);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--chip-h);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+
+.pr-badge[href]:hover .pr-badge-mark { text-decoration: underline; }
+.pr-badge:focus-visible { outline: var(--ring); outline-offset: var(--ring-offset); }
+
+.pr-badge-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.pr-badge-mark svg {
+  width: var(--space-3);
+  height: var(--space-3);
+  flex: none;
+}
+
+.pr-badge[data-state="open"][data-checks="ok"] .pr-badge-mark,
+.pr-badge-part[data-tone="ok"] { color: var(--indicator-idle); }
+.pr-badge[data-state="open"][data-checks="pending"] .pr-badge-mark,
+.pr-badge-part[data-tone="pending"] { color: var(--indicator-working); }
+.pr-badge[data-state="open"][data-checks="fail"] .pr-badge-mark,
+.pr-badge-part[data-tone="fail"] { color: var(--indicator-blocked); }
+.pr-badge[data-state="merged"] .pr-badge-mark,
+.pr-badge[data-state="merged"] .pr-badge-state { color: var(--syntax-meta); }
+.pr-badge[data-state="closed"] .pr-badge-mark,
+.pr-badge[data-state="draft"] .pr-badge-mark { color: var(--text-dim); }
+.pr-badge[data-state="closed"] .pr-badge-mark { text-decoration: line-through; }
+
+.pr-badge-part,
+.pr-badge-state { white-space: nowrap; }
+
+.pr-badge.is-compact {
+  flex: none;
+  flex-wrap: nowrap;
+  margin: 0 var(--space-2) 0 0;
+}
+
+/* a finger gets a taller line to land on; the agent row's badge already has the row's height */
+@media (pointer: coarse) {
+  .pr-badge:not(.is-compact) { min-height: calc(var(--chip-h) * 1.5); }
+}
+
 .sidebar-inline-error {
   margin: 0;
   padding: var(--space-1) var(--space-2) var(--space-2) var(--side-box);
