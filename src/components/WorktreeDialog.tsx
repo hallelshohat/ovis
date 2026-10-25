@@ -13,6 +13,7 @@ import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
 import { ApiError } from "../lib/api.ts";
 import { AddAgentPanel } from "./AddAgentPanel.tsx";
 import { AgentPicker, rememberAgent, rememberedAgent } from "./AgentPicker.tsx";
+import { PrBadge } from "./Sidebar.tsx";
 import { MachineContext, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useT } from "../lib/i18n.ts";
 import { homeRelative } from "../lib/paletteFolders.ts";
@@ -28,6 +29,7 @@ export type WorktreeDialogMode = "create" | "open";
 interface Props {
   mode: WorktreeDialogMode;
   workspace: WorkspaceInfo;
+  workspaces: readonly WorkspaceInfo[];
   machineName?: string;
   onClose: () => void;
   onOpened: (opened: WorktreeOpened) => void;
@@ -75,13 +77,14 @@ const said = (reason: unknown): string => reason instanceof ApiError ? reason.de
 
 export interface WorktreeRequest { machineId: string; machineName?: string; workspace: WorkspaceInfo; mode: WorktreeDialogMode }
 
-export function WorktreeRequestDialog({ request, onClose, onOpened, onOpenPane }: { request: WorktreeRequest; onClose: () => void; onOpened: (opened: WorktreeOpened) => void; onOpenPane: (paneId: string) => void }) {
+
+export function WorktreeRequestDialog({ request, workspaces, onClose, onOpened, onOpenPane }: { request: WorktreeRequest; workspaces: readonly WorkspaceInfo[]; onClose: () => void; onOpened: (opened: WorktreeOpened) => void; onOpenPane: (paneId: string) => void }) {
   return <MachineContext.Provider value={request.machineId}>
-    <WorktreeDialog key={`${request.machineId}\n${request.workspace.workspace_id}\n${request.mode}`} mode={request.mode} workspace={request.workspace} machineName={request.machineName} onClose={onClose} onOpened={onOpened} onOpenPane={onOpenPane} />
+    <WorktreeDialog key={`${request.machineId}\n${request.workspace.workspace_id}\n${request.mode}`} mode={request.mode} workspace={request.workspace} workspaces={workspaces} machineName={request.machineName} onClose={onClose} onOpened={onOpened} onOpenPane={onOpenPane} />
   </MachineContext.Provider>;
 }
 
-export function WorktreeDialog({ mode, workspace, machineName, onClose, onOpened, onOpenPane }: Props) {
+export function WorktreeDialog({ mode, workspace, workspaces, machineName, onClose, onOpened, onOpenPane }: Props) {
   const t = useT();
   const { settings } = useSettings();
   const id = useId();
@@ -243,7 +246,7 @@ export function WorktreeDialog({ mode, workspace, machineName, onClose, onOpened
   };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>): void => {
     if (event.key !== "Tab" || !surface.current) return;
-    const stops = [...surface.current.querySelectorAll<HTMLElement>("input:not(:disabled), button:not(:disabled)")];
+    const stops = [...surface.current.querySelectorAll<HTMLElement>("input:not(:disabled), button:not(:disabled), a[href]")];
     if (stops.length === 0) return;
     const index = stops.indexOf(document.activeElement as HTMLElement);
     const next = event.shiftKey ? (index <= 0 ? stops.length - 1 : index - 1) : (index < 0 || index === stops.length - 1 ? 0 : index + 1);
@@ -315,6 +318,7 @@ export function WorktreeDialog({ mode, workspace, machineName, onClose, onOpened
                       </span>
                       {entry.open_workspace_id ? <span className="pill">{t("Already open")}</span> : entry.is_prunable && <span className="pill">{t("Checkout missing")}</span>}
                     </button>
+                    <PrBadge workspace={workspaces.find((candidate) => candidate.workspace_id === entry.open_workspace_id)} />
                   </li>
                 );
               })}
