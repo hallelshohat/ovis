@@ -364,6 +364,9 @@ describe("machine boundaries", () => {
     for (const path of ["agent-catalog/uninstall", "agent-catalog/install/extra", "agent-catalog/../auth"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
     expect(MACHINE_PROXY_PATH.test("system")).toBe(true);
     for (const path of ["system/extra", "systems", "system?x=1", "../system"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
+    // the herdr-projects board of a remote PC (server/board-routes.ts)
+    for (const path of ["board/tasks", "board/action"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
+    for (const path of ["board/tasks/extra", "board/clear", "board"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
     for (const path of ["auth", "push", "updates/install", "machines/setup", "bridge", "../auth", "pane/../../auth", "pane/prompt/answer/extra", "pane/rewind", "tab/move/extra", "tab/close/extra"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(false);
     for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "pane/omo-tasks", "pane/background-agent", "pane/btw", "pane/input", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
     for (const path of ["session", "agents", "integrations", "pane/files", "pane/find", "pane/image", "pane/prompt/answer", "pane/split", "pane/zoom", "pane/swap", "pane/resize", "pane/clear", "workspace/create", "tab/create", "tab/rename", "tab/close"]) expect(MACHINE_PROXY_PATH.test(path)).toBe(true);
