@@ -131,6 +131,7 @@ describe("demo transport", () => {
   const DEMO_404: Record<string, string> = {
     "/api/auth": "the demo is never locked (/api/health says authenticated), so neither the token form nor sign-out runs",
     "/api/bridge": "a remote PC's bridge endpoint, asked by another server, never by the browser",
+    "/api/worktree/remote": "asked only by a pull request badge, and the demo's workspaces carry no PR plugin tokens",
     "/api/event": "OpenCode v2's own service's event stream, read by this server (opencode-service.ts), never by the browser",
     "/api/info": "OpenCode v2's own service's identity, checked by this server (opencode-service.ts), never by the browser",
     "/api/devices/pair": "pairing a device: the demo is never locked, so the pairing form does not run",
