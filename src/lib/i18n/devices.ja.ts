@@ -68,7 +68,6 @@ export const DEVICES_JA: Record<string, string> = {
   "Open it on your phone and sign in with the access token, or pair the phone with a pairing code.": "スマートフォンで開いてアクセストークンでサインインするか、ペアリングコードでスマートフォンをペアリングしてください。",
   "Relay": "リレー",
   "Stop": "停止",
-  "Stopping…": "停止しています…",
   "Recovering…": "復旧しています…",
   "A relay you trust, from portal list: it holds the address's certificate, so one set up to intercept could read the traffic.": "portal list に出てくるリレーのうち、信頼できるものを使ってください。リレーはこのアドレスの証明書を持つため、傍受するよう設定されたリレーは通信内容を読めます。",
   "Portal's output": "Portal の出力",
