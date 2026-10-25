@@ -37,6 +37,7 @@ const BASE: Record<string, string> = {
   "Recent folders": "最近的文件夹",
   "Stop agent": "停止 Agent",
   "Remove": "移除",
+  "Stopping…": "正在停止…",
   "Dismiss": "关闭",
   "Input line": "输入框",
   // ---- settings ----

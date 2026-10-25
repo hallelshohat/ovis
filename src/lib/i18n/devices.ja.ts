@@ -79,7 +79,6 @@ export const DEVICES_JA: Record<string, string> = {
   "Open it on your phone and sign in with the access token, or pair the phone: Devices, below.": "スマートフォンで開いてアクセストークンでサインインするか、スマートフォンをペアリングしてください。下の「デバイス」を参照してください。",
   "Relay": "リレー",
   "Stop": "停止",
-  "Stopping…": "停止しています…",
   "Recovering…": "復旧しています…",
   "Set OVIS_TOKEN on this PC and restart the app to start Portal.": "Portal を開始するには、この PC で OVIS_TOKEN を設定してアプリを再起動してください。",
   "Portal is a second way in: unset OVIS_TAILSCALE_SERVE_ONLY on this PC and restart the app first.": "Portal はもう一つの入口です。先にこの PC で OVIS_TAILSCALE_SERVE_ONLY を解除し、アプリを再起動してください。",

@@ -79,7 +79,6 @@ export const DEVICES_KO: Record<string, string> = {
   "Open it on your phone and sign in with the access token, or pair the phone: Devices, below.": "폰에서 열고 접근 토큰으로 로그인하거나 폰을 페어링하세요. 아래 기기 항목을 보세요.",
   "Relay": "릴레이",
   "Stop": "중지",
-  "Stopping…": "중지 중…",
   "Recovering…": "복구 중…",
   "Set OVIS_TOKEN on this PC and restart the app to start Portal.": "Portal을 시작하려면 이 PC에 OVIS_TOKEN을 설정하고 앱을 다시 시작하세요.",
   "Portal is a second way in: unset OVIS_TAILSCALE_SERVE_ONLY on this PC and restart the app first.": "Portal은 또 하나의 접속 경로입니다. 먼저 이 PC에서 OVIS_TAILSCALE_SERVE_ONLY를 해제하고 앱을 다시 시작하세요.",

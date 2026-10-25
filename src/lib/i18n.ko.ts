@@ -33,6 +33,7 @@ const BASE: Record<string, string> = {
   "Recent folders": "최근 폴더",
   "Stop agent": "에이전트 중지",
   "Remove": "제거",
+  "Stopping…": "중지 중…",
   "Dismiss": "닫기",
   "Input line": "입력창",
   // ---- settings ----
