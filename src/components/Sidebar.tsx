@@ -1,10 +1,11 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type AnimationEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
-import { ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
 
 import "./Sidebar.css";
 
 import type { AgentStatus, PaneInfo, PlanSummary, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
 import { paneTitle } from "../../shared/notify-policy.ts";
+import { prStatus } from "../../shared/pr-status.ts";
 import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
 import { useMachineApi, useMachineId, useReorderCoordinator } from "../lib/machineContext.tsx";
 import type { AppActions } from "../lib/actions.ts";
@@ -137,6 +138,61 @@ export function PlanBadge({ plan }: { plan?: PlanSummary }) {
     <span className={`plan-count${plan.done === plan.total ? " is-done" : ""}`} title={plan.current ? `${label} · ${plan.current}` : label} aria-label={label} data-testid="plan-progress">
       <ListChecks aria-hidden="true" />{plan.done}/{plan.total}
     </span>
+  );
+}
+
+const PR_ICONS = { open: GitPullRequest, draft: GitPullRequestDraft, merged: GitMerge, closed: GitPullRequestClosed } as const;
+/** each PC's repositories' web pages, asked once per page load; a failed ask is asked again by the next badge */
+const repoPages = new Map<string, Promise<string | null>>();
+
+/** The web page of the workspace's repository, once its PC has said it; null until then, and when it has none. */
+function useRepoPage(workspace: WorkspaceInfo, wanted: boolean): string | null {
+  const machineId = useMachineId();
+  const { worktreeRemote } = useMachineApi();
+  const key = `${machineId}\n${workspace.worktree?.repo_key ?? workspace.workspace_id}`;
+  const [known, setKnown] = useState<{ key: string; url: string | null } | null>(null);
+  useEffect(() => {
+    if (!wanted) return;
+    let live = true;
+    let page = repoPages.get(key);
+    if (page === undefined) {
+      page = worktreeRemote(workspace.workspace_id).then((answer) => answer.url, () => { repoPages.delete(key); return null; });
+      repoPages.set(key, page);
+    }
+    void page.then((url) => { if (live) setKnown({ key, url }); });
+    return () => { live = false; };
+  }, [key, wanted, worktreeRemote, workspace.workspace_id]);
+  return known?.key === key ? known.url : null;
+}
+
+/**
+ * The workspace's pull request, as the PR plugin reports it in the workspace's tokens
+ * (shared/pr-status.ts), linked to its page on GitHub; nothing without one. Compact is the state's
+ * mark and the number, for an agent row; else the checks, the review and the diff follow.
+ */
+export function PrBadge({ workspace, compact = false }: { workspace: WorkspaceInfo; compact?: boolean }) {
+  const t = useT();
+  const pr = prStatus(workspace.tokens);
+  const repo = useRepoPage(workspace, pr !== null);
+  if (pr === null) return null;
+  const Icon = PR_ICONS[pr.state];
+  const number = { number: pr.number };
+  const [label, word] = pr.state === "merged" ? [t("Pull request #{number}, merged", number), t("Merged")]
+    : pr.state === "closed" ? [t("Pull request #{number}, closed", number), t("Closed")]
+    : pr.state === "draft" ? [t("Pull request #{number}, draft", number), t("Draft")]
+    : [t("Pull request #{number}, open", number), null];
+  const title = [label, pr.checks, pr.review?.text, pr.diff].filter(Boolean).join(" · ");
+  return (
+    <a className={`pr-badge${compact ? " is-compact" : ""}`} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge"
+      href={repo === null ? undefined : `${repo}/pull/${pr.number}`} target="_blank" rel="noreferrer" title={title} aria-label={title}>
+      <span className="pr-badge-mark"><Icon aria-hidden="true" />#{pr.number}</span>
+      {!compact && <>
+        {word !== null && <span className="pr-badge-state">{word}</span>}
+        {pr.checks !== null && <span className="pr-badge-part" data-tone={pr.checksTone}>{pr.checks}</span>}
+        {pr.review !== null && <span className="pr-badge-part" data-tone={pr.review.tone}>{pr.review.text}</span>}
+        {pr.diff !== null && <span className="pr-badge-part">{pr.diff}</span>}
+      </>}
+    </a>
   );
 }
 
@@ -765,6 +821,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           </button>
         </div>
       </div>
+      <PrBadge workspace={workspace} />
       {inlineError?.workspaceId === workspace.workspace_id && <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>}
     </li>;
   };

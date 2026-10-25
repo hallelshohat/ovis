@@ -72,6 +72,7 @@ import type {
   PluginActions,
   PluginActionsResponse,
   WorktreeListing,
+  WorktreeRemote,
   WorktreeOpened,
   WorktreeRemoved,
   ZoomPaneRequest,
@@ -731,6 +732,11 @@ export async function createWorktree(request: CreateWorktreeRequest, machineId =
 /** GET /api/worktree/list: every checkout of the workspace's repository, with the workspace each is open in. */
 export function listWorktrees(workspaceId: string, machineId = "local"): Promise<WorktreeListing> {
   return getJson<WorktreeListing>(`${machinePath(machineId, "worktree/list")}?workspace_id=${encodeURIComponent(workspaceId)}`);
+}
+
+/** GET /api/worktree/remote: the web page of the workspace's repository, from its `origin`. */
+export function worktreeRemote(workspaceId: string, machineId = "local"): Promise<WorktreeRemote> {
+  return getJson<WorktreeRemote>(`${machinePath(machineId, "worktree/remote")}?workspace_id=${encodeURIComponent(workspaceId)}`);
 }
 
 /** POST /api/worktree/open: an existing checkout as a workspace; the one it already has when it is open. */
