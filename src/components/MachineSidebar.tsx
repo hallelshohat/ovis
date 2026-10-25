@@ -9,6 +9,7 @@ import { keepDismissed, noticeKey, readDismissed, waitingMachines, writeDismisse
 import type { AppActions } from "../lib/actions.ts";
 import { Sidebar } from "./Sidebar.tsx";
 import { MachineStats } from "./MachineStats.tsx";
+import { BoardTasksButton } from "./BoardTasks.tsx";
 import { AgentSidebar } from "./AgentSidebar.tsx";
 import { SidebarSplit } from "./SidebarSplit.tsx";
 import { storedSidebarSplit, storeSidebarSplit, type SplitFold, type SplitOrder } from "../lib/sidebarSplit.ts";
@@ -489,6 +490,8 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
       {/* the fold's caret beside the +: it draws the title button's state and presses as it does, out of the keyboard's
           and a screen reader's way, since the title is the one fold control (G-036) */}
       <button className="sidebar-row-action machine-toggle" tabIndex={-1} aria-hidden="true" aria-expanded={!folded} aria-label={foldLabel} title={foldLabel} onClick={toggle}>{folded ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}</button>
+      {/* the herdr-projects board's tasks on this PC, also those whose space has closed */}
+      <MachineContext.Provider value={machine.id}><BoardTasksButton machineName={machine.name} enabled={online && !props.watching} /></MachineContext.Provider>
       <button className="sidebar-row-action machine-new" disabled={!canCreate} aria-label={t("New workspace on {name}", { name: machine.name })} title={createTitle} onClick={() => props.onNew(machine.id)}><Plus aria-hidden="true" /></button>
     </header>}
     {/* connected is the norm and says nothing new; every other state is spelled out. A failure is an alert, a
