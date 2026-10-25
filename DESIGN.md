@@ -1613,6 +1613,23 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   file** (the file viewer, on the PC that holds the repository; not for a deleted file) and
   **Copy patch** (git's own text; without a clipboard the patch becomes a selected text box, as
   the file viewer's Copy does). On a phone the actions take the second row under Close.
+- The viewer follows VS Code's diff editor. **Previous change** / **Next change** (`ChevronUp` /
+  `ChevronDown` in `.repo-diff-changes`, with `Change 2 of 5` beside them once the reader steps)
+  move between changes: a run of removed and added lines with no unchanged line between them is
+  one change (`diffChanges` in lib/repoDiffFind.ts). Each step rings the change's first row and
+  brings it to the middle with Find's measured reveal, without painting any text, and wraps at
+  the ends. F7 / Shift+F7 and Alt+Down / Alt+Up do the same while the focus is outside a text
+  field. A file opens at its top, not at its first change. Stepping a change closes Find, whose
+  match holds the ring while its bar is open. From 901px wide, `.repo-diff-files` sits left of the
+  rows: the comparison's files, flat and in path order (the Changes list keeps the tree). Each row
+  has the list's status chip, the name, the folder dimmed and cut from its start, and `+/−` or
+  **Binary**. The open file is `aria-current` on `--accent-tint`. Up/Down move between rows and
+  Enter or a click opens one. Narrower, `.repo-diff-stepper` in the header (Previous file,
+  `4/12`, Next file; on a phone the row beside the layout switch, with the change buttons moved
+  in front of the actions) takes its place. Alt+Shift+Down / Up step files at any width.
+  Switching files replaces the history entry and keeps the viewer mounted. The viewer reads the
+  list itself, so a reload that restores it still has its files. A rename shows `old → new` in
+  the meta line where the folder would be.
 - The rows are `@pierre/diffs`' `FileDiff` inside its `Virtualizer`: a window of a few hundred
   rows whatever the patch's length, drawn in the shadow root with the same tokens as a
   virtualized source (the `--diffs-*` hooks of lib/sourceTheme.ts): text `--text`, background
@@ -1623,8 +1640,19 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   lines`. Old and new line numbers sit in the gutters, outside a
   selection and a copy; a blank row keeps its newline. Colors come from the package's worker
   within the source bounds (256 KB, 5 000 lines), else the rows stay plain and the header says
-  `Too long to highlight`. Between hunks nothing expands: the routes serve the patch alone, not
-  the files around it; **Open file** is the way to the whole file.
+  `Too long to highlight`. Changed lines get the package's word-level emphasis (`word-alt`).
+  The separators between and after hunks expand, twenty lines per press: the first press reads
+  both whole sides once (`GET /api/workspace/diff/contents`, capped as a patch is) and hands them
+  to the package's `loadDiffFiles`, but only when the patch applied to the old side gives the new
+  side exactly, the collapsed lines between and around its hunks included (`contentsMatchPatch`). A file changed on disk since the
+  patch was read is never mixed into its rows: nothing expands, and the meta line says `The file
+  changed since this diff was read; reopen it to show unchanged lines.` The package draws its
+  expand controls as unnamed `div role=button`s, so each gets a tab stop, a name (`Show unchanged
+  lines above`, `below`, `Show unchanged lines`) and an `--accent` focus ring, and Enter or Space
+  presses it. The focus trap (lib/useFocusTrap.ts) counts tab stops inside open shadow roots, at
+  their host's place. A binary or too-large side, a pure rename, or a bridge too old for the
+  route leaves the separators as counts. **Open file** is still the way to the file as
+  it is on disk.
 - **Find in diff** (a `Search` icon button first among the actions, `aria-pressed`, and Ctrl/Cmd+F
   while the viewer has the keyboard) opens the terminal find bar's markup and tokens
   (`.find-bar.repo-diff-find`) between the header and the rows: the query with its name `Find in

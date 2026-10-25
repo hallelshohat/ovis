@@ -232,12 +232,12 @@ let demoServer: ReturnType<typeof Bun.serve> | undefined;
 
 /** The route the real server gives these paths, on a stand-in that maps a pane to its folder. */
 async function api(request: Request, url: URL): Promise<Response | null> {
-  const diff = /^\/api\/(?:machines\/([^/]+)\/)?workspace\/diff\/(files|file|refs)$/.exec(url.pathname);
+  const diff = /^\/api\/(?:machines\/([^/]+)\/)?workspace\/diff\/(files|file|contents|refs)$/.exec(url.pathname);
   if (diff) {
     requests.push(url.pathname);
     diffQueries.push(`${url.pathname}?${url.searchParams}`);
     const paneId = url.searchParams.get("pane_id");
-    const kind = diff[2] as "files" | "file" | "refs";
+    const kind = diff[2] as "files" | "file" | "contents" | "refs";
     // a device that may only watch is refused as the server refuses it, before any repository is read
     if (paneId === "pane-observe") return Response.json({ error: { code: "read_only", message: "this device can only watch" } }, { status: 403 });
     // a bridge from before the branch scope: no refs route, and a scope it does not know
@@ -1375,7 +1375,7 @@ try {
     await waitRows(page);
     await page.getByRole("button", { name: "Open file", exact: true }).click();
     await page.getByRole("dialog", { name: "money.ts", exact: true }).waitFor();
-    assert.deepEqual(requests.filter((path) => path.includes("/workspace/diff/")), ["/api/machines/remote-fixture/workspace/diff/files", "/api/machines/remote-fixture/workspace/diff/file"], `remote diff requests: ${requests.join(", ")}`);
+    assert.deepEqual(requests.filter((path) => path.includes("/workspace/diff/")), ["/api/machines/remote-fixture/workspace/diff/files", "/api/machines/remote-fixture/workspace/diff/file", "/api/machines/remote-fixture/workspace/diff/files"], `remote diff requests (the list, the patch, and the viewer's own list for its file column): ${requests.join(", ")}`);
     assert.ok(requests.some((path) => path === "/api/machines/remote-fixture/fs/stat"), `remote file requests: ${requests.join(", ")}`);
     await context.close();
     console.log("PASS a remote PC's changes and files read through its bridge");
