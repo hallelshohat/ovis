@@ -143,14 +143,14 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     return listing === null ? badRequest("invalid_cwd", "path must be a directory this user can read") : jsonResponse(listing);
   }
 
-  if (pathname === "/api/workspace/diff/files" || pathname === "/api/workspace/diff/file" || pathname === "/api/workspace/diff/refs") {
+  if (pathname === "/api/workspace/diff/files" || pathname === "/api/workspace/diff/file" || pathname === "/api/workspace/diff/contents" || pathname === "/api/workspace/diff/refs") {
     setRequestRoute(pathname);
     if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
     // file contents, like /api/fs/file: this app reads them, another site's page does not
     if (request.headers.get("sec-fetch-site") === "cross-site") return jsonResponse({ error: { code: "cross_site", message: "A repository's changes are read from this app" } }, 403);
     const cwd = await routeFolder(url.searchParams.get("pane_id"), (url.searchParams.get("directory") ?? "").trim());
     if (cwd instanceof Response) return cwd;
-    return repoDiffResponse(pathname.endsWith("/files") ? "files" : pathname.endsWith("/refs") ? "refs" : "file", cwd, url.searchParams);
+    return repoDiffResponse(pathname.endsWith("/files") ? "files" : pathname.endsWith("/refs") ? "refs" : pathname.endsWith("/contents") ? "contents" : "file", cwd, url.searchParams);
   }
 
   if (pathname === "/api/workspace/git/log" || pathname === "/api/workspace/git/branches" || pathname === "/api/workspace/git/show") {
