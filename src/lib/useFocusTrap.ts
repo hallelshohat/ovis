@@ -49,7 +49,7 @@ function reachable(node: HTMLElement): boolean {
 }
 
 function tabStops(surface: HTMLElement, options: FocusTrapOptions): HTMLElement[] {
-  return [...(options.leadingStops?.() ?? []), ...surface.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(reachable);
+  return [...(options.leadingStops?.() ?? []), ...focusables(surface)].filter(reachable);
 }
 
 /**
@@ -88,6 +88,28 @@ export function tabTarget(stops: readonly HTMLElement[], active: Element | null,
   return back
     ? (at <= 0 ? stops[stops.length - 1] : stops[at - 1])
     : (at === stops.length - 1 ? stops[0] : stops[at + 1]);
+}
+
+/**
+ * The focusable elements under `root` in tab order, including those inside open shadow roots
+ * (the diff's rows draw their expand controls there), each at its host's place.
+ */
+function focusables(root: Element | ShadowRoot): HTMLElement[] {
+  const found: HTMLElement[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (node.matches(FOCUSABLE)) found.push(node);
+    if (node.shadowRoot !== null) found.push(...focusables(node.shadowRoot));
+  }
+  return found;
+}
+
+/** The element that holds the focus, through the shadow roots it sits in. */
+function deepActive(): Element | null {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active;
 }
 
 const openTraps: object[] = [];
@@ -169,8 +191,9 @@ export function useFocusTrap<T extends HTMLElement>(open: boolean, options: Focu
       const holder = document.activeElement;
       if (holder instanceof Element && !node.contains(holder) && holder.closest('[role="dialog"], [role="alertdialog"], [role="menu"]') !== null) return;
       const stops = [...tabStops(node, latest.current), ...overlayStops()];
-      const stop = tabTarget(stops, document.activeElement, event.shiftKey);
-      const next = stop && overlayEntry(stop, document.activeElement);
+      const active = deepActive();
+      const stop = tabTarget(stops, active, event.shiftKey);
+      const next = stop && overlayEntry(stop, active);
       event.preventDefault();
       next?.focus({ preventScroll: true });
       // several waiting prompts in a short window scroll: the one Tab lands in is brought into view, its
