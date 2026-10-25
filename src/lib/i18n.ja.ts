@@ -33,6 +33,8 @@ const BASE: Record<string, string> = {
   "No matches": "一致なし",
   "{current} of {total}": "{total}件中{current}件目",
   "Recent folders": "最近のフォルダー",
+  "Stop agent": "エージェントを停止",
+  "Remove": "削除",
   "Dismiss": "閉じる",
   "Input line": "入力欄",
   // ---- settings ----

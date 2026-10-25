@@ -31,6 +31,8 @@ const BASE: Record<string, string> = {
   "No matches": "검색 결과 없음",
   "{current} of {total}": "{total}개 중 {current}",
   "Recent folders": "최근 폴더",
+  "Stop agent": "에이전트 중지",
+  "Remove": "제거",
   "Dismiss": "닫기",
   "Input line": "입력창",
   // ---- settings ----
