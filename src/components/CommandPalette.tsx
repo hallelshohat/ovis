@@ -646,9 +646,13 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
                 {section.machineName && <span className="palette-section-machine">{section.machineName}</span>}
                 <span className="palette-section-name">{section.heading}</span>
                 {section.branch && <span className="palette-section-branch">{section.branch}</span>}
-                {section.workspaceId !== undefined && <PrBadge link={false} workspace={machines.find((machine) => machine.id === section.machineId)?.snapshot?.workspaces.find((workspace) => workspace.workspace_id === section.workspaceId)} />}
                 <span className="palette-section-count">{section.rows.length}</span>
               </div>
+              {section.workspaceId !== undefined && (
+                <MachineContext.Provider value={section.machineId ?? machineId}>
+                  <PrBadge workspace={machines.find((machine) => machine.id === section.machineId)?.snapshot?.workspaces.find((workspace) => workspace.workspace_id === section.workspaceId)} />
+                </MachineContext.Provider>
+              )}
               {section.rows.map((row) => {
                 const index = rowIndex;
                 rowIndex += 1;
@@ -688,7 +692,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
                   <button key={targetKey(row)} data-machine={row.machineId} data-pane={pane.pane_id} id={`palette-item-${index}`} type="button" role="option" className="menu-item palette-pane" aria-selected={activeIndex === index} aria-current={selected ? "true" : undefined} onFocus={() => select(index)} onMouseMove={() => select(index)} onClick={() => runPane(row)}>
                     <span className="palette-mark"><AgentMark agent={pane.agent ?? "shell"} /></span>
                     <span className="menu-item-main"><span className="palette-row-title">{displayPaneTitle(pane)}{selected && <span className="palette-selected">{t("Selected")}</span>}</span><span className="palette-row-subtitle">{place}</span></span>
-                    <PrBadge link={false} compact workspace={workspace} />
+                    <MachineContext.Provider value={row.machineId}><PrBadge nested compact workspace={workspace} /></MachineContext.Provider>
                     <StatusBadge status={paneStatus(pane)} />
                   </button>
                 );

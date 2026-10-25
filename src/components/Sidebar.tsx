@@ -169,13 +169,14 @@ function useRepoPage(workspace: WorkspaceInfo | undefined, wanted: boolean): str
 /**
  * The workspace's pull request, as the PR plugin reports it in the workspace's tokens
  * (shared/pr-status.ts), linked to its page on GitHub; nothing without one. Compact is the state's
- * mark and the number, for an agent row; else the checks, the review and the diff follow. Without
- * `link` it is only words, for a row that is itself a control (a command palette option).
+ * mark and the number, for an agent row; else the checks, the review and the diff follow. `nested`
+ * is for a row that is itself a control (a command palette option), which can hold no link: a
+ * `<span>` that opens the page itself and keeps the click from the row.
  */
-export function PrBadge({ workspace, compact = false, link = true }: { workspace: WorkspaceInfo | undefined; compact?: boolean; link?: boolean }) {
+export function PrBadge({ workspace, compact = false, nested = false }: { workspace: WorkspaceInfo | undefined; compact?: boolean; nested?: boolean }) {
   const t = useT();
   const pr = prStatus(workspace?.tokens);
-  const repo = useRepoPage(workspace, pr !== null && link);
+  const repo = useRepoPage(workspace, pr !== null);
   if (pr === null) return null;
   const Icon = PR_ICONS[pr.state];
   const number = { number: pr.number };
@@ -194,10 +195,18 @@ export function PrBadge({ workspace, compact = false, link = true }: { workspace
     </>}
   </>;
   const className = `pr-badge${compact ? " is-compact" : ""}`;
-  if (!link) return <span className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge" title={title}>{parts}<span className="visually-hidden">{title}</span></span>;
+  const href = repo === null ? undefined : `${repo}/pull/${pr.number}`;
+  if (nested) {
+    const open = (event: MouseEvent): void => {
+      if (href === undefined) return;
+      event.stopPropagation();
+      window.open(href, "_blank", "noopener,noreferrer");
+    };
+    return <span className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge" data-href={href} title={title} onClick={open}>{parts}<span className="visually-hidden">{title}</span></span>;
+  }
   return (
     <a className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge"
-      href={repo === null ? undefined : `${repo}/pull/${pr.number}`} target="_blank" rel="noreferrer" title={title} aria-label={title}>
+      href={href} target="_blank" rel="noreferrer" title={title} aria-label={title}>
       {parts}
     </a>
   );
