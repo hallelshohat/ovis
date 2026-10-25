@@ -1414,7 +1414,7 @@ export function App() {
       {viewing !== null && !fileDocked && <MachineContext.Provider value={viewing.machineId}>
         <FileViewer key={fileViewerKey(viewing)} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path, presentation })} onKind={reportFileKind} onTogglePresentation={toggleFilePresentation} keyboardActive={!settingsOpen} editable={fileEditable} />
       </MachineContext.Provider>}
-      {worktreeFor && <WorktreeRequestDialog request={worktreeFor} onClose={() => setWorktreeFor(null)} onOpenPane={(paneId) => { setWorktreeFor(null); selectTarget(worktreeFor.machineId, paneId); }} onOpened={(opened) => {
+      {worktreeFor && <WorktreeRequestDialog request={worktreeFor} workspaces={machines.find((machine) => machine.id === worktreeFor.machineId)?.snapshot?.workspaces ?? []} onClose={() => setWorktreeFor(null)} onOpenPane={(paneId) => { setWorktreeFor(null); selectTarget(worktreeFor.machineId, paneId); }} onOpened={(opened) => {
         setWorktreeFor(null);
         if (opened.agent_started === true) actions.agentStarted(worktreeFor.machineId, opened.pane_id);
         selectTarget(worktreeFor.machineId, opened.pane_id);
