@@ -1089,21 +1089,26 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   plugin) draws nothing. On a coarse pointer the line is 1.5 chips tall to give a finger room. The
   design follows herdr's own sidebar (`[ui.sidebar.spaces]` rows naming `$pr` and its siblings) and
   Conductor's per-workspace PR status; the marks are GitHub's.
-- A workspace that is a herdr-projects board task's space (a linked worktree of the task's repo,
-  labelled with its title, or `KEY-n` and its title, as the board names the spaces it opens) has the
-  board's actions at the end of its row menu, under a hairline: Archive task, Stop agent (while the
-  task works), Approve plan (stage `plan`), Approve and merge… (stage `approval`) and Remove task…
-  (danger). A repository's own row has Archive done tasks (n) for its repo and, when another repo
-  has done tasks too, Archive done tasks in every repo (n). The merge and the remove ask first in the
-  confirm dialog: the remove names the task by id and title and says unsaved or unmerged work is
-  kept. The board's own CLI does each action through `POST /api/board/action` (shared/board-tasks.ts
-  checks the id and builds its arguments); the task list (`GET /api/board/tasks`) is read when a row
-  menu opens and after each action, and a PC without the board answers 404, so its menus stay as
-  they were. The board's message is a note under the roster (`.sidebar-board-note`, `--fs-xs` in
-  `--text-dim`, a refusal in `--status-blocked` with `role="alert"`), with Undo after an archive
-  (the board's `restore`) and a dismiss ×; a success leaves by itself after 10 seconds, a refusal
-  stays. The design follows the web Board's own buttons and questions (same words, a merge and a
-  remove ask first) and Linear's archive toast with Undo.
+- A workspace that is a herdr-projects board task's space (the workspace on the task's own checkout,
+  the `worktree` its `details --json` names; never matched by name, since two tasks may share a title)
+  has the board's actions at the end of its row menu, under a hairline: Archive task, Stop agent (while
+  the task works), Approve plan (stage `plan`), Allow request (stage `asks`, kind `permission`), Approve
+  and merge… (stage `approval`) and Remove task… (danger). The merge and the remove ask first in the
+  confirm dialog: the remove names the task by id and title and says unsaved or unmerged work is kept.
+  An approve carries the stage and kind it was offered for, and the server refuses it (409) once the
+  task has moved on, so a stale plan yes never merges. A task's space closes when it is done, so each
+  PC's header has a Board tasks button (`.machine-board`, ListChecks, only where that PC has a board and
+  this device may act) that opens a dialog listing every task on the board, each with the same actions
+  as buttons (`.board-task-action`), and Archive done tasks in every repo (n), and per repo when there
+  are several. The board's own CLI does each action through `POST /api/board/action`
+  (shared/board-tasks.ts checks the id and builds its arguments; remote PCs go through the PC proxy);
+  the task list (`GET /api/board/tasks`) is read when a row menu or the dialog opens and after each
+  action, and a PC without the board answers 404, so its menus stay as they were. The board's message
+  is a note (`.board-note`, `--fs-xs` in `--text-dim`, a refusal in `--status-blocked` with
+  `role="alert"`) under the roster or at the top of the dialog, with Undo after an archive (the board's
+  `restore`) and a dismiss ×; a success leaves by itself after 10 seconds, a refusal stays. The design
+  follows the web Board's own buttons and questions (same words, a merge and a remove ask first) and
+  Linear's archive toast with Undo.
 - What herdr plugins report on a pane (its `tokens`, `herdr pane report-metadata --token`: the Quota
   plugin's usage left, a task's progress) is a line of its own under an agent row's place, on One
   line and Two lines alike, only where the pane has one (`.agent-tokens`: `--fs-xs` in

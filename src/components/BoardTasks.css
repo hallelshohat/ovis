@@ -1,0 +1,56 @@
+/* the board's own words after an action on a task, with Undo after an archive */
+.board-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.board-note.is-failed { color: var(--status-blocked); }
+.board-note-text { flex: 1; min-width: 0; }
+.board-note-action { flex: none; }
+.board-note-dismiss {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.board-note-dismiss:hover { background: var(--bg-hover); color: var(--text); }
+.board-note-dismiss svg { width: 14px; height: 14px; }
+@media (pointer: coarse) {
+  .board-note-dismiss { width: 40px; height: 40px; }
+}
+/* in the sidebar, the note sits under the roster on the rows' grid */
+.machine-workspaces .board-note { margin: var(--space-1) var(--space-2) var(--space-2) var(--side-box); }
+
+.board-tasks-modal { width: min(640px, 100%); }
+.board-tasks-modal .modal-body { display: grid; gap: var(--space-3); }
+.board-tasks-modal .board-note { margin: 0; }
+.board-tasks-empty { margin: 0; color: var(--text-dim); font-size: var(--fs-sm); }
+.board-tasks-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.board-task {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.board-task-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); min-width: 0; }
+.board-task-id { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-dim); }
+.board-task-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.board-task-state { font-size: var(--fs-xs); color: var(--text-dim); }
+.board-task-state.is-working { color: var(--status-working); }
+.board-task-state.is-blocked, .board-task-state.is-error { color: var(--status-blocked); }
+.board-task-state.is-done { color: var(--status-idle); }
+.board-task-actions, .board-tasks-bulk { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.board-task-action svg { width: 14px; height: 14px; }
+.board-task-action.is-danger { color: var(--status-blocked); }

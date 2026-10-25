@@ -1,6 +1,6 @@
 /**
  * Japanese for the keys only the sidebar files use:
- * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx.
+ * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx, components/BoardTasks.tsx.
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_JA: Record<string, string> = {
@@ -69,7 +69,11 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Remove task…": "タスクを削除…",
   "Remove task {task}?": "タスク {task} を削除しますか？",
   "The task leaves the board with its description and reviews, and its worktree is removed. Work in it that is not saved or not merged is kept.": "タスクは説明とレビューごとボードから外れ、ワークツリーも削除されます。保存されていない作業やマージされていない作業は残ります。",
-  "Archive done tasks ({n})": "完了したタスクをアーカイブ ({n})",
   "Archive done tasks in every repo ({n})": "全リポジトリの完了したタスクをアーカイブ ({n})",
   "Undo": "元に戻す",
+  "Allow request": "リクエストを許可",
+  "Archive done tasks in {repo} ({n})": "{repo} の完了したタスクをアーカイブ ({n})",
+  "Board tasks": "ボードのタスク",
+  "Board tasks on {name}": "{name} のボードのタスク",
+  "No tasks on the board": "ボードにタスクはありません",
 };
