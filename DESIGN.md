@@ -1163,6 +1163,24 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   authoritative when the agent roster and pane status differ. The workspace and agent lists
   share the existing combined machine roster and its SSE updates; neither adds a status subscription.
   A disconnected PC's saved workspace and agent rows are dimmed, inert and draw no state until that PC reconnects.
+- A workspace's pull request, as the herdr plugin `jmarbutt.spaces-pr-status` reports it in the
+  workspace's `tokens` (`pr`, `pr_checks`, `pr_review`, `pr_diff`; shared/pr-status.ts reads its
+  compact and emoji styles), is a link (`.pr-badge`) on a line of its own under the workspace row,
+  aligned with the name, in `--font-mono` at `--fs-2xs`: GitHub's mark for the state (open, draft,
+  merged, closed) and `#number`, the word for draft, merged and closed, then the checks, the review
+  and the diff as the plugin wrote them. Colours are herdr's sidebar's, the `--indicator-*` tokens:
+  green (`--indicator-idle`) for passed or approved, amber (`--indicator-working`) for pending,
+  red (`--indicator-blocked`) for failing or changes requested; an open PR's mark takes its checks'
+  colour; merged is purple (`--syntax-meta`); closed is dim and struck through, draft dim. Each
+  state has its own mark, so colour never says it alone, and the link's name and tooltip say the
+  state and every part in words. An agent row draws only the mark and number (`.pr-badge.is-compact`),
+  before its state. The link opens `https://<host>/<owner>/<repo>/pull/<n>` in a new tab; the
+  repository comes from the checkout's `origin` (`GET /api/worktree/remote`, asked once per
+  repository and page load), and until it is known the badge is drawn without a link. It follows the
+  token changes live with the rest of the snapshot, and a workspace without the tokens (no PR, or no
+  plugin) draws nothing. On a coarse pointer the line is 1.5 chips tall to give a finger room. The
+  design follows herdr's own sidebar (`[ui.sidebar.spaces]` rows naming `$pr` and its siblings) and
+  Conductor's per-workspace PR status; the marks are GitHub's.
 - What herdr plugins report on a pane (its `tokens`, `herdr pane report-metadata --token`: the Quota
   plugin's usage left, a task's progress) is a line of its own under an agent row's place, on One
   line and Two lines alike, only where the pane has one (`.agent-tokens`: `--fs-xs` in

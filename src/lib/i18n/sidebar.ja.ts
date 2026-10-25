@@ -53,4 +53,11 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Collapse": "折りたたむ",
   "Expand": "展開",
   "Shell": "シェル",
+  "Pull request #{number}, open": "プルリクエスト #{number}、オープン",
+  "Pull request #{number}, draft": "プルリクエスト #{number}、下書き",
+  "Pull request #{number}, merged": "プルリクエスト #{number}、マージ済み",
+  "Pull request #{number}, closed": "プルリクエスト #{number}、クローズ済み",
+  "Draft": "下書き",
+  "Merged": "マージ済み",
+  "Closed": "クローズ済み",
 };
