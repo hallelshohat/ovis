@@ -1009,7 +1009,7 @@ export function App() {
           onClose={() => setFilesOpen(false)} />
       )}
       {diffViewing !== null && <MachineContext.Provider value={diffViewing.machineId}>
-        <RepoDiffViewer key={`${diffViewing.scope}:${diffViewing.path}`} target={diffViewing} onClose={closeDiff} onOpenFile={async (path) => {
+        <RepoDiffViewer key={diffViewing.scope} target={diffViewing} onClose={closeDiff} onSwitchFile={(file) => openDiff({ ...diffViewing, path: file.path, oldPath: file.old_path })} onOpenFile={async (path) => {
           try {
             if (await openDiffFile({ path, paneId: diffViewing.paneId, machineId: diffViewing.machineId })) { setFilesOpen(false); return; }
           } catch {

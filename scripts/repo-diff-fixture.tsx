@@ -31,7 +31,7 @@ function Fixture() {
         onClose={() => setFiles(null)} />
     </MachineContext.Provider>}
     {diff && <MachineContext.Provider value={diff.machineId}>
-      <RepoDiffViewer key={`${diff.scope}:${diff.path}`} target={diff} onClose={closeDiff} onOpenFile={(path) => openFile({ path, paneId: diff.paneId, machineId: diff.machineId })} keyboardActive={file === null} />
+      <RepoDiffViewer key={diff.scope} target={diff} onClose={closeDiff} onSwitchFile={(entry) => openDiff({ ...diff, path: entry.path, oldPath: entry.old_path })} onOpenFile={(path) => openFile({ path, paneId: diff.paneId, machineId: diff.machineId })} keyboardActive={file === null} />
     </MachineContext.Provider>}
     {file && <MachineContext.Provider value={file.machineId}>
       <FileViewer key={file.path} path={file.path} paneId={file.paneId} onClose={closeFile} />
