@@ -76,4 +76,11 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Remove from {group}": "从 {group} 移出",
   "{count} working": "{count} 个工作中",
   "On this device, an agent's helpers fold into one line under it in the Agents list, with their count. A helper that needs you and the one you selected stay in sight.": "在此设备的 Agent 列表中，把 Agent 的助手折叠成它下方的一行，并显示数量。需要你回应的助手和当前选中的助手仍会显示。",
+  "Pull request #{number}, open": "拉取请求 #{number}，开放中",
+  "Pull request #{number}, draft": "拉取请求 #{number}，草稿",
+  "Pull request #{number}, merged": "拉取请求 #{number}，已合并",
+  "Pull request #{number}, closed": "拉取请求 #{number}，已关闭",
+  "Draft": "草稿",
+  "Merged": "已合并",
+  "Closed": "已关闭",
 };
