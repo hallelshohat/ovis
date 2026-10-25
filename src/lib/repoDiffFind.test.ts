@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { trimPatchContext } from "@pierre/diffs";
 
-import { DIFF_FIND_MAX_QUERY, diffChanges, diffFindLines, findInDiff, matchKey, stepMatch } from "./repoDiffFind.ts";
+import { contentsMatchPatch, DIFF_FIND_MAX_QUERY, diffChanges, diffFindLines, findInDiff, matchKey, stepMatch } from "./repoDiffFind.ts";
 
 const MONEY = [
   "diff --git a/src/money.ts b/src/money.ts",
@@ -144,5 +144,23 @@ describe("changes in a diff", () => {
       "addition new:41",
     ]);
     expect(diffChanges(diffFindLines(null))).toEqual([]);
+  });
+});
+
+describe("whole files against their patch", () => {
+  const old = "export type Cents = number;\n\nexport function toCents(amount: number): Cents {\n  return amount * 100;\n}\n";
+  const next = "export type Cents = number;\n\nexport function toCents(amount: number): Cents {\n  const scaled = Math.abs(amount) * 100;\n  return Math.sign(amount) * scaled;\n}\n";
+  const lines = diffFindLines(MONEY);
+
+  it("takes the files the patch was read from, with CRLF endings too", () => {
+    expect(contentsMatchPatch(lines, old, next)).toBe(true);
+    expect(contentsMatchPatch(lines, old.replaceAll("\n", "\r\n"), next.replaceAll("\n", "\r\n"))).toBe(true);
+  });
+
+  it("refuses a file edited, shifted or cut since the patch", () => {
+    expect(contentsMatchPatch(lines, old, next.replace("return Math.sign", "return Math.trunc"))).toBe(false);
+    expect(contentsMatchPatch(lines, old, `// a line added above\n${next}`)).toBe(false);
+    expect(contentsMatchPatch(lines, old.replace("return amount * 100;", "return amount * 999;"), next)).toBe(false);
+    expect(contentsMatchPatch(lines, old, "export type Cents = number;\n")).toBe(false);
   });
 });

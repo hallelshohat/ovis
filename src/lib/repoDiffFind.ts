@@ -115,3 +115,14 @@ export function stepMatch(index: number | null, total: number, direction: 1 | -1
 export function diffChanges(lines: readonly DiffFindLine[]): DiffFindLine[] {
   return lines.filter((line, index) => line.kind !== "context" && (index === 0 || lines[index - 1]!.kind === "context"));
 }
+
+/**
+ * Whether both whole sides of a file are the ones a patch was read from: every line the patch
+ * holds is at its number, with its text, on its side. A file changed on disk since the patch
+ * (an edit, a line added above a hunk) fails, and is never mixed into the patch's rows.
+ */
+export function contentsMatchPatch(lines: readonly DiffFindLine[], old: string, next: string): boolean {
+  const sides = { old: old.split("\n"), new: next.split("\n") };
+  const at = (side: DiffSide, line: number | null, text: string): boolean => line === null || (sides[side][line - 1] ?? "").replace(/\r$/, "") === text && line <= sides[side].length;
+  return lines.every((line) => at("old", line.oldLine, line.text) && at("new", line.newLine, line.text));
+}

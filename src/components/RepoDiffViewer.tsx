@@ -110,6 +110,9 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const [siblings, setSiblings] = useState<RepoDiffFile[] | null>(null);
   // the change brought into view by Previous/Next change; none until the reader steps
   const [changeIndex, setChangeIndex] = useState<number | null>(null);
+  // the whole files read for expanding no longer match the patch shown: it stays as it was read
+  const [staleContents, setStaleContents] = useState(false);
+  const markStale = useCallback(() => setStaleContents(true), []);
   const filesRef = useRef<HTMLUListElement>(null);
   const [load, setLoad] = useState<Load>(PENDING);
   const [folded, setFolded] = useState(false);
@@ -161,6 +164,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
     setQuery("");
     setActiveIndex(null);
     setChangeIndex(null);
+    setStaleContents(false);
   }, [patchText]);
 
   const openFind = useCallback((): void => {
@@ -237,6 +241,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const notes = [
     wantsColor && patch !== null && !colored ? t("Too long to highlight") : null,
     narrow && settings.diffStyle === "split" ? t("Split view needs a wider screen; showing one column.") : null,
+    staleContents ? t("The file changed since this diff was read; reopen it to show unchanged lines.") : null,
   ].filter((note): note is string => note !== null);
   const { stem, extension } = pathParts(path);
   const { folder } = pathParts(path);
@@ -280,7 +285,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
     if (unavailable !== null || patch === null) return <p className="repo-diff-note">{unavailable ?? t("No lines changed.")}</p>;
     return <RenderBoundary resetKey={patch} fallback={() => <p className="repo-diff-note" role="alert">{t("This change can't be shown.")}</p>}>
       <Suspense fallback={<DiffSkeleton label={t("Opening…")} />}>
-        <RepoDiff patch={patch} style={style} folded={folded} wrap={settings.wrapCode} theme={resolvedEntry.mode} colored={colored} active={finding ? activeMatch : changeMark} onUnfold={unfold} loadContents={loadContents} />
+        <RepoDiff patch={patch} style={style} folded={folded} wrap={settings.wrapCode} theme={resolvedEntry.mode} colored={colored} active={finding ? activeMatch : changeMark} onUnfold={unfold} loadContents={loadContents} onStaleContents={markStale} />
       </Suspense>
     </RenderBoundary>;
   })();

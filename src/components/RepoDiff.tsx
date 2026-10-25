@@ -5,7 +5,7 @@ import { FileDiff, useVirtualizer, Virtualizer, type FileDiffOptions } from "@pi
 import { DiffWorkerPool } from "./DiffWorkerPool.tsx";
 import type { RepoDiffFileContents } from "../../shared/protocol.ts";
 import { useT } from "../lib/i18n.ts";
-import { diffFindLines, type DiffSide } from "../lib/repoDiffFind.ts";
+import { contentsMatchPatch, diffFindLines, type DiffSide } from "../lib/repoDiffFind.ts";
 import type { DiffStyle } from "../lib/settings.ts";
 import { VIRTUAL_HIGHLIGHT_LINES } from "../lib/sourcePreview.ts";
 import { contentKey, keepEmptyRows, SCROLL_CONFIG, SHADOW_CSS, SOURCE_THEME } from "../lib/sourceTheme.ts";
@@ -27,6 +27,8 @@ export interface RepoDiffProps {
   onUnfold?: () => void;
   /** both whole sides of the file, read when a separator is first expanded; without it nothing between hunks expands */
   loadContents?: () => Promise<RepoDiffFileContents>;
+  /** the whole files no longer match the patch shown (changed on disk since it was read): nothing expands, and the host says why */
+  onStaleContents?: () => void;
 }
 
 /** A logical line of the patch (an unchanged line is anchored to the new side) and the columns of a match in it; `start === end` marks the row alone (a change, not a match). */
@@ -36,6 +38,9 @@ export interface DiffMark {
   start: number;
   end: number;
 }
+
+/** The shadow roots whose expand controls already answer Enter and Space. */
+const pressable = new WeakSet<ShadowRoot>();
 
 /** The CSS highlight the active match's text is painted with (styled in the shadow CSS below). */
 const FIND_HIGHLIGHT = "repo-diff-find";
@@ -117,6 +122,10 @@ const DIFF_SHADOW_CSS = `${SHADOW_CSS}
 [data-line][data-find-active] {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
+[data-expand-button]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 ::highlight(${FIND_HIGHLIGHT}) {
   background-color: var(--accent);
   color: var(--bg);
@@ -137,7 +146,7 @@ function parseFile(text: string): FileDiffMetadata | null {
  * the virtualizer renders by identity, and its host fills the scroll root so it has a box before
  * the first anchor pass (the contracts VirtualSource measured).
  */
-export default function RepoDiff({ patch, style, folded, wrap, theme, colored, active = null, onUnfold, loadContents }: RepoDiffProps) {
+export default function RepoDiff({ patch, style, folded, wrap, theme, colored, active = null, onUnfold, loadContents, onStaleContents }: RepoDiffProps) {
   const t = useT();
   const hostRef = useRef<HTMLDivElement>(null);
   const [lineHeight, setLineHeight] = useState<number | null>(null);
@@ -225,16 +234,43 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     requestAnimationFrame(() => requestAnimationFrame(settle));
   }, [scrollTo]);
 
+  /**
+   * The package draws its expand controls as unnamed `div role=button`s outside the tab order: each
+   * gets a name and a tab stop, and Enter or Space presses it as a click does. Runs after every
+   * render, which may have drawn new separators.
+   */
+  const labelExpanders = useCallback((shadow: ShadowRoot): void => {
+    for (const button of shadow.querySelectorAll<HTMLElement>("[data-expand-button]")) {
+      button.tabIndex = 0;
+      button.setAttribute("aria-label", button.hasAttribute("data-expand-all-button") ? t("Show all unchanged lines")
+        : button.hasAttribute("data-expand-up") ? t("Show unchanged lines above")
+        : button.hasAttribute("data-expand-down") ? t("Show unchanged lines below")
+        : t("Show unchanged lines"));
+    }
+    if (pressable.has(shadow)) return;
+    pressable.add(shadow);
+    shadow.addEventListener("keydown", (event) => {
+      const key = (event as KeyboardEvent).key;
+      const button = event.target instanceof HTMLElement && event.target.hasAttribute("data-expand-button") ? event.target : null;
+      if (button === null || (key !== "Enter" && key !== " ")) return;
+      event.preventDefault();
+      button.click();
+    });
+  }, [t]);
+
   const onPostRender = useCallback<NonNullable<Options["onPostRender"]>>((node, instance, phase) => {
     if (phase === "unmount") { fileRef.current = null; containerRef.current = null; return; }
     // inside a Virtualizer the FileDiff component constructs a VirtualizedFileDiff
     fileRef.current = instance as unknown as VirtualizedFileDiff<undefined>;
     containerRef.current = node;
-    if (node.shadowRoot !== null) keepEmptyRows(node.shadowRoot);
+    if (node.shadowRoot !== null) {
+      keepEmptyRows(node.shadowRoot);
+      labelExpanders(node.shadowRoot);
+    }
     paint();
     // this fires inside the virtualizer's render pass, which ends by fixing its scroll anchor: the reveal waits for it
     queueMicrotask(settle);
-  }, [paint, settle]);
+  }, [paint, settle, labelExpanders]);
 
   const onVirtualizer = useCallback((instance: VirtualizerInstance | undefined): void => { virtualizerRef.current = instance; }, []);
 
@@ -262,8 +298,13 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     const answer = await loadContents();
     // the package only asks for a change or a changed rename, which has both sides
     if (answer.old === null || answer.new === null) throw new Error(`the whole file can't be read (${answer.unavailable ?? "one side missing"})`);
+    // files read after the patch may have moved on: mixed into its rows they would mark lines it never compared
+    if (!contentsMatchPatch(diffFindLines(patch), answer.old, answer.new)) {
+      onStaleContents?.();
+      throw new Error("the file changed since its diff was read");
+    }
     return { oldFile: { name: diff.prevName ?? diff.name, contents: answer.old }, newFile: { name: diff.name, contents: answer.new } };
-  }, [loadContents]);
+  }, [loadContents, patch, onStaleContents]);
   const options = useMemo<Options>(() => ({
     disableFileHeader: true,
     diffStyle: style,
