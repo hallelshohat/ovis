@@ -3,6 +3,7 @@ import type { PreferencesChange, SharedPreferences } from "../../shared/preferen
 import type { SeenFinish } from "../../shared/seen.ts";
 import type { AgentCatalogResponse, AgentTabStarted } from "../../shared/agent-catalog.ts";
 import { resumeConnectionTraces } from "./connectionTrace.ts";
+import type { BoardActionRequest, BoardActionResult, BoardTask } from "../../shared/board-tasks.ts";
 import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
   WorkspaceMoved,
@@ -957,6 +958,17 @@ export function listWorktrees(workspaceId: string, machineId = "local"): Promise
 /** GET /api/worktree/remote: the web page of the workspace's repository, from its `origin`. */
 export function worktreeRemote(workspaceId: string, machineId = "local"): Promise<WorktreeRemote> {
   return getJson<WorktreeRemote>(`${machinePath(machineId, "worktree/remote")}?workspace_id=${encodeURIComponent(workspaceId)}`);
+}
+
+/** GET /api/board/tasks: the herdr-projects board's tasks on that PC; a 404 where it has no board. */
+export async function fetchBoardTasks(machineId = "local"): Promise<BoardTask[]> {
+  return (await getJson<{ tasks: BoardTask[] }>(machinePath(machineId, "board/tasks"), { cache: "no-store" })).tasks;
+}
+
+/** POST /api/board/action: the board archives, restores, removes, stops or approves; its own message comes back. */
+export async function boardAction(request: BoardActionRequest, machineId = "local"): Promise<BoardActionResult> {
+  const response = await sendJson(machinePath(machineId, "board/action"), "POST", request);
+  return (await response.json()) as BoardActionResult;
 }
 
 /** POST /api/worktree/open: an existing checkout as a workspace; the one it already has when it is open. */
