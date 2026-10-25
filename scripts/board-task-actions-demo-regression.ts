@@ -33,15 +33,15 @@ const patch = `(() => {
       // the first two share a title: only their checkouts tell them apart
       title: index < 2 ? "export-guard" : workspace.label,
       workspace: workspace.workspace_id, worktree: workspace.worktree.checkout_path,
-      state: steps[index][0], stage: steps[index][1], kind: steps[index][2], archived: false,
+      state: steps[index][0], stage: steps[index][1], kind: steps[index][2], pr: null, reviewedHead: null, archived: false,
     }));
-    tasks.push({ id: linked[0].worktree.repo_name + "/9", title: "Old research", workspace: null, worktree: null, state: "done", stage: "done", kind: "", archived: false });
+    tasks.push({ id: linked[0].worktree.repo_name + "/9", title: "Old research", workspace: null, worktree: null, state: "done", stage: "done", kind: "", pr: null, reviewedHead: null, archived: false });
   };
   window.fetch = async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
     if (!url.pathname.startsWith("/api/board/")) return demoFetch(input, init);
     await load();
-    if (url.pathname === "/api/board/tasks") return json({ tasks: tasks.filter((task) => !task.archived).map(({ id, title, state, stage, kind, worktree }) => ({ id, title, state, stage, kind, worktree })) });
+    if (url.pathname === "/api/board/tasks") return json({ tasks: tasks.filter((task) => !task.archived).map(({ id, title, state, stage, kind, worktree, pr, reviewedHead }) => ({ id, title, state, stage, kind, worktree, pr, reviewedHead })) });
     const body = JSON.parse(init.body);
     window.__board.calls.push(body);
     if (held) await held;
@@ -147,7 +147,7 @@ try {
           await page.evaluate((id) => (window as unknown as { __board: Board }).__board.set(id, { stage: "approval" }), plan.id);
           await item("Approve plan").click();
           await page.waitForFunction(() => document.querySelector(".machine-workspaces .board-note.is-failed")?.textContent?.includes("no longer where it was shown"));
-          assert.deepEqual((await calls()).at(-1), { action: "approve", id: plan.id, expect: { stage: "plan", kind: "" } });
+          assert.deepEqual((await calls()).at(-1), { action: "approve", id: plan.id, expect: { stage: "plan", kind: "", seen: [null, null] } });
           assert.equal(await page.getByRole("alertdialog").count(), 0);
           await sheetGone();
           // opened again, the menu says what approve now does, and asks first
@@ -161,7 +161,7 @@ try {
           await openMenu(asks);
           await item("Allow request").click();
           await page.waitForFunction(() => document.querySelector(".machine-workspaces .board-note-text")?.textContent?.endsWith(": approve"));
-          assert.deepEqual((await calls()).at(-1), { action: "approve", id: asks.id, expect: { stage: "asks", kind: "permission" } });
+          assert.deepEqual((await calls()).at(-1), { action: "approve", id: asks.id, expect: { stage: "asks", kind: "permission", seen: [null, null] } });
           await sheetGone();
 
           // archive the done task from its menu: the board's message, its space closes, Undo restores it

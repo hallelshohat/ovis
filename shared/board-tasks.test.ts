@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { boardApproveKind, boardCommand, boardTaskOf, isBoardTaskId, type BoardTask } from "./board-tasks.ts";
+import { boardApproveKind, boardCommand, boardTaskOf, isBoardTaskId, NOT_A_MERGE, type BoardTask } from "./board-tasks.ts";
+
+/** the request inside `remote do <base64>` */
+const sent = (args: string[] | null) => { expect(args?.slice(0, 2)).toEqual(["remote", "do"]); return JSON.parse(atob(args![2]!)) as unknown; };
 
 describe("isBoardTaskId", () => {
   it("takes a key and number, or a repo and number", () => {
@@ -16,7 +19,14 @@ describe("boardCommand", () => {
     expect(boardCommand({ action: "restore", id: "OVS-5" })).toEqual(["restore", "OVS-5"]);
     expect(boardCommand({ action: "clear", id: "ovis/5" })).toEqual(["clear", "ovis/5"]);
     expect(boardCommand({ action: "stop", id: "ovis/5" })).toEqual(["stop", "ovis/5"]);
-    expect(boardCommand({ action: "approve", id: "ovis/5", expect: { stage: "plan", kind: "" } })).toEqual(["approve", "ovis/5"]);
+    // a merge's yes carries the pull request and reviewed commit it was shown: the board merges nothing else
+    expect(sent(boardCommand({ action: "approve", id: "ovis/5", expect: { stage: "approval", kind: "", seen: ["https://github.com/o/r/pull/3", "abc123"] } })))
+      .toEqual({ action: "approve", id: "ovis/5", seen: ["https://github.com/o/r/pull/3", "abc123"] });
+    // a plan's or a permission's yes carries a pair the board never holds, so it can never become a merge
+    for (const expectation of [{ stage: "plan", kind: "" }, { stage: "asks", kind: "permission" }]) {
+      expect(sent(boardCommand({ action: "approve", id: "ovis/5", expect: { ...expectation, seen: ["https://github.com/o/r/pull/3", "abc123"] } })))
+        .toEqual({ action: "approve", id: "ovis/5", seen: [NOT_A_MERGE, NOT_A_MERGE] });
+    }
     expect(boardCommand({ action: "archive-done" })).toEqual(["archive", "--done"]);
     expect(boardCommand({ action: "archive-done", repo: "ovis" })).toEqual(["archive", "--done", "--repo", "ovis"]);
   });
@@ -24,7 +34,9 @@ describe("boardCommand", () => {
     expect(boardCommand({ action: "delegate", id: "ovis/5" })).toBeNull();
     expect(boardCommand({ action: "archive", id: "--all" })).toBeNull();
     expect(boardCommand({ action: "archive" })).toBeNull();
-    expect(boardCommand({ action: "approve", id: 5, expect: { stage: "plan", kind: "" } })).toBeNull();
+    expect(boardCommand({ action: "approve", id: 5, expect: { stage: "plan", kind: "", seen: [null, null] } })).toBeNull();
+    expect(boardCommand({ action: "approve", id: "ovis/5", expect: { stage: "approval", kind: "", seen: [null] } })).toBeNull();
+    expect(boardCommand({ action: "approve", id: "ovis/5", expect: { stage: "approval", kind: "", seen: [1, 2] } })).toBeNull();
     // an approve that does not say what it was offered for could merge where a plan was shown
     expect(boardCommand({ action: "approve", id: "ovis/5" })).toBeNull();
     expect(boardCommand({ action: "approve", id: "ovis/5", expect: { stage: "plan" } })).toBeNull();
@@ -46,7 +58,7 @@ describe("boardApproveKind", () => {
 });
 
 describe("boardTaskOf", () => {
-  const task = (id: string, title: string, worktree: string | null): BoardTask => ({ id, title, worktree, state: "done", stage: "done", kind: "" });
+  const task = (id: string, title: string, worktree: string | null): BoardTask => ({ id, title, worktree, state: "done", stage: "done", kind: "", pr: null, reviewedHead: null });
   // two tasks may share a title: only the checkout tells them apart
   const tasks = [task("api/1", "export-guard", "/w/api/feat-export-guard"), task("api/2", "export-guard", "/w/api/fix-flaky"), task("api/3", "research", null)];
   const on = (checkout_path: string, is_linked_worktree = true) => ({ worktree: { checkout_path, is_linked_worktree } });

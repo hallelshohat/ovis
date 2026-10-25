@@ -1095,8 +1095,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the task works), Approve plan (stage `plan`), Allow request (stage `asks`, kind `permission`), Approve
   and merge… (stage `approval`) and Remove task… (danger). The merge and the remove ask first in the
   confirm dialog: the remove names the task by id and title and says unsaved or unmerged work is kept.
-  An approve carries the stage and kind it was offered for, and the server refuses it (409) once the
-  task has moved on, so a stale plan yes never merges. A task's space closes when it is done, so each
+  The board's approve does what the task's step asks at the moment it acts, so the guard is the board's
+  own: an approve goes as the board's machine request (`remote do`, what its web Board sends) with
+  `seen`, the pull request and reviewed commit the merge question showed, and the board merges nothing
+  when they differ. A plan's or a permission's yes sends a pair no task ever holds, so it can never
+  become a merge, however the task moved on. The server also refuses early (409) an approve for a step
+  the task has already left, to say so in words. The task list is the same machine answer (`remote
+  list`): each task's checkout, step, pull request and reviewed commit in one read. A task's space closes when it is done, so each
   PC's header has a Board tasks button (`.machine-board`, ListChecks, only where that PC has a board and
   this device may act) that opens a dialog listing every task on the board, each with the same actions
   as buttons (`.board-task-action`), and Archive done tasks in every repo (n), and per repo when there

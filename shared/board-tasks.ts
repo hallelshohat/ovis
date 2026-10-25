@@ -15,14 +15,26 @@ export interface BoardTask {
   /** while it asks: `question`, `permission` or `auth`; empty otherwise */
   kind: string;
   title: string;
-  /** the task's checkout, from `details --json`; null when it has none (or the board did not say) */
+  /** the task's checkout; null when it has none */
   worktree: string | null;
+  /** its pull request and the commit its review passed: what a merge's yes was shown, checked again by the board */
+  pr: string | null;
+  reviewedHead: string | null;
 }
 
 export type BoardTaskAction = "archive" | "restore" | "clear" | "stop" | "approve";
 
-/** what an approve was offered for: the board decides from the task's current step what approve does */
-export interface BoardApproveExpectation { stage: string; kind: string }
+/**
+ * What an approve was offered for. The board decides from the task's step at the moment it acts what
+ * approve does (a plan's yes, a permission, or a merge), so the step is checked by the board itself:
+ * `seen` is the pull request and reviewed commit the merge question showed, and the board merges
+ * nothing when they differ (finish_line::approve). An approve offered for anything but a merge
+ * sends a pair the board never holds, so it can never merge, whatever the task has moved on to.
+ */
+export interface BoardApproveExpectation { stage: string; kind: string; seen: [string | null, string | null] }
+
+/** the `seen` of an approve that is not a merge: no pull request or commit is ever this */
+export const NOT_A_MERGE = "ovis:not-a-merge";
 
 export type BoardActionRequest =
   | { action: Exclude<BoardTaskAction, "approve">; id: string }
@@ -47,6 +59,8 @@ export function isBoardTaskId(id: string): boolean {
 
 export const isBoardRepoName = (repo: string): boolean => REPO_NAME.test(repo);
 
+const base64 = (text: string): string => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+
 /** The board's arguments for a request, or null when the request is not a valid one. */
 export function boardCommand(request: unknown): string[] | null {
   if (typeof request !== "object" || request === null) return null;
@@ -56,16 +70,23 @@ export function boardCommand(request: unknown): string[] | null {
     return typeof repo === "string" && isBoardRepoName(repo) ? ["archive", "--done", "--repo", repo] : null;
   }
   if (typeof action !== "string" || !TASK_ACTIONS.includes(action)) return null;
-  if (action === "approve" && boardApproveExpectation(request) === null) return null;
-  return typeof id === "string" && isBoardTaskId(id) ? [action, id] : null;
+  if (typeof id !== "string" || !isBoardTaskId(id)) return null;
+  if (action !== "approve") return [action, id];
+  const expected = boardApproveExpectation(request);
+  if (expected === null) return null;
+  // the board's own request for an approve with what was seen (the web Board's), as one argument
+  const seen = expected.stage === "approval" ? expected.seen : [NOT_A_MERGE, NOT_A_MERGE];
+  return ["remote", "do", base64(JSON.stringify({ action: "approve", id, seen }))];
 }
 
 /** an approve request's expected step, or null when it names none */
 export function boardApproveExpectation(request: unknown): BoardApproveExpectation | null {
   const expect = (request as { expect?: unknown } | null)?.expect;
   if (typeof expect !== "object" || expect === null) return null;
-  const { stage, kind } = expect as Record<string, unknown>;
-  return typeof stage === "string" && typeof kind === "string" ? { stage, kind } : null;
+  const { stage, kind, seen } = expect as Record<string, unknown>;
+  const part = (value: unknown): value is string | null => value === null || (typeof value === "string" && value.length <= 512);
+  if (typeof stage !== "string" || typeof kind !== "string" || !Array.isArray(seen) || seen.length !== 2 || !part(seen[0]) || !part(seen[1])) return null;
+  return { stage, kind, seen: [seen[0], seen[1]] };
 }
 
 /** What approve does for a task where it stands now, or null when approve does nothing there. */

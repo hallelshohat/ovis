@@ -101,7 +101,7 @@ type Board = ReturnType<typeof useBoard>;
  */
 export function boardTaskItems(task: BoardTask, board: Board, ask: (question: BoardQuestion) => void, t: ReturnType<typeof useT>, leave: (deed: () => Promise<void>) => Promise<void> = (deed) => deed()): RowMenuItem[] {
   const name = `${task.id} “${task.title}”`;
-  const approve: BoardActionRequest = { action: "approve", id: task.id, expect: { stage: task.stage, kind: task.kind } };
+  const approve: BoardActionRequest = { action: "approve", id: task.id, expect: { stage: task.stage, kind: task.kind, seen: [task.pr, task.reviewedHead] } };
   const approves = boardApproveKind(task);
   return [
     { id: "board-archive", label: t("Archive task"), icon: Archive, divider: true, run: () => board.run({ action: "archive", id: task.id }, { action: "restore", id: task.id }) },

@@ -3,35 +3,50 @@ import { handleBoardRequest, type BoardRun } from "./board-routes.ts";
 
 const post = (body: unknown) => new Request("http://ovis.test/api/board/action", { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
 const ok = (stdout: string): BoardRun => ({ code: 0, stdout, stderr: "" });
+type Row = Record<string, unknown>;
 
-/** a fake board: records each argument list; `list` and `details` answer from `tasks`, anything else with `reply` */
-function board(tasks: Record<string, unknown>[], reply: BoardRun | null = ok("done")) {
+/**
+ * A fake board: records each argument list. `remote list` answers from `tasks`; `remote do approve`
+ * follows the board's own rule (finish_line::approve): at a merge it merges only what `seen` names.
+ * `between` runs after Ovis's own look and before the board acts, as another client can.
+ */
+function board(tasks: Row[], reply: BoardRun | null = ok("done"), between?: () => void) {
   const calls: string[][] = [];
+  const merged: string[] = [];
   const run = async (args: string[]) => {
     calls.push(args);
     if (reply === null) return null;
-    if (args[0] === "list") return ok(JSON.stringify(tasks.map(({ worktree: _, ...row }) => row)));
-    if (args[0] === "details") {
-      const task = tasks.find((candidate) => candidate["id"] === args[1]);
-      return task ? ok(JSON.stringify({ task: { id: task["id"] }, worktree: task["worktree"] ?? null })) : { code: 1, stdout: "", stderr: `No task ${args[1]}` };
+    if (args[0] === "remote" && args[1] === "list") return ok(JSON.stringify({ host: "h", tasks }));
+    if (args[0] === "remote" && args[1] === "do") {
+      between?.();
+      const req = JSON.parse(atob(args[2]!)) as { action: string; id: string; seen: [unknown, unknown] };
+      const task = tasks.find((candidate) => candidate["id"] === req.id)!;
+      if (task["stage"] === "approval" && (req.seen[0] !== (task["pr"] ?? null) || req.seen[1] !== (task["reviewedHead"] ?? null))) {
+        return ok(JSON.stringify({ ok: false, msg: `${req.id} changed while you were asked. Nothing was merged: look at it again, then approve.` }));
+      }
+      if (task["stage"] === "approval") merged.push(req.id);
+      return ok(JSON.stringify({ ok: true, msg: `${req.id}: ${task["stage"] === "approval" ? "merging" : "approved"}` }));
     }
     return reply;
   };
-  return { calls, run };
+  return { calls, merged, run };
 }
 
+const approve = (id: string, stage: string, kind: string, seen: [string | null, string | null]) => post({ action: "approve", id, expect: { stage, kind, seen } });
+
 describe("board routes", () => {
-  it("lists the board's tasks with their checkouts and what they ask", async () => {
+  it("lists the board's tasks with their checkouts, what they ask and what a merge is checked against", async () => {
     const fake = board([
-      { id: "ovis/5", state: "done", stage: "done", title: "A task", msg: "x", worktree: "/w/ovis-5" },
+      { id: "ovis/5", state: "done", stage: "approval", title: "A task", msg: "x", worktree: "/w/ovis-5", pr: "https://github.com/o/r/pull/5", reviewedHead: "abc" },
       { id: "ovis/6", state: "blocked", stage: "asks", kind: "permission", title: "Asks" },
+      { id: "ovis/7", state: "done", stage: "done", title: "Archived", archivedAt: 5 },
       { junk: true },
     ]);
     const response = (await handleBoardRequest(new Request("http://ovis.test/api/board/tasks"), "/api/board/tasks", fake.run))!;
-    expect(fake.calls).toEqual([["list", "--json"], ["details", "ovis/5", "--json"], ["details", "ovis/6", "--json"]]);
+    expect(fake.calls).toEqual([["remote", "list"]]);
     expect(await response.json()).toEqual({ tasks: [
-      { id: "ovis/5", state: "done", stage: "done", kind: "", title: "A task", worktree: "/w/ovis-5" },
-      { id: "ovis/6", state: "blocked", stage: "asks", kind: "permission", title: "Asks", worktree: null },
+      { id: "ovis/5", state: "done", stage: "approval", kind: "", title: "A task", worktree: "/w/ovis-5", pr: "https://github.com/o/r/pull/5", reviewedHead: "abc" },
+      { id: "ovis/6", state: "blocked", stage: "asks", kind: "permission", title: "Asks", worktree: null, pr: null, reviewedHead: null },
     ] });
   });
 
@@ -45,17 +60,37 @@ describe("board routes", () => {
     expect(fake.calls[1]).toEqual(["archive", "--done", "--repo", "ovis"]);
   });
 
-  it("approves only where the task still stands as it was shown", async () => {
-    // shown at its plan, but another client moved it on to a merge: no approve is run
-    const moved = board([{ id: "ovis/5", state: "done", stage: "approval", title: "T" }]);
-    const stale = (await handleBoardRequest(post({ action: "approve", id: "ovis/5", expect: { stage: "plan", kind: "" } }), "/api/board/action", moved.run))!;
-    expect(stale.status).toBe(409);
-    expect(moved.calls.some((args) => args[0] === "approve")).toBe(false);
-    // a permission it still asks for is approved
+  it("never merges from a plan's or a permission's yes, even when the task moves on after Ovis looked", async () => {
+    for (const [stage, kind] of [["plan", ""], ["asks", "permission"]] as const) {
+      const task: Row = { id: "ovis/5", state: "idle", stage, kind, title: "T", pr: "https://github.com/o/r/pull/5", reviewedHead: "abc" };
+      // another client approves the plan between Ovis's look and the board acting: the task now waits for its merge
+      const fake = board([task], undefined, () => { task["stage"] = "approval"; task["kind"] = ""; });
+      const response = (await handleBoardRequest(approve("ovis/5", stage, kind, ["https://github.com/o/r/pull/5", "abc"]), "/api/board/action", fake.run))!;
+      expect(response.status).toBe(422);
+      expect(((await response.json()) as { error: { message: string } }).error.message).toMatch(/Nothing was merged/);
+      expect(fake.merged).toEqual([]);
+    }
+  });
+
+  it("approves a plan, a permission, and a merge it was shown", async () => {
+    const plan = board([{ id: "ovis/5", state: "idle", stage: "plan", title: "T" }]);
+    expect((await handleBoardRequest(approve("ovis/5", "plan", "", [null, null]), "/api/board/action", plan.run))!.status).toBe(200);
     const asks = board([{ id: "ovis/6", state: "blocked", stage: "asks", kind: "permission", title: "T" }]);
-    const allowed = (await handleBoardRequest(post({ action: "approve", id: "ovis/6", expect: { stage: "asks", kind: "permission" } }), "/api/board/action", asks.run))!;
-    expect(allowed.status).toBe(200);
-    expect(asks.calls.at(-1)).toEqual(["approve", "ovis/6"]);
+    expect(await (await handleBoardRequest(approve("ovis/6", "asks", "permission", [null, null]), "/api/board/action", asks.run))!.json()).toEqual({ message: "ovis/6: approved" });
+    const merge = board([{ id: "ovis/7", state: "done", stage: "approval", title: "T", pr: "p", reviewedHead: "h" }]);
+    expect((await handleBoardRequest(approve("ovis/7", "approval", "", ["p", "h"]), "/api/board/action", merge.run))!.status).toBe(200);
+    expect(merge.merged).toEqual(["ovis/7"]);
+    // a merge whose pull request or reviewed commit changed since it was shown is the board's to refuse
+    const changed = board([{ id: "ovis/8", state: "done", stage: "approval", title: "T", pr: "p", reviewedHead: "new" }]);
+    expect((await handleBoardRequest(approve("ovis/8", "approval", "", ["p", "old"]), "/api/board/action", changed.run))!.status).toBe(422);
+    expect(changed.merged).toEqual([]);
+  });
+
+  it("says early, without asking the board to act, when the task already moved on", async () => {
+    const moved = board([{ id: "ovis/5", state: "done", stage: "approval", title: "T" }]);
+    const stale = (await handleBoardRequest(approve("ovis/5", "plan", "", [null, null]), "/api/board/action", moved.run))!;
+    expect(stale.status).toBe(409);
+    expect(moved.calls).toEqual([["remote", "list"]]);
     // an approve that names no step is refused before the board is asked anything
     const bare = board([]);
     expect((await handleBoardRequest(post({ action: "approve", id: "ovis/6" }), "/api/board/action", bare.run))!.status).toBe(400);
