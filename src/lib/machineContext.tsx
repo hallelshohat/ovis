@@ -89,6 +89,7 @@ export function useMachineApi() {
     saveEditableText: (request: Parameters<typeof api.saveEditableText>[0]) => api.saveEditableText(request, id),
     fetchRepoDiffFiles: (query: api.RepoDiffQuery) => api.fetchRepoDiffFiles(query, id),
     fetchRepoDiffFile: (query: api.RepoDiffQuery, path: string, oldPath: string | null) => api.fetchRepoDiffFile(query, path, oldPath, id),
+    fetchRepoDiffContents: (query: api.RepoDiffQuery, path: string, oldPath: string | null) => api.fetchRepoDiffContents(query, path, oldPath, id),
     fetchRepoDiffRefs: (query: Pick<api.RepoDiffQuery, "paneId" | "directory">) => api.fetchRepoDiffRefs(query, id),
     fetchPullRequest: (target: api.PullRequestTarget) => api.fetchPullRequest(target, id),
     fetchPullRequestLog: (target: api.PullRequestTarget, jobId: string, host: string) => api.fetchPullRequestLog(target, jobId, host, id),

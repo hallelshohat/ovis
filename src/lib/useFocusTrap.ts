@@ -64,7 +64,7 @@ function reachable(node: HTMLElement): boolean {
 
 /** The tab stops in order: the ones outside the surface that belong to it, then its own. */
 function tabStops(surface: HTMLElement, options: FocusTrapOptions): HTMLElement[] {
-  return [...(options.leadingStops?.() ?? []), ...surface.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(reachable);
+  return [...(options.leadingStops?.() ?? []), ...focusables(surface)].filter(reachable);
 }
 
 /**
@@ -108,6 +108,28 @@ export function tabTarget(stops: readonly HTMLElement[], active: Element | null,
   return back
     ? (at <= 0 ? stops[stops.length - 1] : stops[at - 1])
     : (at === stops.length - 1 ? stops[0] : stops[at + 1]);
+}
+
+/**
+ * The focusable elements under `root` in tab order, including those inside open shadow roots
+ * (the diff's rows draw their expand controls there), each at its host's place.
+ */
+function focusables(root: Element | ShadowRoot): HTMLElement[] {
+  const found: HTMLElement[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (node.matches(FOCUSABLE)) found.push(node);
+    if (node.shadowRoot !== null) found.push(...focusables(node.shadowRoot));
+  }
+  return found;
+}
+
+/** The element that holds the focus, through the shadow roots it sits in. */
+function deepActive(): Element | null {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active;
 }
 
 /**
@@ -202,8 +224,9 @@ export function useFocusTrap<T extends HTMLElement>(open: boolean, options: Focu
       // a device waiting for approval is in this dialog's round, after its own stops: reached from a field
       // the prompt left the focus in, and left again for the dialog, never for the page beneath
       const stops = [...tabStops(node, latest.current), ...overlayStops()];
-      const stop = tabTarget(stops, document.activeElement, event.shiftKey);
-      const next = stop && overlayEntry(stop, document.activeElement);
+      const active = deepActive();
+      const stop = tabTarget(stops, active, event.shiftKey);
+      const next = stop && overlayEntry(stop, active);
       // every control disabled (a deed that cannot be undone): Tab goes nowhere rather than out
       event.preventDefault();
       next?.focus({ preventScroll: true });
