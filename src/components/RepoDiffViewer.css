@@ -366,8 +366,8 @@
   }
 }
 
-/* on a narrow screen the name and Close keep the first row; the actions take the second */
-@media (max-width: 600px) {
+/* without the file column the name and Close keep the first row; the actions, with the steppers, take the second */
+@media (max-width: 900px) {
   .repo-diff-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -376,6 +376,17 @@
   }
 
   .repo-diff-header .repo-diff-title { grid-area: title; }
+  .repo-diff-header .repo-diff-close {
+    grid-area: close;
+    align-self: start;
+  }
+  .repo-diff-header .repo-diff-actions {
+    grid-area: actions;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 600px) {
   /* the meta line has more than a phone's width holds: it wraps, and the folder takes a line of its own */
   .repo-diff-meta {
     flex-wrap: wrap;
@@ -386,14 +397,6 @@
   .repo-diff-find .find-bar-hint,
   .repo-diff-find-label {
     font-size: var(--fs-chat);
-  }
-  .repo-diff-header .repo-diff-close {
-    grid-area: close;
-    align-self: start;
-  }
-  .repo-diff-header .repo-diff-actions {
-    grid-area: actions;
-    justify-content: space-between;
   }
   /* two rows: the layout switch with the file stepper, then the change steppers with the actions */
   .repo-diff-header .repo-diff-actions:has(.repo-diff-changes) {

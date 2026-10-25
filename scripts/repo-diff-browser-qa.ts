@@ -1375,7 +1375,7 @@ try {
     await waitRows(page);
     await page.getByRole("button", { name: "Open file", exact: true }).click();
     await page.getByRole("dialog", { name: "money.ts", exact: true }).waitFor();
-    assert.deepEqual(requests.filter((path) => path.includes("/workspace/diff/")), ["/api/machines/remote-fixture/workspace/diff/files", "/api/machines/remote-fixture/workspace/diff/file"], `remote diff requests: ${requests.join(", ")}`);
+    assert.deepEqual(requests.filter((path) => path.includes("/workspace/diff/")), ["/api/machines/remote-fixture/workspace/diff/files", "/api/machines/remote-fixture/workspace/diff/file", "/api/machines/remote-fixture/workspace/diff/files"], `remote diff requests (the list, the patch, and the viewer's own list for its file column): ${requests.join(", ")}`);
     assert.ok(requests.some((path) => path === "/api/machines/remote-fixture/fs/stat"), `remote file requests: ${requests.join(", ")}`);
     await context.close();
     console.log("PASS a remote PC's changes and files read through its bridge");
