@@ -1788,6 +1788,14 @@ describe("workspace and discovery endpoints", () => {
       const listing = (await list.json()) as WorktreeListing;
       expect(listing.worktrees.some((entry) => entry.branch === "ovis-test-feature" && entry.open_workspace_id === opened.workspace_id)).toBeTrue();
 
+      // a pull request badge's link: the repository's page from its origin, the same for its worktree
+      const remote = (id: string) => fetch(`${base()}/api/worktree/remote?workspace_id=${encodeURIComponent(id)}`).then(async (response) => ({ status: response.status, body: await response.json() }));
+      expect(await remote(opened.workspace_id)).toEqual({ status: 200, body: { url: null } });
+      expect(git("remote", "add", "origin", "git@github.com:ovis-test/fixture.git").exitCode).toBe(0);
+      expect(await remote(opened.workspace_id)).toEqual({ status: 200, body: { url: "https://github.com/ovis-test/fixture" } });
+      expect(await remote(parent.workspace.workspace_id)).toEqual({ status: 200, body: { url: "https://github.com/ovis-test/fixture" } });
+      expect((await remote("")).status).toBe(400);
+
       const again = await post("/api/worktree/open", { workspace_id: parent.workspace.workspace_id, path: checkout });
       expect(again.status).toBe(200);
       const reopened = (await again.json()) as WorktreeOpened;
