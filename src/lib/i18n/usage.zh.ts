@@ -19,7 +19,7 @@ export const USAGE_ZH: Record<string, string> = {
   "Signed in as {account}. Continuing may replace it.": "已以 {account} 登录，继续可能会替换此账号。",
   "an existing account": "现有账号",
   "Choose OpenCode Go or Zen for plan limits.": "选择 OpenCode Go 或 Zen 以查看套餐额度。",
-  "Follow the steps in the new tab.": "按新标签页中的提示操作。",
+  "Follow the steps in the new tab.": "按新标签页中的提示操作。",,
   "Sign-in timed out. Try again.": "登录超时，请重试。",
   "Allow popups to sign in": "请允许弹出窗口以登录",
   "Choose a provider": "选择提供商",

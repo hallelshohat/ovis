@@ -1,3 +1,4 @@
+import { handleBoardRequest } from "./board-routes.ts";
 import { handleWorkspaceRequest } from "./workspace-routes.ts";
 import { handleAlertWebhookRequest } from "./alert-webhook.ts";
 import { connectionData, type createCore, type SocketData } from "./core/index.ts";
@@ -790,6 +791,9 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
 
   const integrationsResponse = await handleIntegrationsRequest(request, pathname);
   if (integrationsResponse) return integrationsResponse;
+
+  const boardResponse = await handleBoardRequest(request, pathname);
+  if (boardResponse) return boardResponse;
 
   const filesResponse = await handleFileRequest(request, url, pathname, { bridgeAuthorized, requestHost, forwarded, client, access });
   if (filesResponse) return filesResponse;
