@@ -72,4 +72,11 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "{count} need you": "{count} 个需要你",
   "Move to {group}": "移到 {group}",
   "Remove from {group}": "从 {group} 移出",
+  "Pull request #{number}, open": "拉取请求 #{number}，开放中",
+  "Pull request #{number}, draft": "拉取请求 #{number}，草稿",
+  "Pull request #{number}, merged": "拉取请求 #{number}，已合并",
+  "Pull request #{number}, closed": "拉取请求 #{number}，已关闭",
+  "Draft": "草稿",
+  "Merged": "已合并",
+  "Closed": "已关闭",
 };
