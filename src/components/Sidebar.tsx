@@ -761,8 +761,11 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     const unfolded = children.length > 0 && repoKey !== undefined && !collapsed;
     const face = <WorkspaceFavicon root={workspace.worktree?.checkout_path ?? pane.cwd ?? null} fallback={<span className="sidebar-mark workspace-folder" aria-hidden="true">{unfolded ? <FolderOpen /> : <Folder />}</span>} />;
     const toggleMenu = (anchor: HTMLElement, point?: { x: number; y: number }, previousFocus?: HTMLElement | null): void => setMenu(menuOpen ? null : { anchor, point, previousFocus, workspace, title: rowTitle, place: [branchNote, ...paths].filter(Boolean).join(" · ") || workspace.label });
+    // a task's space the board is working on (an archive, a remove): greyed and inert until it answers
+    const boardPending = workspace.worktree?.is_linked_worktree ? [...board.pendingAll.entries()].find(([key, entry]) => key.startsWith(`${machineId}\n`) && entry.worktree === workspace.worktree!.checkout_path)?.[1] : undefined;
     return <li
-      className={`workspace workspace-group pane-item${selected ? " is-selected" : ""}${collapsed ? " is-collapsed" : ""}${context ? " is-filter-context" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}`}
+      aria-busy={boardPending ? true : undefined}
+      className={`workspace workspace-group pane-item${boardPending ? " is-board-pending" : ""}${selected ? " is-selected" : ""}${collapsed ? " is-collapsed" : ""}${context ? " is-filter-context" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}`}
       key={workspace.workspace_id}
       data-workspace={workspace.workspace_id}
       data-branch={branchTitle ?? undefined}
@@ -770,7 +773,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
       onDrop={(event) => onDrop(event, workspace.workspace_id)}
     >
-      <div className="workspace-header"
+      <div className="workspace-header" inert={boardPending !== undefined}
         onMouseDownCapture={(event) => { if ((event.button === 2 || (event.button === 0 && event.ctrlKey)) && !(event.target as HTMLElement).closest("input")) event.preventDefault(); }}
         onContextMenu={(event) => onRowContextMenu(event, toggleMenu)}>
         {/* a workspace leads with its own face, the project's icon or else a folder; when linked
@@ -853,6 +856,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
         </div>
       </div>
       <PrBadge workspace={workspace} />
+      {boardPending && <p className="workspace-board-pending" role="status">{boardPending.word}</p>}
       {inlineError?.workspaceId === workspace.workspace_id && <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>}
     </li>;
   };

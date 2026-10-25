@@ -35,6 +35,7 @@ const BASE: Record<string, string> = {
   "Recent folders": "最近のフォルダー",
   "Stop agent": "エージェントを停止",
   "Remove": "削除",
+  "Stopping…": "停止しています…",
   "Dismiss": "閉じる",
   "Input line": "入力欄",
   // ---- settings ----

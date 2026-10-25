@@ -76,4 +76,9 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Board tasks": "보드 작업",
   "Board tasks on {name}": "{name}의 보드 작업",
   "No tasks on the board": "보드에 작업이 없습니다",
+  "Approving…": "승인 중…",
+  "Archiving…": "보관 중…",
+  "Merging…": "병합 중…",
+  "Removing…": "제거 중…",
+  "Restoring…": "복원 중…",
 };

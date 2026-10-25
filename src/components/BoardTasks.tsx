@@ -4,8 +4,10 @@
  * tasks dialog, which lists every task, also the ones whose space has closed. What each action does
  * is the board's CLI's; the page only says what the board answered. An approve says the step it was
  * offered for, so the server refuses it once the task has moved on (a plan's yes never merges).
+ * The board can take a while (an archive stops the agent and cleans its checkout up): an action runs
+ * in the background, its task drawn greyed with what is under way, and nothing else waits for it.
  */
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Archive, Check, GitMerge, ListChecks, ShieldCheck, Square, Trash2, X, type LucideIcon } from "lucide-react";
 
@@ -14,7 +16,7 @@ import "./BoardTasks.css";
 import { boardApproveKind, boardTaskRepo, type BoardActionRequest, type BoardTask } from "../../shared/board-tasks.ts";
 import { ApiError } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
-import { useMachineApi } from "../lib/machineContext.tsx";
+import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
@@ -31,9 +33,28 @@ export interface BoardNote { message: string; failed: boolean; undo?: () => void
 /** a question before an action, in ConfirmDialog's terms */
 export interface BoardQuestion { title: string; body: string; action: string; run: () => Promise<void> }
 
+/** what is under way on a task while the board does it, as its row says it */
+export interface BoardPending { word: string; worktree: string | null }
+
+// the tasks under way, per PC and task id: one store, so the sidebar's rows and the Board tasks
+// dialog grey out the same task whichever of them started the action
+const pendingByKey = new Map<string, BoardPending>();
+let pendingSnapshot: ReadonlyMap<string, BoardPending> = new Map();
+const pendingListeners = new Set<() => void>();
+function setPending(key: string, entry: BoardPending | null): void {
+  if (entry) pendingByKey.set(key, entry); else pendingByKey.delete(key);
+  pendingSnapshot = new Map(pendingByKey);
+  for (const listener of pendingListeners) listener();
+}
+const subscribePending = (listener: () => void) => { pendingListeners.add(listener); return () => { pendingListeners.delete(listener); }; };
+const currentPending = () => pendingSnapshot;
+
 /** One PC's board: its tasks, read on `refresh`, and its actions with their note. */
 export function useBoard() {
   const { boardAction, fetchBoardTasks } = useMachineApi();
+  const machineId = useMachineId();
+  const t = useT();
+  const pendingAll = useSyncExternalStore(subscribePending, currentPending, currentPending);
   // null: not asked yet, or this PC has no board (404) or did not answer
   const [tasks, setTasks] = useState<BoardTask[] | null>(null);
   const [note, setNote] = useState<BoardNote | null>(null);
@@ -43,13 +64,25 @@ export function useBoard() {
     const timer = window.setTimeout(() => setNote(null), BOARD_NOTE_MS);
     return () => window.clearTimeout(timer);
   }, [note]);
-  /** the board does it and says so; a refusal throws, for a question's dialog to show */
+  /** what is under way on a task of this PC, or undefined */
+  const pending = (id: string): BoardPending | undefined => pendingAll.get(`${machineId}\n${id}`);
+  /** the board does it and says so; its task is greyed meanwhile; a refusal throws */
   const act = async (request: BoardActionRequest, undo?: BoardActionRequest): Promise<void> => {
+    const key = request.action === "archive-done" ? null : `${machineId}\n${request.id}`;
+    if (request.action !== "archive-done") {
+      const task = tasks?.find((candidate) => candidate.id === request.id);
+      // a task's row while the board does this to it
+      const word = request.action === "archive" ? t("Archiving…") : request.action === "restore" ? t("Restoring…") : request.action === "clear" ? t("Removing…") : request.action === "stop" ? t("Stopping…")
+        : task && boardApproveKind(task) === "merge" ? t("Merging…") : t("Approving…");
+      setPending(key!, { word, worktree: task?.worktree ?? null });
+    }
     try {
       const { message } = await boardAction(request);
       setNote({ message, failed: false, undo: undo && (() => run(undo)) });
     } finally {
-      void refresh();
+      // the row stays greyed until the list shows where the task now stands
+      await refresh();
+      if (key) setPending(key, null);
     }
   };
   /** an action without a question: its refusal shows in the note */
@@ -57,7 +90,7 @@ export function useBoard() {
     setNote(null);
     act(request, undo).catch((error: unknown) => setNote({ message: error instanceof ApiError ? error.detail : userErrorMessage(error).message, failed: true }));
   };
-  return { tasks, refresh, note, setNote, act, run };
+  return { tasks, refresh, note, setNote, act, run, pending, pendingAll };
 }
 
 type Board = ReturnType<typeof useBoard>;
@@ -79,13 +112,13 @@ export function boardTaskItems(task: BoardTask, board: Board, ask: (question: Bo
       title: t("Merge {task}?", { task: name }),
       body: t("The board merges the task's finished work into its main branch, and closes its space."),
       action: t("Merge"),
-      run: () => leave(() => board.act(approve)),
+      run: () => leave(async () => board.run(approve)),
     }) }] : []),
     { id: "board-clear", label: t("Remove task…"), icon: Trash2, danger: true, run: () => ask({
       title: t("Remove task {task}?", { task: name }),
       body: t("The task leaves the board with its description and reviews, and its worktree is removed. Work in it that is not saved or not merged is kept."),
       action: t("Remove"),
-      run: () => leave(() => board.act({ action: "clear", id: task.id })),
+      run: () => leave(async () => board.run({ action: "clear", id: task.id })),
     }) },
   ];
 }
@@ -132,13 +165,15 @@ export function BoardTasksDialog({ board, title, onClose }: { board: Board; titl
           {board.tasks === null ? <p className="board-tasks-empty" role="status">{t("Loading…")}</p>
             : tasks.length === 0 ? <p className="board-tasks-empty" role="status">{t("No tasks on the board")}</p>
             : <ul className="board-tasks-list">{tasks.map((task) => (
-              <li key={task.id} className="board-task" data-task={task.id}>
+              <li key={task.id} className={`board-task${board.pending(task.id) ? " is-pending" : ""}`} data-task={task.id} aria-busy={board.pending(task.id) ? true : undefined}>
                 <div className="board-task-head">
                   <span className="board-task-id">{task.id}</span>
                   <span className="board-task-title">{task.title}</span>
                   <span className={`board-task-state is-${task.state}`}>{[task.state, task.stage !== task.state ? task.stage : ""].filter(Boolean).join(" · ")}</span>
                 </div>
-                <div className="board-task-actions">{boardTaskItems(task, board, setQuestion, t).map((item) => button(item.id, item.label, item.icon, item.run, item.danger))}</div>
+                {board.pending(task.id)
+                  ? <p className="board-task-pending" role="status">{board.pending(task.id)!.word}</p>
+                  : <div className="board-task-actions">{boardTaskItems(task, board, setQuestion, t).map((item) => button(item.id, item.label, item.icon, item.run, item.danger))}</div>}
               </li>
             ))}</ul>}
           {done.length > 0 && <div className="board-tasks-bulk">

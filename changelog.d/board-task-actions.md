@@ -7,3 +7,5 @@
   space has closed, with the same actions and Archive done tasks for every repo or one. The board's
   own CLI does each action, and its message or refusal shows beside it; an approve for a step the
   task has already left is refused rather than merged.
+  An action runs in the background: its task's row is greyed with what is under way (Archiving…,
+  Removing…) until the board is done, and the rest of the page stays usable.

@@ -76,4 +76,9 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Board tasks": "看板任务",
   "Board tasks on {name}": "{name} 上的看板任务",
   "No tasks on the board": "看板上没有任务",
+  "Approving…": "批准中…",
+  "Archiving…": "归档中…",
+  "Merging…": "合并中…",
+  "Removing…": "移除中…",
+  "Restoring…": "恢复中…",
 };

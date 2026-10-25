@@ -76,4 +76,9 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Board tasks": "ボードのタスク",
   "Board tasks on {name}": "{name} のボードのタスク",
   "No tasks on the board": "ボードにタスクはありません",
+  "Approving…": "承認中…",
+  "Archiving…": "アーカイブ中…",
+  "Merging…": "マージ中…",
+  "Removing…": "削除中…",
+  "Restoring…": "復元中…",
 };

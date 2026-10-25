@@ -19,7 +19,10 @@ const patch = `(() => {
   const demoFetch = window.fetch;
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   let tasks = null;
-  window.__board = { calls: [], tasks: () => tasks, set(id, fields) { Object.assign(tasks.find((task) => task.id === id), fields); } };
+  // hold(): the next actions wait for release(), as a slow board's archive or remove does
+  let held = null;
+  window.__board = { calls: [], tasks: () => tasks, set(id, fields) { Object.assign(tasks.find((task) => task.id === id), fields); },
+    hold() { let release; held = new Promise((resolve) => { release = resolve; }); window.__board.release = () => { held = null; release(); }; } };
   const load = async () => {
     if (tasks) return;
     const { snapshot } = await (await demoFetch("/api/session")).json();
@@ -41,6 +44,7 @@ const patch = `(() => {
     if (url.pathname === "/api/board/tasks") return json({ tasks: tasks.filter((task) => !task.archived).map(({ id, title, state, stage, kind, worktree }) => ({ id, title, state, stage, kind, worktree })) });
     const body = JSON.parse(init.body);
     window.__board.calls.push(body);
+    if (held) await held;
     if (body.action === "archive-done") return json({ message: "archived the done tasks" });
     const task = tasks.find((candidate) => candidate.id === body.id);
     if (!task) return json({ error: { code: "board_refused", message: "No task " + body.id } }, 422);
@@ -53,12 +57,17 @@ const patch = `(() => {
       return json({ message: task.id + ": archived." });
     }
     if (body.action === "restore") { task.archived = false; return json({ message: task.id + ": restored." }); }
+    if (body.action === "clear") {
+      task.archived = true;
+      if (task.workspace) await demoFetch("/api/workspace/close", { method: "POST", body: JSON.stringify({ workspace_id: task.workspace }) });
+      return json({ message: task.id + ": removed" });
+    }
     return json({ message: task.id + ": " + body.action });
   };
 })();`;
 
 interface FakeTask { id: string; title: string; workspace: string | null; stage: string }
-type Board = { calls: Record<string, unknown>[]; tasks(): FakeTask[]; set(id: string, fields: object): void };
+type Board = { calls: Record<string, unknown>[]; tasks(): FakeTask[]; set(id: string, fields: object): void; hold(): void; release(): void };
 const workspaceRow = (page: Page, workspace: string) => page.locator(`.workspace-group[data-workspace="${workspace}"]`);
 
 try {
@@ -163,7 +172,21 @@ try {
             await item("Remove task…").scrollIntoViewIfNeeded();
             await page.screenshot({ path: join(evidence, `board-archive-${name}-menu.png`) });
           }
+          // the board takes its time: the row greys out with what is under way, and the rest goes on
+          await page.evaluate(() => (window as unknown as { __board: Board }).__board.hold());
           await item("Archive task").click();
+          const archiving = workspaceRow(page, done.workspace!);
+          await archiving.locator(".workspace-board-pending", { hasText: "Archiving…" }).waitFor();
+          assert.equal(await archiving.getAttribute("aria-busy"), "true");
+          assert.equal(await archiving.locator("> .workspace-header").evaluate((header) => (header as HTMLElement).inert), true, "its row cannot be acted on meanwhile");
+          await sheetGone();
+          await settle();
+          await slideOut();
+          if (evidence) await page.screenshot({ path: join(evidence, `board-archive-${name}-pending.png`) });
+          // another space's menu still opens while the board works
+          await openMenu(working);
+          await closeMenu();
+          await page.evaluate(() => (window as unknown as { __board: Board }).__board.release());
           await page.waitForFunction((id) => document.querySelector(".machine-workspaces .board-note-text")?.textContent === `${id}: archived.`, done.id);
           await workspaceRow(page, done.workspace!).waitFor({ state: "detached" });
           assert.equal(await workspaceRow(page, working.workspace!).count(), 1, "the other task with that title keeps its space");
@@ -209,8 +232,19 @@ try {
           assert.deepEqual((await calls()).at(-1), { action: "archive-done" });
           await page.keyboard.press("Escape");
           await dialog.waitFor({ state: "detached" });
+
+          // a remove: the question closes as soon as it is answered, and the row says Removing… until the board is done
+          await page.evaluate(() => (window as unknown as { __board: Board }).__board.hold());
+          await openMenu(working);
+          await item("Remove task…").click();
+          await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
+          await page.getByRole("alertdialog").waitFor({ state: "detached" });
+          await workspaceRow(page, working.workspace!).locator(".workspace-board-pending", { hasText: "Removing…" }).waitFor();
+          await page.evaluate(() => (window as unknown as { __board: Board }).__board.release());
+          await workspaceRow(page, working.workspace!).waitFor({ state: "detached" });
+          assert.deepEqual((await calls()).at(-1), { action: "clear", id: working.id });
           assert.deepEqual(errors, []);
-          console.log(`${name}: row menus, stale approve, permission, archive with Undo, remove's question and Board tasks pass`);
+          console.log(`${name}: row menus, stale approve, permission, archive with Undo while pending, remove's question, Board tasks and a remove in the background pass`);
         } finally {
           await context.close();
         }

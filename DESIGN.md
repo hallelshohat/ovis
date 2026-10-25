@@ -1106,7 +1106,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   action, and a PC without the board answers 404, so its menus stay as they were. The board's message
   is a note (`.board-note`, `--fs-xs` in `--text-dim`, a refusal in `--status-blocked` with
   `role="alert"`) under the roster or at the top of the dialog, with Undo after an archive (the board's
-  `restore`) and a dismiss ×; a success leaves by itself after 10 seconds, a refusal stays. The design
+  `restore`) and a dismiss ×; a success leaves by itself after 10 seconds, a refusal stays. The board
+  can take a while (an archive or a remove stops the agent and cleans its checkout up), so an action
+  runs in the background: a question closes as soon as it is answered, and the task's sidebar row (and
+  its row in the dialog) is greyed and inert with what is under way under its name (`Archiving…`,
+  `Removing…`, `Stopping…`, `Merging…`, `--fs-xs` italic in `--text-dim`, `aria-busy`) until the list
+  shows where the task now stands; every other row, menu and pane stays usable. The design
   follows the web Board's own buttons and questions (same words, a merge and a remove ask first) and
   Linear's archive toast with Undo.
 - What herdr plugins report on a pane (its `tokens`, `herdr pane report-metadata --token`: the Quota
