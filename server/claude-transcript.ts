@@ -158,6 +158,48 @@ export function claudeResultText(output: unknown): string {
       : "";
 }
 
+/** A length-delimited field of a protobuf message (the last one, as Claude Code reads it); undefined when malformed. */
+function protoField(bytes: Uint8Array, field: number): Uint8Array | undefined {
+  const varint = (at: number): { value: number; next: number } | undefined => {
+    let value = 0;
+    for (let shift = 1, i = at; i < bytes.length && i < at + 10; i++, shift *= 128) {
+      value += (bytes[i]! & 0x7f) * shift;
+      if (bytes[i]! < 0x80) return { value, next: i + 1 };
+    }
+    return undefined;
+  };
+  let found: Uint8Array | undefined;
+  for (let at = 0; at < bytes.length;) {
+    const key = varint(at);
+    if (key === undefined) return undefined;
+    at = key.next;
+    const wire = key.value % 8;
+    if (wire === 0) { const skip = varint(at); if (skip === undefined) return undefined; at = skip.next; }
+    else if (wire === 1) at += 8;
+    else if (wire === 5) at += 4;
+    else if (wire === 2) {
+      const length = varint(at);
+      if (length === undefined || length.value > bytes.length - length.next) return undefined;
+      at = length.next + length.value;
+      if (Math.floor(key.value / 8) === field) found = bytes.subarray(length.next, at);
+    } else return undefined;
+    if (at > bytes.length) return undefined;
+  }
+  return found;
+}
+
+/**
+ * A thinking block the terminal prints as a line of narration between the tools: the server
+ * tags its signature (field 2 → 1 → 8) with the block kind, and Claude Code reads it there.
+ */
+function isNarration(signature: unknown): boolean {
+  if (typeof signature !== "string" || signature.length === 0) return false;
+  const inner = protoField(Buffer.from(signature, "base64"), 2);
+  const meta = inner && protoField(inner, 1);
+  const kind = meta && protoField(meta, 8);
+  return kind !== undefined && Buffer.from(kind).toString("utf8") === "narration";
+}
+
 /**
  * A Claude image's ref: the entry, the block, and for a picture a tool returned its place in the
  * result. The parser names only what transcriptImage can read back by it.
@@ -401,14 +443,15 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
       if (entry.timestamp) turn.end_ts = entry.timestamp;
       for (const block of content) {
         if (typeof block !== "object" || block === null) continue;
-        const b = block as { type?: string; text?: unknown; thinking?: unknown; name?: unknown; input?: unknown };
+        const b = block as { type?: string; text?: unknown; thinking?: unknown; signature?: unknown; name?: unknown; input?: unknown };
         if (b.type === "text" && typeof b.text === "string" && b.text.length > 0) {
           turn.parts.push({ kind: "text", text: b.text, ...(state.completed ? { phase: "final_answer" as const } : {}) });
         } else if (b.type === "thinking") {
           const thinking = typeof b.thinking === "string" ? b.thinking : typeof b.text === "string" ? b.text : "";
           // the terminal prints an "updates" entry's thinking as narration between the tools, so it
-          // is read as that: commentary keeps it in the work block, never taken for the answer
-          if (thinking.trim().length > 0 && entry.thinkingDisplay === "updates") turn.parts.push({ kind: "text", text: thinking, phase: "commentary" });
+          // is read as that: commentary keeps it in the work block, never taken for the answer.
+          // A block whose signature names it a narration is printed the same way.
+          if (thinking.trim().length > 0 && (entry.thinkingDisplay === "updates" || isNarration(b.signature))) turn.parts.push({ kind: "text", text: thinking, phase: "commentary" });
           else if (thinking.length > 0) turn.parts.push({ kind: "thinking", text: thinking });
         } else if (b.type === "tool_use" && typeof b.name === "string") {
           const input = (typeof b.input === "object" && b.input !== null ? b.input : {}) as Record<string, unknown>;
