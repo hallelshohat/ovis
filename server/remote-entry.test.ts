@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { join as winJoin } from "node:path/win32";
@@ -55,8 +55,9 @@ describe("remote entry startup lock", () => {
   let home = "", descriptor = "", lock = "";
   const others: Bun.Subprocess<"pipe", "ignore", "ignore">[] = [];
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "remote-entry-"));
-    const socket = resolve(join(home, "config", "herdr", "herdr.sock"));
+    // Keep the socket below macOS's Unix-address limit even with a long TMPDIR.
+    home = mkdtempSync(join(tmpdir(), "r"));
+    const socket = resolve(join(home, "c", "herdr", "herdr.sock"));
     descriptor = join(home, ".config/herdr-web-ui/bridges", createHash("sha256").update(socket).digest("hex") + ".json");
     lock = descriptor + ".lock";
     mkdirSync(join(home, ".config/herdr-web-ui/bridges"), { recursive: true });
@@ -81,7 +82,7 @@ describe("remote entry startup lock", () => {
     const entry = join(import.meta.dir, "remote-entry.ts");
     const proc = Bun.spawn([process.execPath, ...(preload ? ["--preload", preload] : []), entry], {
       cwd: home, stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true,
-      env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, "config"), OVIS_HERDR_BIN: join(home, "missing-herdr"), HERDR_REMOTE_SESSION: "", HERDR_SOCKET: "" },
+      env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, "c"), OVIS_HERDR_BIN: join(home, "missing-herdr"), HERDR_REMOTE_SESSION: "", HERDR_SOCKET: "" },
     });
     let serving = false;
     const deadline = setTimeout(() => { serving = true; proc.kill("SIGKILL"); }, 30_000);
@@ -96,7 +97,7 @@ describe("remote entry startup lock", () => {
   }
   /** A herdr that answers only ping, at the socket the entry looks for. */
   function fakeHerdr(): { socket: string; stop(): void } {
-    const socket = join(home, "config", "herdr", "herdr.sock");
+    const socket = join(home, "c", "herdr", "herdr.sock");
     mkdirSync(dirname(socket), { recursive: true });
     const listener = Bun.listen<{ buffer: string }>({
       unix: socket,
@@ -113,7 +114,7 @@ describe("remote entry startup lock", () => {
         },
       },
     });
-    return { socket: realpathSync(socket), stop: () => listener.stop(true) };
+    return { socket: resolve(socket), stop: () => listener.stop(true) };
   }
 
   it("reclaims a startup lock whose PID another process now holds", async () => {
