@@ -54,8 +54,9 @@ describe("remote entry startup lock", () => {
   let home = "", descriptor = "", lock = "";
   const others: Bun.Subprocess<"pipe", "ignore", "ignore">[] = [];
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "remote-entry-"));
-    const socket = resolve(join(home, "config", "herdr", "herdr.sock"));
+    // Keep the socket below macOS's Unix-address limit even with a long TMPDIR.
+    home = mkdtempSync(join(tmpdir(), "r"));
+    const socket = resolve(join(home, "c", "herdr", "herdr.sock"));
     descriptor = join(home, ".config/herdr-web-ui/bridges", createHash("sha256").update(socket).digest("hex") + ".json");
     lock = descriptor + ".lock";
     mkdirSync(join(home, ".config/herdr-web-ui/bridges"), { recursive: true });
@@ -79,7 +80,7 @@ describe("remote entry startup lock", () => {
     const entry = join(import.meta.dir, "remote-entry.ts");
     const proc = Bun.spawn([process.execPath, ...(preload ? ["--preload", preload] : []), entry], {
       cwd: home, stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true,
-      env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, "config"), OVIS_HERDR_BIN: join(home, "missing-herdr"), HERDR_REMOTE_SESSION: "", HERDR_REMOTE_SOCKET: "", HERDR_REMOTE_START_NEW: "", HERDR_REMOTE_RESULT: "", HERDR_SOCKET: "", ...choice },
+      env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, "c"), OVIS_HERDR_BIN: join(home, "missing-herdr"), HERDR_REMOTE_SESSION: "", HERDR_REMOTE_SOCKET: "", HERDR_REMOTE_START_NEW: "", HERDR_REMOTE_RESULT: "", HERDR_SOCKET: "", ...choice },
     });
     let serving = false;
     const deadline = setTimeout(() => { serving = true; proc.kill("SIGKILL"); }, 30_000);
@@ -92,7 +93,7 @@ describe("remote entry startup lock", () => {
     writeFileSync(preload, `const kill = process.kill.bind(process);\nprocess.kill = ((target, signal) => { if (target === ${pid}) throw Object.assign(new Error("kill EPERM"), { code: "EPERM" }); return kill(target, signal); });\n`);
     return preload;
   }
-  function fakeHerdr(socket = join(home, "config", "herdr", "herdr.sock")): { socket: string; stop(): void } {
+  function fakeHerdr(socket = join(home, "c", "herdr", "herdr.sock")): { socket: string; stop(): void } {
     mkdirSync(dirname(socket), { recursive: true });
     const listener = Bun.listen<{ buffer: string }>({
       unix: socket,

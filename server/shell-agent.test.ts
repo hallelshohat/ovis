@@ -310,7 +310,7 @@ it("never takes a relative PATH entry a .zshrc adds, which would make the server
 it("service miss resolves the same executable for offer and start", async () => {
   const f = fixture();
   expect(shellAgentExecutable("gjc", "linux", f.servicePath())).toBeNull();
-  const { probe, runs } = counted(loginPathProbe({ shell: f.shell, env: f.env }));
+  const { probe, runs } = counted(loginPathProbe({ shell: f.shell, env: f.env, timeoutMs: 5000 }));
   const locator = new ShellAgentLocator({ platform: "linux", servicePath: f.servicePath, probe });
   const serviceOnly = new ShellAgentLocator({ platform: "linux", servicePath: f.servicePath, probe: null });
   await expect(startShellAgent("gjc", "w1-1", [], { locator: serviceOnly })).rejects.toThrow("not on this server's PATH");
