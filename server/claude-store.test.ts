@@ -432,9 +432,9 @@ describe("a claude attach pane's job (#1645)", () => {
     const dir = store();
     job(dir, JOB, { sessionId: SESSION });
     const behind = ["claude", "--model", "opus", "attach", JOB];
-    // the shell prints once it runs with the environment it was given, then waits on its input: no exec moves its environment
+    // A Bun child exposes its environment on macOS, unlike the protected system shell.
     const client = async (env: Record<string, string>) => {
-      const child = Bun.spawn(["/bin/sh", "-c", "echo ready; read line"], { env: { PATH: process.env["PATH"] ?? "", ...env }, stdin: "pipe", stdout: "pipe" });
+      const child = Bun.spawn([process.execPath, "-e", "console.log('ready'); for await (const _ of Bun.stdin.stream()) {}"], { env: { PATH: process.env["PATH"] ?? "", ...env }, stdin: "pipe", stdout: "pipe" });
       const reader = child.stdout.getReader();
       await reader.read();
       reader.releaseLock();

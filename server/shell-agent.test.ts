@@ -165,7 +165,7 @@ it("service miss resolves the same executable for offer and start", async () => 
   const f = fixture();
   // today's lookup: the service PATH misses gjc
   expect(shellAgentExecutable("gjc", "linux", f.servicePath())).toBeNull();
-  const { probe, runs } = counted(loginPathProbe({ shell: f.shell, env: f.env }));
+  const { probe, runs } = counted(loginPathProbe({ shell: f.shell, env: f.env, timeoutMs: 5000 }));
   const locator = new ShellAgentLocator({ platform: "linux", servicePath: f.servicePath, probe });
   // without the login fallback the start misses it too
   const serviceOnly = new ShellAgentLocator({ platform: "linux", servicePath: f.servicePath, probe: null });

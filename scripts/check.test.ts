@@ -1116,9 +1116,10 @@ describe("teardown", () => {
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
-    // A file with no listener gives the same ECONNREFUSED as a socket left after SIGKILL.
+    // macOS rejects a regular file as ENOTSOCK; that is not proof of a stopped session.
     writeFileSync(socket, "");
-    await stopSessions(sessions, () => ({ status: 1, signal: null }));
+    if (process.platform === "darwin") await expect(stopSessions(sessions, () => ({ status: 1, signal: null }))).rejects.toThrow("ENOTSOCK");
+    else await stopSessions(sessions, () => ({ status: 1, signal: null }));
     await stopSessions(sessions, () => { rmSync(socket); return { status: 1, signal: null }; });
   });
 
