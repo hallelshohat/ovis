@@ -87,7 +87,7 @@ export function agyCatalog(path: string, beforeOpen?: () => void): Set<number> {
         && began - Number(stat.ctimeNs / 1_000_000n) >= CATALOG_SETTLED_MS)) catalogKey = key;
       // macOS: tmpdir() is under the /var symlink, which SQLITE_OPEN_NOFOLLOW refuses
       if (reused === undefined) {
-        snapshot = mkdtempSync(join(tmpdir(), "ovis-agy-catalog-"));
+        snapshot = realpathSync(mkdtempSync(join(tmpdir(), "ovis-agy-catalog-")));
         snapshot = realpathSync(snapshot);
         name = join(snapshot, "catalog.db");
         for (const [index, file] of snapshotFiles.entries()) {
