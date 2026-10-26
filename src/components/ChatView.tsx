@@ -32,7 +32,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
-import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, todoGroups, turnSegments, visibleWorkParts, workFailed, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -578,37 +578,39 @@ function PendingWorkHead({ title, className = "" }: { title: string; className?:
   </div>;
 }
 
-function WorkBlockView({ paneId, parts, turnParts, rowKey, duration, live, waiting, defaultOpen, showThinking, pendingHead }: { paneId: string; parts: ConversationPart[]; turnParts: ConversationPart[]; rowKey: string; duration: string | null; live: boolean; waiting: boolean; defaultOpen: boolean; showThinking: boolean; pendingHead: boolean }) {
+function WorkBlockView({ paneId, parts, turnParts, rowKey, live, waiting, showThinking }: { paneId: string; parts: ConversationPart[]; turnParts: ConversationPart[]; rowKey: string; live: boolean; waiting: boolean; showThinking: boolean }) {
   const t = useT();
-  const [chosenOpen, setOpen] = useChatRowToggle("work", null);
-  const open = chosenOpen ?? defaultOpen;
+  // named by its first part's place in the turn: appended parts never rename it
+  const [chosenOpen, setOpen] = useChatRowToggle(`work:${turnParts.indexOf(parts[0]!)}`, null);
+  // only the run the agent is in now is open; a run it left reads as the terminal's one folded line
+  const open = chosenOpen ?? live;
   // reading or working inside the block is a choice to keep it: the fold at the end of the turn
   // must not take the rows from under the reader's focus or close the row they opened
   const keepOpen = () => { if (chosenOpen === null) setOpen(true); };
   // runs of todo updates, found in the turn's own order before anything is hidden
   const groups = useMemo(() => todoGroups(turnParts, rowKey), [turnParts, rowKey]);
   const grouped = new Set([...groups.values()].flatMap((group) => group.attempts.slice(1).map((attempt) => attempt.part)));
-  const toolKey = (part: ConversationPart) => `tool:${parts.indexOf(part)}`;
+  const toolKey = (part: ConversationPart) => `tool:${turnParts.indexOf(part)}`;
   const visible = visibleWorkParts(parts, showThinking);
-  if (visible.length === 0) return live && !waiting && pendingHead ? <PendingWorkHead title={t("Working…")} /> : null;
+  if (visible.length === 0) return live && !waiting ? <PendingWorkHead title={t("Working…")} /> : null;
   const summary = workSummary(parts);
   const failed = workFailed(parts);
-  // a blocked agent is not working: the open block takes the sidebar's words for it
-  const title = waiting ? t("Needs you") : live ? t("Working…") : duration !== null ? t("Worked for {duration}", { duration }) : t("Worked");
+  // a blocked agent is not working: the open block takes the sidebar's words for it. A settled run
+  // is named by what it did, as the terminal's "Ran 2 commands"; the turn's time closes the turn
+  const title = waiting ? t("Needs you") : live ? t("Working…") : summary.length > 0 ? summary : t("Worked");
   return <section className={`work-block${live ? " is-live" : ""}${waiting ? " is-waiting" : ""}${open ? "" : " is-folded"}`}>
     <button type="button" className="work-block-head" aria-expanded={open} onClick={() => setOpen(!open)}>
       <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
       <span className="work-block-title">{title}</span>
-      {summary.length > 0 && <span className="work-block-summary">· {summary}</span>}
+      {(live || waiting) && summary.length > 0 && <span className="work-block-summary">· {summary}</span>}
       {/* its own span: the counts before it are cut on a narrow screen, a failure never is */}
       {failed > 0 && <span className="work-block-failed">· {t("{n} failed", { n: failed })}</span>}
     </button>
     {/* the rows open and fold at the block's measured height; folded and settled, they are not drawn */}
     <AnimatedHeight open={open} animateContent={false}>
       <div className="work-block-rows" onFocus={keepOpen} onClick={keepOpen}>{visible.map((part, index) =>
-        part.kind === "thinking" ? <ThinkingRow key={index} stateKey={`thinking:${parts.indexOf(part)}`} text={part.text} />
-          : part.kind === "text" ? <div key={index} className="work-narration"><Markdown>{part.text}</Markdown></div>
-            : part.kind === "tool" ? groups.has(part) ? <TodoGroupRow key={groups.get(part)!.id} paneId={paneId} group={groups.get(part)!} stateKeyOf={toolKey} />
+        part.kind === "thinking" ? <ThinkingRow key={index} stateKey={`thinking:${turnParts.indexOf(part)}`} text={part.text} />
+          : part.kind === "tool" ? groups.has(part) ? <TodoGroupRow key={groups.get(part)!.id} paneId={paneId} group={groups.get(part)!} stateKeyOf={toolKey} />
               : grouped.has(part) ? null : <WorkRow key={index} stateKey={toolKey(part)} paneId={paneId} part={part} /> : null)}
       </div>
     </AnimatedHeight>
@@ -953,15 +955,25 @@ const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, showThink
       <SkillActivityList parts={turn.parts} />
     </article>;
   }
-  const { work, answer } = splitTurn(turn.parts);
-  const answerText = answer.map((part) => part.text).join("\n\n");
+  // the copy buttons copy the agent's answer: its prose that is not commentary
+  const answerText = splitTurn(turn.parts).answer.map((part) => part.text).join("\n\n");
   const goal = turnGoal(turn.parts);
+  // the turn as the terminal draws it: words and runs of tool calls in the order they happened
+  const segments = turnSegments(turn.parts);
+  const duration = live ? null : formatWorkDuration(turn.ts, turn.end_ts ?? null);
   return <article className="chat-turn chat-turn-agent">
     <SkillActivityList parts={turn.parts} />
     {goal !== null && <GoalActivity goal={goal} />}
-    {/* the pending head stands only above no answer: one above words would leave a gap when the turn ends */}
-    {(work.length > 0 || (live && answer.length === 0)) && <WorkBlockView paneId={paneId} parts={work} turnParts={turn.parts} rowKey={rowKey} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} pendingHead={answer.length === 0} />}
-    {answer.map((part, index) => <Markdown key={index} skills={skills}>{part.text}</Markdown>)}
+    {segments.map((segment, index) => {
+      const last = index === segments.length - 1;
+      return segment.kind === "text"
+        ? <Markdown key={index} skills={skills}>{segment.part.text}</Markdown>
+        : <WorkBlockView key={index} paneId={paneId} parts={segment.parts} turnParts={turn.parts} rowKey={rowKey} live={live && last} waiting={waiting && last} showThinking={showThinking} />;
+    })}
+    {/* a running turn that has written nothing yet: the head stands where its first run will be */}
+    {live && !waiting && segments.length === 0 && <PendingWorkHead title={t("Working…")} />}
+    {/* the terminal's "✻ Worked for 52s" line: always shown, it closes a turn that did work */}
+    {duration !== null && segments.some((segment) => segment.kind === "actions") && <p className="chat-turn-duration">{t("Worked for {duration}", { duration })}</p>}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       {/* a mouse reads one copy glyph and the words "Plain text"; touch reads the two formats */}
       <CopyButton className="chat-meta-btn" text={answerText} label={t("Copy as markdown")} onResult={copied}><span className="chat-meta-fmt">MD</span></CopyButton>
@@ -1851,12 +1863,12 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   heldPage.current = state.turns;
   const finishedBeforeSend = sentOver !== null && sentOver.page === state.turns ? sentOver.turn : null;
   const lastShownTurn = state.source === "conversation" ? shownTurns.at(-1) : undefined;
-  const lastSplit = lastShownTurn !== undefined && isLiveWorkTurn(lastShownTurn, true, workStatus, finishedBeforeSend) ? splitTurn(lastShownTurn.parts) : null;
-  // the last turn runs and already says the agent works: its work block, or the head standing in
-  // for one while it has no answer yet
-  const workBlockLive = lastSplit !== null && (visibleWorkParts(lastSplit.work, settings.showThinking).length > 0 || lastSplit.answer.length === 0);
-  // a running turn with words and no work rows: the activity is a line under its words, as before
-  const answerOnlyLive = lastSplit !== null && !workBlockLive;
+  const lastSegments = lastShownTurn !== undefined && isLiveWorkTurn(lastShownTurn, true, workStatus, finishedBeforeSend) ? turnSegments(lastShownTurn.parts) : null;
+  // the last turn runs and already says the agent works: its last run of tool calls is open under
+  // "Working…" (or the head standing in for it while it has written nothing)
+  const workBlockLive = lastSegments !== null && lastSegments.at(-1)?.kind !== "text";
+  // a running turn whose newest part is words: the activity is a line under them, as before
+  const answerOnlyLive = lastSegments !== null && !workBlockLive;
   const empty = state.source === "conversation" ? turns.length === 0 : agent === null && state.messages.length === 0;
   const blank = !ended && chatIsBlank({ loaded, failed: error !== null, transcript: state.source === "conversation", turns: turns.length, older: typeof olderCursor === "string", abandoned: abandoned?.count ?? 0, prompt: prompt !== null, agent });
   // the scrollback standing in says nothing of the conversation: it has no history to compare

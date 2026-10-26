@@ -26,19 +26,24 @@ export function splitTurn(parts: ConversationPart[]): SplitTurn {
 }
 
 /**
- * A work block is open while its turn runs and folded once the turn settles: the answer stays
- * outside the fold, so a finished turn reads as its answer under one "Worked for" row.
- *
- * A settled turn keeps its block open when explicit commentary comes after the last answer, or
- * when commentary has no answer at all. Folding would hide the newest thing the agent said, or all
- * of it. It takes the turn's parts, not the split: the order decides.
+ * A turn the way the terminal draws it: in the order it was written. Each piece of the agent's
+ * prose stands where it was said, and the actions between two of them (tool calls, reasoning,
+ * skills) are one run, folded as one block. Blank prose splits nothing.
  */
-export function workStartsOpen(live: boolean, parts: ConversationPart[]): boolean {
-  if (live) return true;
-  const lastAnswer = splitTurn(parts).answer.at(-1);
-  const after = lastAnswer === undefined ? 0 : parts.lastIndexOf(lastAnswer) + 1;
-  // everything readable after the last answer part is work: it is inside the fold
-  return parts.slice(after).some((part) => part.kind === "text" && part.text.trim().length > 0);
+export type TurnSegment = { kind: "text"; part: TextPart } | { kind: "actions"; parts: ConversationPart[] };
+
+export function turnSegments(parts: ConversationPart[]): TurnSegment[] {
+  const segments: TurnSegment[] = [];
+  for (const part of parts) {
+    if (part.kind === "text") {
+      if (part.text.trim().length > 0) segments.push({ kind: "text", part });
+      continue;
+    }
+    const last = segments.at(-1);
+    if (last?.kind === "actions") last.parts.push(part);
+    else segments.push({ kind: "actions", parts: [part] });
+  }
+  return segments;
 }
 
 type WorkCategory = "edit" | "read" | "command" | "other";
