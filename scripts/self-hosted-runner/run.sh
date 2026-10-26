@@ -53,6 +53,12 @@ if [ -n "$ENV_FILE" ]; then
   # Only CHECK_HOST_* numbers: docker copies a bare NAME line from this launcher's own environment
   # (GH_TOKEN, say) into every container, where any job could read it. A refused line is named by its
   # number only: its value may be a credential, and stderr ends up in the journal.
+  # BSD grep can match a valid prefix before a NUL, so reject NULs before checking lines.
+  if IFS= read -r -d '' prefix < "$ENV_FILE"; then
+    line=$(($(printf '%s' "$prefix" | wc -l) + 1))
+    echo "--env-file: $ENV_FILE may hold only CHECK_HOST_*=<number> lines; refused line(s): $line" >&2
+    exit 2
+  fi
   status=0
   # -a: a NUL byte would make grep call the file binary and name no line; -- : a path may start with -
   bad="$(grep -anvE -e '^[[:space:]]*(#.*)?$|^CHECK_HOST_(MAX_RUNS|TEST_SHARDS|BROWSER_WORKERS|UNIT_WORKERS)=[0-9]+$' -- "$ENV_FILE")" || status=$?

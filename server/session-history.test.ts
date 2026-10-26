@@ -574,6 +574,9 @@ describe("listSessions", () => {
           writer.query("UPDATE messages SET content = ? WHERE role = 'user'").run(`rewritten prompt ${modes.length}`);
           writer.exec("PRAGMA wal_checkpoint(TRUNCATE)");
         } finally { writer.close(); }
+        // SQLite may retain side files while our immutable reader is open; model a departed writer explicitly.
+        rmSync(`${db}-wal`, { force: true });
+        rmSync(`${db}-shm`, { force: true });
         // Distinct fixed mtimes expose each change even within one filesystem timestamp tick.
         const seconds = 1_790_000_000 + modes.length;
         utimesSync(db, seconds, seconds);
