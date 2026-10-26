@@ -662,6 +662,18 @@ describe("parseClaudeTranscript", () => {
     ]);
   });
 
+  it("reads thinking the server tagged as narration as the text the terminal prints", () => {
+    // Claude Code 2.1.310 entries with their real signatures: the first one's signature names
+    // the block a narration, the second one's names it ordinary thinking
+    const fixture = readFileSync(new URL("./fixtures/claude-narration-2.1.310.jsonl", import.meta.url), "utf8");
+    const turns = parseClaudeTranscript(fixture);
+    expect(turns[1]?.parts.filter((part) => part.kind !== "tool")).toEqual([
+      { kind: "text", text: "Found the issue: the item points at a stale config. Clearing the link and re-running.\n\n", phase: "commentary" },
+      { kind: "thinking", text: "The rerun passed; checking the timing before answering." },
+      { kind: "text", text: "The simulation ran in 46s.", phase: "final_answer" },
+    ]);
+  });
+
   it("survives a torn tail line while Claude is mid-append", () => {
     expect(parseClaudeTranscript(`${lines}\n{"type":"ass`).length).toBe(2);
   });
