@@ -34,7 +34,7 @@ run_script() {
   UI_EVIDENCE_DIR="$evidence" bun "$@" 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       PASS\ *|FAIL\ *) printf '%s\n' "$line";;
-      *) printf '[%s] %s\n' "$(date -Is)" "$line";;
+      *) printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$line";;
     esac
   done || code=$?
   local seconds=$((SECONDS - started))
@@ -211,6 +211,7 @@ run_script scripts/agent-helpers-fold-demo-regression.ts
 run_script scripts/sidebar-agent-tree-demo-regression.ts
 run_script scripts/agent-lock-demo-regression.ts
 run_script scripts/agent-groups-demo-regression.ts
+run_script scripts/board-task-actions-demo-regression.ts
 run_script scripts/pane-mute-demo-regression.ts
 run_script scripts/workspace-touch-reorder-demo-regression.ts
 run_script scripts/prompt-dock-demo-regression.ts
