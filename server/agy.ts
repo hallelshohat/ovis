@@ -93,7 +93,7 @@ export function agyCatalog(path: string, beforeOpen?: () => void): Set<number> {
       // macOS: tmpdir() is under the /var symlink, which SQLITE_OPEN_NOFOLLOW refuses
       // (assigned before resolving, so a failed realpath still removes the directory)
       if (reused === undefined) {
-        snapshot = mkdtempSync(join(tmpdir(), "ovis-agy-catalog-"));
+        snapshot = realpathSync(mkdtempSync(join(tmpdir(), "ovis-agy-catalog-")));
         snapshot = realpathSync(snapshot);
         name = join(snapshot, "catalog.db");
         for (const [index, file] of snapshotFiles.entries()) {
