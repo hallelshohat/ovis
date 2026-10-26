@@ -34,6 +34,14 @@ export interface TabMoved {
   tabs: HerdrTab[];
 }
 
+/** POST /api/tab/move-to-workspace: where the tab's pane is now, under its new ID. */
+export interface MoveTabToWorkspaceRequest { tab_id: string; workspace_id: string; }
+export interface TabMovedToWorkspace {
+  ok: true;
+  pane_id: string;
+  tab_id: string;
+}
+
 /** POST /api/tab/create: the workspace is required; `label` names the new tab. */
 export interface CreateTabRequest extends CreateWorkspaceRequest {
   workspace_id: string;
@@ -102,6 +110,11 @@ export interface WorktreeEntry {
 export interface WorktreeListing {
   source: { repo_key: string; repo_name: string; repo_root: string; source_checkout_path: string; source_workspace_id: string | null };
   worktrees: WorktreeEntry[];
+}
+
+/** GET /api/worktree/remote: the web page of the workspace's repository, from its `origin`; null when it has none on a host. */
+export interface WorktreeRemote {
+  url: string | null;
 }
 
 export interface WorkspaceCreated {

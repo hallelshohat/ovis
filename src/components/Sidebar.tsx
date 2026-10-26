@@ -1,10 +1,12 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type AnimationEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
-import { ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
 
 import "./Sidebar.css";
 
 import type { AgentStatus, PaneInfo, PlanSummary, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
 import { paneTitle } from "../../shared/notify-policy.ts";
+import { prStatus } from "../../shared/pr-status.ts";
+import { boardTaskOf } from "../../shared/board-tasks.ts";
 import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
 import { useMachineApi, useMachineId, useReorderCoordinator } from "../lib/machineContext.tsx";
 import type { AppActions } from "../lib/actions.ts";
@@ -12,6 +14,7 @@ import { indicatorGlyph, knownStatus, rollupStatus, STATUS_WORD } from "../lib/s
 import { AgentMark } from "./AgentMark.tsx";
 import { WorkspaceFavicon } from "./WorkspaceFavicon.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { BoardNoteView, boardTaskItems, useBoard } from "./BoardTasks.tsx";
 import { RowMenu, type RowMenuItem } from "./RowMenu.tsx";
 import { WorktreeDialog, type WorktreeDialogMode } from "./WorktreeDialog.tsx";
 import { focusWorkspaceListToggle } from "../lib/focus.ts";
@@ -137,6 +140,77 @@ export function PlanBadge({ plan }: { plan?: PlanSummary }) {
     <span className={`plan-count${plan.done === plan.total ? " is-done" : ""}`} title={plan.current ? `${label} · ${plan.current}` : label} aria-label={label} data-testid="plan-progress">
       <ListChecks aria-hidden="true" />{plan.done}/{plan.total}
     </span>
+  );
+}
+
+const PR_ICONS = { open: GitPullRequest, draft: GitPullRequestDraft, merged: GitMerge, closed: GitPullRequestClosed } as const;
+/** each PC's repositories' web pages, asked once per page load; a failed ask is asked again by the next badge */
+const repoPages = new Map<string, Promise<string | null>>();
+
+/** The web page of the workspace's repository, once its PC has said it; null until then, and when it has none. */
+function useRepoPage(workspace: WorkspaceInfo | undefined, wanted: boolean): string | null {
+  const machineId = useMachineId();
+  const { worktreeRemote } = useMachineApi();
+  const workspaceId = workspace?.workspace_id ?? "";
+  const key = `${machineId}\n${workspace?.worktree?.repo_key ?? workspaceId}`;
+  const [known, setKnown] = useState<{ key: string; url: string | null } | null>(null);
+  useEffect(() => {
+    if (!wanted || workspaceId === "") return;
+    let live = true;
+    let page = repoPages.get(key);
+    if (page === undefined) {
+      page = worktreeRemote(workspaceId).then((answer) => answer.url, () => { repoPages.delete(key); return null; });
+      repoPages.set(key, page);
+    }
+    void page.then((url) => { if (live) setKnown({ key, url }); });
+    return () => { live = false; };
+  }, [key, wanted, worktreeRemote, workspaceId]);
+  return known?.key === key ? known.url : null;
+}
+
+/**
+ * The workspace's pull request, as the PR plugin reports it in the workspace's tokens
+ * (shared/pr-status.ts), linked to its page on GitHub; nothing without one. Compact is the state's
+ * mark and the number, for an agent row; else the checks, the review and the diff follow. `nested`
+ * is for a row that is itself a control (a command palette option), which can hold no link: a
+ * `<span>` that opens the page itself and keeps the click from the row.
+ */
+export function PrBadge({ workspace, compact = false, nested = false }: { workspace: WorkspaceInfo | undefined; compact?: boolean; nested?: boolean }) {
+  const t = useT();
+  const pr = prStatus(workspace?.tokens);
+  const repo = useRepoPage(workspace, pr !== null);
+  if (pr === null) return null;
+  const Icon = PR_ICONS[pr.state];
+  const number = { number: pr.number };
+  const [label, word] = pr.state === "merged" ? [t("Pull request #{number}, merged", number), t("Merged")]
+    : pr.state === "closed" ? [t("Pull request #{number}, closed", number), t("Closed")]
+    : pr.state === "draft" ? [t("Pull request #{number}, draft", number), t("Draft")]
+    : [t("Pull request #{number}, open", number), null];
+  const title = [label, pr.checks, pr.review?.text, pr.diff].filter(Boolean).join(" · ");
+  const parts = <>
+    <span className="pr-badge-mark"><Icon aria-hidden="true" />#{pr.number}</span>
+    {!compact && <>
+      {word !== null && <span className="pr-badge-state">{word}</span>}
+      {pr.checks !== null && <span className="pr-badge-part" data-tone={pr.checksTone}>{pr.checks}</span>}
+      {pr.review !== null && <span className="pr-badge-part" data-tone={pr.review.tone}>{pr.review.text}</span>}
+      {pr.diff !== null && <span className="pr-badge-part">{pr.diff}</span>}
+    </>}
+  </>;
+  const className = `pr-badge${compact ? " is-compact" : ""}`;
+  const href = repo === null ? undefined : `${repo}/pull/${pr.number}`;
+  if (nested) {
+    const open = (event: MouseEvent): void => {
+      if (href === undefined) return;
+      event.stopPropagation();
+      window.open(href, "_blank", "noopener,noreferrer");
+    };
+    return <span className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge" data-href={href} title={title} onClick={open}>{parts}<span className="visually-hidden">{title}</span></span>;
+  }
+  return (
+    <a className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge"
+      href={href} target="_blank" rel="noreferrer" title={title} aria-label={title}>
+      {parts}
+    </a>
   );
 }
 
@@ -390,6 +464,15 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
+  // the herdr-projects board's tasks (components/BoardTasks.tsx), read again each time a row menu opens
+  // and after each action: a row on a task's own checkout gets the board's actions. A PC without the
+  // board answers 404, and its menus stay as they were
+  const board = useBoard();
+  const { refresh: refreshBoard } = board;
+  const menuWorkspaceId = menu?.workspace.workspace_id;
+  useEffect(() => { if (menuWorkspaceId !== undefined && !watching) void refreshBoard(); }, [menuWorkspaceId, watching, refreshBoard]);
+
+
   // A close takes the workspace with it, so it asks first, as herdr's ui.confirm_close does.
   // The row is gone afterwards, so focus moves to the header's workspace-list toggle.
   const leave = async (close: () => Promise<void>): Promise<void> => {
@@ -438,6 +521,9 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
         + (otherHeads ? ` ${t("The other workspaces open on this repository's main checkout close too.")}` : ""),
       run: () => leave(() => closeWorkspace(workspace.workspace_id, sameRepo.length > 0)),
     }) };
+    // the board's actions on a task's space; every task, the done ones at once too, in the PC's Board tasks
+    const task = board.tasks && !watching ? boardTaskOf(workspace, board.tasks) : null;
+    const boardItems = task ? boardTaskItems(task, board, setConfirm, t, leave) : [];
     // One native workspace menu for both the pointer and the explicit ⋯ button.
     const folded = repoKey !== undefined && worktreesFolded(repoKey, worktrees);
     const pinned = pinnedIds.includes(workspace.workspace_id);
@@ -451,6 +537,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
       { ...closeItem, label: t(sameRepo.length > 0 ? "Close group" : "Close workspace"), divider: false },
       ...worktreeItems, ...deleteItems,
       ...(worktrees.length > 0 && repoKey ? [{ id: "fold", label: t(folded ? "Expand" : "Collapse"), icon: folded ? ChevronRight : ChevronDown, run: () => toggleWorktrees(repoKey, folded) }] : []),
+      ...boardItems,
     ];
   };
 
@@ -674,8 +761,11 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     const unfolded = children.length > 0 && repoKey !== undefined && !collapsed;
     const face = <WorkspaceFavicon root={workspace.worktree?.checkout_path ?? pane.cwd ?? null} fallback={<span className="sidebar-mark workspace-folder" aria-hidden="true">{unfolded ? <FolderOpen /> : <Folder />}</span>} />;
     const toggleMenu = (anchor: HTMLElement, point?: { x: number; y: number }, previousFocus?: HTMLElement | null): void => setMenu(menuOpen ? null : { anchor, point, previousFocus, workspace, title: rowTitle, place: [branchNote, ...paths].filter(Boolean).join(" · ") || workspace.label });
+    // a task's space the board is working on (an archive, a remove): greyed and inert until it answers
+    const boardPending = workspace.worktree?.is_linked_worktree ? [...board.pendingAll.entries()].find(([key, entry]) => key.startsWith(`${machineId}\n`) && entry.worktree === workspace.worktree!.checkout_path)?.[1] : undefined;
     return <li
-      className={`workspace workspace-group pane-item${selected ? " is-selected" : ""}${collapsed ? " is-collapsed" : ""}${context ? " is-filter-context" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}`}
+      aria-busy={boardPending ? true : undefined}
+      className={`workspace workspace-group pane-item${boardPending ? " is-board-pending" : ""}${selected ? " is-selected" : ""}${collapsed ? " is-collapsed" : ""}${context ? " is-filter-context" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}`}
       key={workspace.workspace_id}
       data-workspace={workspace.workspace_id}
       data-branch={branchTitle ?? undefined}
@@ -683,7 +773,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
       onDrop={(event) => onDrop(event, workspace.workspace_id)}
     >
-      <div className="workspace-header"
+      <div className="workspace-header" inert={boardPending !== undefined}
         onMouseDownCapture={(event) => { if ((event.button === 2 || (event.button === 0 && event.ctrlKey)) && !(event.target as HTMLElement).closest("input")) event.preventDefault(); }}
         onContextMenu={(event) => onRowContextMenu(event, toggleMenu)}>
         {/* a workspace leads with its own face, the project's icon or else a folder; when linked
@@ -765,6 +855,8 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           </button>
         </div>
       </div>
+      <PrBadge workspace={workspace} />
+      {boardPending && <p className="workspace-board-pending" role="status">{boardPending.word}</p>}
       {inlineError?.workspaceId === workspace.workspace_id && <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>}
     </li>;
   };
@@ -809,11 +901,12 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           {inlineError && inlineError.workspaceId === undefined && (
             <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>
           )}
+          <BoardNoteView board={board} />
         </>
       </nav>
       {menu && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={menu.title} subtitle={menu.place} items={menuItems(menu)} onClose={closeMenu} />}
       {confirm && <ConfirmDialog title={confirm.title} body={confirm.body} confirmLabel={confirm.action ?? t("Close")} onConfirm={confirm.run} escalation={confirm.escalation} onClose={() => setConfirm(null)} />}
-      {worktreeDialog && <WorktreeDialog mode={worktreeDialog.mode} workspace={worktreeDialog.workspace} onClose={() => setWorktreeDialog(null)} onOpened={(opened) => {
+      {worktreeDialog && <WorktreeDialog mode={worktreeDialog.mode} workspace={worktreeDialog.workspace} workspaces={snapshot?.workspaces ?? []} onClose={() => setWorktreeDialog(null)} onOpened={(opened) => {
         rememberOpened(opened);
         revealOpenedWorkspace.current = opened.workspace_id;
         const repoKey = worktreeDialog.workspace.worktree?.repo_key;

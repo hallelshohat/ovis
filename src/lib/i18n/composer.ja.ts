@@ -6,6 +6,9 @@
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const COMPOSER_JA: Record<string, string> = {
+  "Sent to Pi · waiting for transcript": "Pi に送信済み · 会話への記録を待っています",
+  "Sent to Pi · transcript confirmation unavailable": "Pi に送信済み · 会話への記録を確認できません",
+  "Submit or clear edits before switching questions.": "問題を切り替える前に、未送信の変更を送信するか消去してください。",
   "Password or PIN": "パスワードまたは PIN",
   "Enter a single-line password or PIN.": "改行を含まないパスワードまたは PIN を入力してください。",
   "Update this PC to use masked input.": "伏せ字の入力欄を使うには、この PC のアプリを更新してください。",
@@ -62,7 +65,6 @@ export const COMPOSER_JA: Record<string, string> = {
   "Waits for Send now": "「今すぐ送信」で送信します",
   "Discard saved copy": "保存したコピーを破棄",
   "Update this PC to send messages in the next turn. Your draft stayed here.": "次のターンにメッセージを送るには、このPCを更新してください。入力したメッセージはここに残っています。",
-  "Stop agent": "エージェントを停止",
   "Send message": "メッセージを送信",
   "Not sent: the agent is waiting for an answer in the terminal. Answer it first.": "未送信: エージェントがターミナルで回答を待っています。先に回答してください。",
   "Not sent: this view only watches the pane.": "未送信: この画面はペインを閲覧するだけです。",

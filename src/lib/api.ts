@@ -2,6 +2,7 @@ import { apiFetch as fetch } from "./api-request-id.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import type { SeenFinish } from "../../shared/seen.ts";
 import { resumeConnectionTraces } from "./connectionTrace.ts";
+import type { BoardActionRequest, BoardActionResult, BoardTask } from "../../shared/board-tasks.ts";
 import { machinePath, type BridgeHealth, type HerdrIdentity, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
   WorkspaceMoved,
@@ -21,7 +22,9 @@ import type {
   LanExposure,
   InteractivePrompt,
   MoveTabRequest,
+  MoveTabToWorkspaceRequest,
   TabMoved,
+  TabMovedToWorkspace,
   OmoActivity,
   PaneBackgroundAgentDetail,
   OpenWorktreeRequest,
@@ -36,6 +39,7 @@ import type {
   RepoBranchComparison,
   RepoDiffFileList,
   RepoDiffFilePatch,
+  RepoDiffFileContents,
   RepoDiffRefs,
   RepoDiffScope,
   PaneSplit,
@@ -70,6 +74,7 @@ import type {
   PluginActions,
   PluginActionsResponse,
   WorktreeListing,
+  WorktreeRemote,
   WorktreeOpened,
   WorktreeRemoved,
   ZoomPaneRequest,
@@ -585,10 +590,11 @@ export async function swapPane(paneId: string, direction: PaneDirection, machine
   return (await response.json()) as PaneSwapped;
 }
 
-/** POST /api/pane/swap: swap this pane with an explicit pane, keeping herdr's same-tab rule. */
+/** POST /api/pane/swap: an explicit same-tab swap; leave its temporary focus events to the caller. */
 export async function swapPaneWith(paneId: string, targetPaneId: string, machineId = "local"): Promise<PaneSwapped> {
-  const response = await sendJson(machinePath(machineId, "pane/swap"), "POST", { pane_id: paneId, target_pane_id: targetPaneId } satisfies SwapPaneRequest);
-  return (await response.json()) as PaneSwapped;
+  const request = sendJson(machinePath(machineId, "pane/swap"), "POST", { pane_id: paneId, target_pane_id: targetPaneId } satisfies SwapPaneRequest)
+    .then(async (response) => (await response.json()) as PaneSwapped);
+  return movingHerdrFocus(machineId, request);
 }
 
 /** POST /api/layout/ratio: set the split identified by its binary path to the dragged ratio. */
@@ -707,6 +713,14 @@ export async function fetchRepoDiffFile(query: RepoDiffQuery, path: string, oldP
   return getJson<RepoDiffFilePatch>(machinePath(machineId, `workspace/diff/file?${params.toString()}`));
 }
 
+/** GET /api/workspace/diff/contents: both whole sides of one changed file, for expanding its unchanged lines. */
+export async function fetchRepoDiffContents(query: RepoDiffQuery, path: string, oldPath: string | null, machineId = "local"): Promise<RepoDiffFileContents> {
+  const params = repoDiffQuery(query);
+  params.set("path", path);
+  if (oldPath !== null) params.set("old_path", oldPath);
+  return getJson<RepoDiffFileContents>(machinePath(machineId, `workspace/diff/contents?${params.toString()}`));
+}
+
 export type { CreateTabRequest, CreateWorkspaceRequest } from "../../shared/protocol.ts";
 
 /**
@@ -728,6 +742,22 @@ export async function createWorktree(request: CreateWorktreeRequest, machineId =
 /** GET /api/worktree/list: every checkout of the workspace's repository, with the workspace each is open in. */
 export function listWorktrees(workspaceId: string, machineId = "local"): Promise<WorktreeListing> {
   return getJson<WorktreeListing>(`${machinePath(machineId, "worktree/list")}?workspace_id=${encodeURIComponent(workspaceId)}`);
+}
+
+/** GET /api/worktree/remote: the web page of the workspace's repository, from its `origin`. */
+export function worktreeRemote(workspaceId: string, machineId = "local"): Promise<WorktreeRemote> {
+  return getJson<WorktreeRemote>(`${machinePath(machineId, "worktree/remote")}?workspace_id=${encodeURIComponent(workspaceId)}`);
+}
+
+/** GET /api/board/tasks: the herdr-projects board's tasks on that PC; a 404 where it has no board. */
+export async function fetchBoardTasks(machineId = "local"): Promise<BoardTask[]> {
+  return (await getJson<{ tasks: BoardTask[] }>(machinePath(machineId, "board/tasks"), { cache: "no-store" })).tasks;
+}
+
+/** POST /api/board/action: the board archives, restores, removes, stops or approves; its own message comes back. */
+export async function boardAction(request: BoardActionRequest, machineId = "local"): Promise<BoardActionResult> {
+  const response = await sendJson(machinePath(machineId, "board/action"), "POST", request);
+  return (await response.json()) as BoardActionResult;
 }
 
 /** POST /api/worktree/open: an existing checkout as a workspace; the one it already has when it is open. */
@@ -779,6 +809,13 @@ export async function moveTab(tabId: string, insertIndex: number, machineId = "l
   const request: MoveTabRequest = { tab_id: tabId, insert_index: insertIndex };
   const response = await sendJson(machinePath(machineId, "tab/move"), "POST", request);
   return (await response.json()) as TabMoved;
+}
+
+/** A one-pane tab into a new tab of another workspace; its pane answers under its new ID. */
+export async function moveTabToWorkspace(tabId: string, workspaceId: string, machineId = "local"): Promise<TabMovedToWorkspace> {
+  const request: MoveTabToWorkspaceRequest = { tab_id: tabId, workspace_id: workspaceId };
+  const response = await sendJson(machinePath(machineId, "tab/move-to-workspace"), "POST", request);
+  return (await response.json()) as TabMovedToWorkspace;
 }
 
 /** POST /api/tab/close: the tab and every pane in it; a workspace's last tab takes the workspace with it. */

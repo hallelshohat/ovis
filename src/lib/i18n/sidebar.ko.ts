@@ -1,6 +1,6 @@
 /**
  * Korean for the keys only the sidebar files use:
- * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx.
+ * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx, components/BoardTasks.tsx.
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_KO: Record<string, string> = {
@@ -53,4 +53,32 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Collapse": "접기",
   "Expand": "펼치기",
   "Shell": "셸",
+  "Pull request #{number}, open": "풀 리퀘스트 #{number}, 열림",
+  "Pull request #{number}, draft": "풀 리퀘스트 #{number}, 초안",
+  "Pull request #{number}, merged": "풀 리퀘스트 #{number}, 병합됨",
+  "Pull request #{number}, closed": "풀 리퀘스트 #{number}, 닫힘",
+  "Draft": "초안",
+  "Merged": "병합됨",
+  "Closed": "닫힘",
+  "Archive task": "작업 보관",
+  "Approve plan": "계획 승인",
+  "Approve and merge…": "승인하고 병합…",
+  "Merge {task}?": "{task}을(를) 병합할까요?",
+  "The board merges the task's finished work into its main branch, and closes its space.": "보드가 작업의 완료된 결과를 메인 브랜치에 병합하고 해당 공간을 닫습니다.",
+  "Merge": "병합",
+  "Remove task…": "작업 제거…",
+  "Remove task {task}?": "작업 {task}을(를) 제거할까요?",
+  "The task leaves the board with its description and reviews, and its worktree is removed. Work in it that is not saved or not merged is kept.": "작업이 설명과 리뷰와 함께 보드에서 빠지고 워크트리도 제거됩니다. 저장되지 않았거나 병합되지 않은 작업은 남습니다.",
+  "Archive done tasks in every repo ({n})": "모든 저장소의 완료된 작업 보관 ({n})",
+  "Undo": "실행 취소",
+  "Allow request": "요청 허용",
+  "Archive done tasks in {repo} ({n})": "{repo}의 완료된 작업 보관 ({n})",
+  "Board tasks": "보드 작업",
+  "Board tasks on {name}": "{name}의 보드 작업",
+  "No tasks on the board": "보드에 작업이 없습니다",
+  "Approving…": "승인 중…",
+  "Archiving…": "보관 중…",
+  "Merging…": "병합 중…",
+  "Removing…": "제거 중…",
+  "Restoring…": "복원 중…",
 };

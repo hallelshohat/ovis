@@ -353,7 +353,8 @@ describe("git inventories", () => {
 
   it("ends an inventory whose descendant holds stdout", async () => {
     const root = fixture();
-    const deadlineMs = 300;
+    // Leave room for the fixture shell to start before testing its held output.
+    const deadlineMs = 1_000;
     const walk = ["README.md", "src/api.ts", "src/components/PromptCard.tsx"];
 
     const asyncHolder = heldGit();

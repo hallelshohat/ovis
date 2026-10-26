@@ -1,6 +1,6 @@
 /**
  * Japanese for the keys only the sidebar files use:
- * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx.
+ * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx, components/BoardTasks.tsx.
  * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_JA: Record<string, string> = {
@@ -53,4 +53,32 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Collapse": "折りたたむ",
   "Expand": "展開",
   "Shell": "シェル",
+  "Pull request #{number}, open": "プルリクエスト #{number}、オープン",
+  "Pull request #{number}, draft": "プルリクエスト #{number}、下書き",
+  "Pull request #{number}, merged": "プルリクエスト #{number}、マージ済み",
+  "Pull request #{number}, closed": "プルリクエスト #{number}、クローズ済み",
+  "Draft": "下書き",
+  "Merged": "マージ済み",
+  "Closed": "クローズ済み",
+  "Archive task": "タスクをアーカイブ",
+  "Approve plan": "プランを承認",
+  "Approve and merge…": "承認してマージ…",
+  "Merge {task}?": "{task} をマージしますか？",
+  "The board merges the task's finished work into its main branch, and closes its space.": "ボードがタスクの完了した作業をメインブランチにマージし、そのスペースを閉じます。",
+  "Merge": "マージ",
+  "Remove task…": "タスクを削除…",
+  "Remove task {task}?": "タスク {task} を削除しますか？",
+  "The task leaves the board with its description and reviews, and its worktree is removed. Work in it that is not saved or not merged is kept.": "タスクは説明とレビューごとボードから外れ、ワークツリーも削除されます。保存されていない作業やマージされていない作業は残ります。",
+  "Archive done tasks in every repo ({n})": "全リポジトリの完了したタスクをアーカイブ ({n})",
+  "Undo": "元に戻す",
+  "Allow request": "リクエストを許可",
+  "Archive done tasks in {repo} ({n})": "{repo} の完了したタスクをアーカイブ ({n})",
+  "Board tasks": "ボードのタスク",
+  "Board tasks on {name}": "{name} のボードのタスク",
+  "No tasks on the board": "ボードにタスクはありません",
+  "Approving…": "承認中…",
+  "Archiving…": "アーカイブ中…",
+  "Merging…": "マージ中…",
+  "Removing…": "削除中…",
+  "Restoring…": "復元中…",
 };

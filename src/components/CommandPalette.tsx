@@ -1,6 +1,6 @@
 import { MachineContext, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { Bell, Columns2, CornerLeftUp, Folder, FolderOpen, FolderSearch, History, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, PanelLeft, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
+import { Bell, Columns2, CornerLeftUp, Folder, FolderInput, FolderOpen, FolderSearch, History, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, PanelLeft, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
 
 import "./CommandPalette.css";
 
@@ -16,7 +16,7 @@ import { Ownership, runPluginActionToEnd } from "../lib/pluginRun.ts";
 import { shortcutDisplayKeys, formatKeys, type ShortcutId } from "../lib/shortcuts.ts";
 import { useSettings } from "../lib/settings.ts";
 import { AgentMark } from "./AgentMark.tsx";
-import { displayPaneTitle, StatusBadge } from "./Sidebar.tsx";
+import { displayPaneTitle, PrBadge, StatusBadge } from "./Sidebar.tsx";
 import { PAGES } from "./SettingsDialog.tsx";
 import { folderName, placeLine } from "../lib/paneName.ts";
 import { agentTabName } from "../lib/sidebarAgents.ts";
@@ -336,6 +336,14 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     } satisfies PaletteAction, aliases }));
   }, [actions, t]);
   const aliasesByAction = useMemo(() => actionAliases(t), [t]);
+  // the selected one-pane tab to another workspace of its PC, one row each, found by a query only as Settings pages are
+  const selectedWorkspace = selectedPane?.workspace_id ?? null;
+  const moveActions = useMemo<PaletteAction[]>(() => selectedTab === null || tabPanes !== 1 ? [] : (snapshot?.workspaces ?? [])
+    .filter((entry) => entry.workspace_id !== selectedWorkspace)
+    .map((entry) => ({ id: `move-tab-${entry.workspace_id}`, label: t("Move tab to {workspace}", { workspace: entry.label }), icon: FolderInput,
+      // a refusal is said over the pane (App): the palette has closed by then
+      run: () => { void actions.moveTabToWorkspace({ machineId, tabId: selectedTab, workspaceId: entry.workspace_id, notice: true }).catch(() => undefined); } })),
+  [actions, machineId, selectedTab, selectedWorkspace, snapshot?.workspaces, t, tabPanes]);
 
   const allPanes = useMemo(() => machines.flatMap((machine) => machine.state === "connected" ? machine.snapshot?.panes ?? [] : []), [machines]);
   const multiMachine = machines.length > 1;
@@ -384,7 +392,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     }
     if (actionsOnly || filter === "all") {
       // a name found only through an alias comes after the titles that hold the query
-      const visible = rankByTitle(text, paletteActions.map((action) => ({ item: action, title: action.label, aliases: aliasesByAction[action.id] })));
+      const visible = rankByTitle(text, [...paletteActions, ...(text === "" ? [] : moveActions)].map((action) => ({ item: action, title: action.label, aliases: aliasesByAction[action.id] })));
       if (visible.length > 0) list.push({ id: "actions", heading: t("Actions"), machineName: multiMachine ? selectedMachineName : undefined, branch: null, placeNamesWorkspace: false, rows: visible.map((action) => ({ kind: "action", action })) });
       const pages = text === "" ? [] : rankByTitle(text, settingsActions.map(({ action, aliases }) => ({ item: action, title: action.label, aliases })));
       if (pages.length > 0) list.push({ id: "settings-pages", heading: t("Settings"), machineName: multiMachine ? selectedMachineName : undefined, branch: null, placeNamesWorkspace: false, rows: pages.map((action) => ({ kind: "action", action })) });
@@ -392,7 +400,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
       if (offered.length > 0) list.push({ id: "plugins", heading: t("Plugin actions"), machineName: multiMachine ? selectedMachineName : undefined, branch: null, placeNamesWorkspace: false, rows: offered.map((item) => ({ kind: "plugin", offered: item })) });
     }
     return list;
-  }, [actionsOnly, text, filter, machines, multiMachine, selectedMachineName, machineId, branches, recentPaneIds, selectedPaneId, paletteActions, aliasesByAction, settingsActions, plugins, t, folder?.directory, folder?.filter, query, browse, home, pins, recentFolders, snapshot, actions]);
+  }, [actionsOnly, text, filter, machines, multiMachine, selectedMachineName, machineId, branches, recentPaneIds, selectedPaneId, paletteActions, moveActions, aliasesByAction, settingsActions, plugins, t, folder?.directory, folder?.filter, query, browse, home, pins, recentFolders, snapshot, actions]);
 
   const rows = useMemo(() => sections.flatMap((section) => section.rows), [sections]);
   const rowKeys = useMemo(() => sections.flatMap((section) => section.rows.map((row) => rowKey(section.id, row))), [sections]);
@@ -648,6 +656,11 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
                 {section.branch && <span className="palette-section-branch">{section.branch}</span>}
                 <span className="palette-section-count">{section.rows.length}</span>
               </div>
+              {section.workspaceId !== undefined && (
+                <MachineContext.Provider value={section.machineId ?? machineId}>
+                  <PrBadge workspace={machines.find((machine) => machine.id === section.machineId)?.snapshot?.workspaces.find((workspace) => workspace.workspace_id === section.workspaceId)} />
+                </MachineContext.Provider>
+              )}
               {section.rows.map((row) => {
                 const index = rowIndex;
                 rowIndex += 1;
@@ -687,6 +700,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
                   <button key={targetKey(row)} data-machine={row.machineId} data-pane={pane.pane_id} id={`palette-item-${index}`} type="button" role="option" className="menu-item palette-pane" aria-selected={activeIndex === index} aria-current={selected ? "true" : undefined} onFocus={() => select(index)} onMouseMove={() => select(index)} onClick={() => runPane(row)}>
                     <span className="palette-mark"><AgentMark agent={pane.agent ?? "shell"} /></span>
                     <span className="menu-item-main"><span className="palette-row-title">{displayPaneTitle(pane)}{selected && <span className="palette-selected">{t("Selected")}</span>}</span><span className="palette-row-subtitle">{place}</span></span>
+                    <MachineContext.Provider value={row.machineId}><PrBadge nested compact workspace={workspace} /></MachineContext.Provider>
                     <StatusBadge status={paneStatus(pane)} />
                   </button>
                 );

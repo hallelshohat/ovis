@@ -79,7 +79,6 @@ export const DEVICES_ZH: Record<string, string> = {
   "Open it on your phone and sign in with the access token, or pair the phone: Devices, below.": "在手机上打开它并用访问令牌登录，或配对手机：请见下方“设备”。",
   "Relay": "中继",
   "Stop": "停止",
-  "Stopping…": "正在停止…",
   "Recovering…": "正在恢复…",
   "Set OVIS_TOKEN on this PC and restart the app to start Portal.": "要启动 Portal，请在此 PC 上设置 OVIS_TOKEN 并重启应用。",
   "Portal is a second way in: unset OVIS_TAILSCALE_SERVE_ONLY on this PC and restart the app first.": "Portal 是另一条访问途径：请先在此 PC 上取消 OVIS_TAILSCALE_SERVE_ONLY 并重启应用。",

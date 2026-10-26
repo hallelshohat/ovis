@@ -14,8 +14,8 @@
  * a chat gets a demo answer.
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
-import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
-import type { RepoBranchComparison, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
+import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, TabMovedToWorkspace, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
+import type { RepoBranchComparison, RepoDiffFile, RepoDiffFileContents, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
 import { normalizeThemeChange, sharedPreferencesBody, type SharedPreferences } from "../../shared/preferences.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
@@ -928,7 +928,7 @@ const DEMO_DIFF: { file: RepoDiffFile; patch: string | null }[] = [
     "index 3f1c2aa..9b7d410 100644",
     "--- a/src/money.ts",
     "+++ b/src/money.ts",
-    "@@ -1,5 +1,8 @@",
+    "@@ -1,8 +1,11 @@",
     " export type Cents = number;",
     " ",
     "+/** Rounds half away from zero, so 10.075 is 1008 cents and not 1007. */",
@@ -938,9 +938,58 @@ const DEMO_DIFF: { file: RepoDiffFile; patch: string | null }[] = [
     "+  const rounded = Math.round(scaled + Number.EPSILON * scaled);",
     "+  return Math.sign(amount) * rounded;",
     " }",
+    " ",
+    " export function fromCents(cents: Cents): number {",
+    "   return cents / 100;",
     "",
   ].join("\n") },
 ];
+
+/** What follows the hunk in both sides of the demo's money.ts: the lines a separator expands into. */
+const DEMO_MONEY_TAIL = [
+  "export function fromCents(cents: Cents): number {",
+  "  return cents / 100;",
+  "}",
+  "",
+  "export function formatCents(cents: Cents, currency = \"USD\"): string {",
+  "  return new Intl.NumberFormat(\"en-US\", { style: \"currency\", currency }).format(fromCents(cents));",
+  "}",
+  "",
+  "export function sum(values: readonly Cents[]): Cents {",
+  "  return values.reduce((total, value) => total + value, 0);",
+  "}",
+  "",
+];
+/** The routes' leading lines, above the branch's hunk at line 12. */
+const DEMO_PAYMENTS_HEAD = [
+  "import { charge } from \"../billing.ts\";",
+  "import { lookup, remember } from \"../lib/idempotency.ts\";",
+  "import type { Payment, PaymentRequest } from \"../types.ts\";",
+  "",
+  "/**",
+  " * POST /payments. A client that retries with the same Idempotency-Key",
+  " * gets the first response back, never a second charge.",
+  " */",
+  "",
+  "",
+  "export async function createPayment(request: PaymentRequest): Promise<Payment> {",
+];
+const DEMO_PAYMENTS_TAIL = ["export async function refund(id: string): Promise<void> {", "  await charge({ refund: id });", "}", ""];
+
+/**
+ * Both whole sides of the demo files a separator can expand (GET /api/workspace/diff/contents), each
+ * the patch's own lines with what lies around its hunk.
+ */
+const DEMO_CONTENTS: Record<string, { old: string; new: string }> = {
+  "src/money.ts": {
+    old: ["export type Cents = number;", "", "export function toCents(amount: number): Cents {", "  return amount * 100;", "}", "", ...DEMO_MONEY_TAIL].join("\n"),
+    new: ["export type Cents = number;", "", "/** Rounds half away from zero, so 10.075 is 1008 cents and not 1007. */", "export function toCents(amount: number): Cents {", "  const scaled = Math.abs(amount) * 100;", "  const rounded = Math.round(scaled + Number.EPSILON * scaled);", "  return Math.sign(amount) * rounded;", "}", "", ...DEMO_MONEY_TAIL].join("\n"),
+  },
+  "src/routes/payments.ts": {
+    old: [...DEMO_PAYMENTS_HEAD, "  const key = request.headers.get(\"idempotency-key\");", "  return charge(request.body);", "}", "", ...DEMO_PAYMENTS_TAIL].join("\n"),
+    new: [...DEMO_PAYMENTS_HEAD, "  const key = request.headers.get(\"idempotency-key\");", "  if (key === null) return charge(request.body);", "  const earlier = await lookup(key);", "  return earlier ?? remember(key, await charge(request.body));", "}", "", ...DEMO_PAYMENTS_TAIL].join("\n"),
+  },
+};
 
 /**
  * The demo repository's HEAD, and the branches a base picker is offered (GET /api/workspace/diff/refs):
@@ -1106,6 +1155,8 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   }
   if (path === "/api/cliproxy/login" || path === "/api/cliproxy/callback") return error("demo", "Sign in from an installed server, not the public demo.", 409);
   if (path === "/api/push" || path.startsWith("/api/push/")) return error("push_unavailable", "the demo sends no alerts", 404);
+  // the demo has no herdr-projects board, as a PC without it: its rows keep their usual menus
+  if (path === "/api/board/tasks" || path === "/api/board/action") return error("board_unavailable", "the demo has no work board", 404);
   if (path === "/api/machines/settings") return json({ auto_update_bridges: true });
   if (path.startsWith("/api/machines/")) return error("demo", "remote PCs need a real machine", 404);
 
@@ -1547,6 +1598,56 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     structureChanged();
     return json({ ok: true, tabs } satisfies TabMoved);
   }
+  // herdr gives the pane a new ID in its new workspace; the demo keeps it, so its chat goes with it
+  if (path === "/api/tab/move-to-workspace") {
+    const body = await bodyOf(init, input);
+    const snap = snapshot();
+    const tab = snap.tabs.find((t) => t.tab_id === body["tab_id"]);
+    if (!tab) return error("tab_not_found", "no such tab", 404);
+    const workspace = snap.workspaces.find((w) => w.workspace_id === body["workspace_id"]);
+    if (!workspace) return error("workspace_not_found", "no such workspace", 404);
+    if (workspace.workspace_id === tab.workspace_id) return error("same_workspace", "the tab is already in that workspace", 409);
+    const panes = snap.panes.filter((p) => p.tab_id === tab.tab_id);
+    if (panes.length !== 1) return error("multi_pane_tab", "only a tab with one pane can move to another workspace", 409);
+    const from = tab.workspace_id;
+    const to = workspace.workspace_id;
+    const number = Math.max(0, ...snap.tabs.filter((t) => t.workspace_id === to).map((t) => t.number)) + 1;
+    const tabId = `${to}:t${number}`;
+    // as the route does: a name herdr gave by the tab's place stays behind, and the new place names it
+    const place = snap.tabs.filter((t) => t.workspace_id === from).indexOf(tab) + 1;
+    const named = tab.label.trim();
+    const placeNamed = named === "" || named === String(place);
+    const label = placeNamed ? String(snap.tabs.filter((t) => t.workspace_id === to).length + 1) : tab.label;
+    snap.tabs = [...snap.tabs.filter((t) => t !== tab), { ...tab, tab_id: tabId, workspace_id: to, number, label, focused: false }];
+    snap.layouts = snap.layouts.filter((l) => l.tab_id !== tab.tab_id);
+    Object.assign(panes[0]!, { tab_id: tabId, workspace_id: to, focused: false });
+    const agent = snap.agents.find((entry) => entry.pane_id === panes[0]!.pane_id);
+    if (agent) Object.assign(agent, { tab_id: tabId, workspace_id: to });
+    addDemoLayout(to, tabId, panes[0]!.pane_id);
+    // a tab named by its place keeps being named by it there, as herdr renumbers it
+    if (autoTabs.delete(tab.tab_id) || placeNamed) autoTabs.add(tabId);
+    relabelAutoTabs(from);
+    relabelAutoTabs(to);
+    for (const w of snap.workspaces) {
+      w.tab_count = snap.tabs.filter((t) => t.workspace_id === w.workspace_id).length;
+      w.pane_count = snap.panes.filter((p) => p.workspace_id === w.workspace_id).length;
+    }
+    // a workspace's last tab takes the workspace with it; one that stays opens another tab
+    const left = snap.tabs.find((t) => t.workspace_id === from);
+    if (!left) snap.workspaces = snap.workspaces.filter((w) => w.workspace_id !== from);
+    else for (const w of snap.workspaces) if (w.active_tab_id === tab.tab_id) w.active_tab_id = left.tab_id;
+    // herdr's focus on the moved pane goes with it, as the demo keeps the pane's ID
+    if (snap.focused_tab_id === tab.tab_id) {
+      snap.focused_tab_id = tabId;
+      snap.focused_workspace_id = to;
+      workspace.active_tab_id = tabId;
+    }
+    panes[0]!.focused = panes[0]!.pane_id === snap.focused_pane_id;
+    for (const t of snap.tabs) t.focused = t.tab_id === snap.focused_tab_id;
+    for (const w of snap.workspaces) w.focused = w.workspace_id === snap.focused_workspace_id;
+    structureChanged();
+    return json({ ok: true, pane_id: panes[0]!.pane_id, tab_id: tabId } satisfies TabMovedToWorkspace);
+  }
   if (path === "/api/tab/close") {
     const body = await bodyOf(init, input);
     const snap = snapshot();
@@ -1665,7 +1766,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/voice") return json({ configured: false, source: null, ...VOICE_DEFAULTS } satisfies VoiceStatus, 200, { "cache-control": "no-store" });
   if (path === "/api/voice/config") return error("demo", "the demo saves no OpenAI key", 409);
   if (path === "/api/voice/transcribe") return error("voice_not_configured", "transcription is unavailable in the demo", 409);
-  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file" || path === "/api/workspace/diff/refs") {
+  if (path === "/api/workspace/diff/files" || path === "/api/workspace/diff/file" || path === "/api/workspace/diff/contents" || path === "/api/workspace/diff/refs") {
     const root = snapshot().panes.find((pane) => pane.pane_id === paneId)?.cwd ?? query.get("directory") ?? "/home/demo/checkout-api";
     // a worktree's checkout is on its own branch, as the sidebar and the footer say
     const branch = [...repositories.values()].flatMap((repo) => repo.checkouts).find((checkout) => checkout.path === root)?.branch ?? "main";
@@ -1687,7 +1788,7 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
         if (identity.repository_root !== root) return error("comparison_changed", "the repository or its HEAD is no longer the one this comparison was made on; refresh the list", 409);
       } else {
         const base = query.get("base") ?? "";
-        if (path === "/api/workspace/diff/file") return error("invalid_comparison", "a branch patch needs the comparison its list answered with", 400);
+        if (path !== "/api/workspace/diff/files") return error("invalid_comparison", "a branch patch needs the comparison its list answered with", 400);
         if (base === "") return error("invalid_revision", "scope=branch needs a base branch or commit", 400);
         if (!/^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]{0,199}$/.test(base) || base.includes("..")) return error("invalid_revision", "base must name one commit", 400);
         if (!["main", "origin/main", "refs/heads/main", "refs/remotes/origin/main", DEMO_MAIN].includes(base)) return error("revision_not_found", "base names no commit in this repository", 404);
@@ -1703,6 +1804,10 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     }
     const entry = changed.find((candidate) => candidate.file.path === query.get("path"));
     if (!entry) return error("not_found", "nothing changed at that path in this comparison", 404);
+    if (path === "/api/workspace/diff/contents") {
+      const contents = DEMO_CONTENTS[entry.file.path];
+      return json({ repository, scope: compared, comparison, file: entry.file, old: contents?.old ?? null, new: contents?.new ?? null, unavailable: contents ? null : entry.patch === null ? "binary" : "unsupported", limits: { max_bytes: DEMO_DIFF_LIMITS.max_patch_bytes } } satisfies RepoDiffFileContents);
+    }
     return json({ ...shared, file: entry.file, patch: entry.patch, unavailable: entry.patch === null ? "binary" : null, truncated: false, limits: { max_patch_bytes: DEMO_DIFF_LIMITS.max_patch_bytes, context_lines: DEMO_DIFF_LIMITS.context_lines } } satisfies RepoDiffFilePatch);
   }
   if (path.startsWith("/api/fs/")) return error("not_found", "the demo has no files to open", 404);

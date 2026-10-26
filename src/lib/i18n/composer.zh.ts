@@ -6,6 +6,9 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const COMPOSER_ZH: Record<string, string> = {
+  "Sent to Pi · waiting for transcript": "已发送到 Pi · 正在等待写入对话记录",
+  "Sent to Pi · transcript confirmation unavailable": "已发送到 Pi · 无法确认对话记录",
+  "Submit or clear edits before switching questions.": "请先提交或清空尚未提交的修改，再切换题目。",
   "Password or PIN": "密码或 PIN",
   "Enter a single-line password or PIN.": "请输入不含换行的密码或 PIN。",
   "Update this PC to use masked input.": "请更新此电脑上的应用以使用密码输入框。",
@@ -62,7 +65,6 @@ export const COMPOSER_ZH: Record<string, string> = {
   "Waits for Send now": "按“立即发送”后发送",
   "Discard saved copy": "丢弃已保存的副本",
   "Update this PC to send messages in the next turn. Your draft stayed here.": "请更新这台电脑后再发送下一轮消息。草稿仍保留在这里。",
-  "Stop agent": "停止 Agent",
   "Send message": "发送消息",
   "Not sent: the agent is waiting for an answer in the terminal. Answer it first.": "未发送：Agent 正在终端中等待回答。请先回答。",
   "Not sent: this view only watches the pane.": "未发送：此视图仅用于查看窗格。",

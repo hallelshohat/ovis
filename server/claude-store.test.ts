@@ -3,11 +3,39 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, sy
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
-import { AmbiguousClaudeStore, claudeAttachArgs, claudeAttachedJob, claudeAttachSession, claudeForegroundSession, claudeJobSession, claudeProcessSession, claudeSessionTempDir, claudeStoreKey, claudeStoreOf, claudeProjectDir, claudeTranscriptFile, claudeRecordOnlyIn, configDirInPsLine, darwinProcess, forgetClaudeSessions, herdrLaunchSource, isClaudeProcess, paneClaudeSource, processClaudeConfigDir, processClaudeSource, procArgsEnvironment } from "./claude-store.ts";
+import { AmbiguousClaudeStore, claudeAttachArgs, claudeAttachedJob, claudeAttachSession, claudeForegroundSession, claudeJobSession, claudeProcessSession, claudeSessionTempDir, claudeStoreKey, claudeStoreOf, claudeProjectDir, claudeTranscriptFile, claudeRecordOnlyIn, configDirInPsLine, darwinProcess, forgetClaudeSessions, herdrLaunchSource, isClaudeProcess, paneClaudeSource, processClaudeConfigDir, processClaudeSource, procArgsEnvironment, procStartTime } from "./claude-store.ts";
 import type { ProcessRow } from "./windows-processes.ts";
 
 const NATIVE = process.platform === "linux" || process.platform === "darwin";
 const SESSION = "0b8e6f0e-8d3f-4c1a-9a53-6c2b7a1d9e42";
+
+describe("macOS kernel process start", () => {
+  it("keeps microseconds from the leading 64-bit Darwin timeval, not its padding", () => {
+    const answer = new Uint8Array(32).fill(0xff);
+    const view = new DataView(answer.buffer, 8, 16);
+    view.setBigInt64(0, 1792929600n, true);
+    view.setInt32(8, 1, true);
+    expect(procStartTime(answer.subarray(8, 24))).toBe(1792929600000001n);
+    view.setInt32(8, 2, true);
+    expect(procStartTime(answer.subarray(8, 24))).toBe(1792929600000002n);
+    expect(procStartTime(answer.subarray(8, 23))).toBeNull();
+    for (const micros of [-1, 1_000_000]) {
+      view.setInt32(8, micros, true);
+      expect(procStartTime(answer.subarray(8, 24))).toBeNull();
+    }
+    view.setInt32(8, 0, true);
+    view.setBigInt64(0, 0n, true);
+    expect(procStartTime(answer.subarray(8, 24))).toBeNull();
+  });
+
+  it.skipIf(process.platform !== "darwin")("reads a stable birth time for the live process from kern.proc.pid", () => {
+    const started = darwinProcess.startTime(process.pid);
+    expect(started).not.toBeNull();
+    expect(started! > 0n && started! <= BigInt(Date.now()) * 1000n).toBe(true);
+    expect(darwinProcess.startTime(process.pid)).toBe(started);
+    expect(darwinProcess.startTime(0)).toBeNull();
+  });
+});
 
 describe("isClaudeProcess", () => {
   it("knows the native build, whose process is titled Claude", () => {
@@ -403,9 +431,9 @@ describe("a claude attach pane's job (#1645)", () => {
     const dir = store();
     job(dir, JOB, { sessionId: SESSION });
     const behind = ["claude", "--model", "opus", "attach", JOB];
-    // the shell prints once it runs with the environment it was given, then waits on its input: no exec moves its environment
+    // A Bun child exposes its environment on macOS, unlike the protected system shell.
     const client = async (env: Record<string, string>) => {
-      const child = Bun.spawn(["/bin/sh", "-c", "echo ready; read line"], { env: { PATH: process.env["PATH"] ?? "", ...env }, stdin: "pipe", stdout: "pipe" });
+      const child = Bun.spawn([process.execPath, "-e", "console.log('ready'); for await (const _ of Bun.stdin.stream()) {}"], { env: { PATH: process.env["PATH"] ?? "", ...env }, stdin: "pipe", stdout: "pipe" });
       const reader = child.stdout.getReader();
       await reader.read();
       reader.releaseLock();

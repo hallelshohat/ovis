@@ -33,12 +33,34 @@ export interface FocusTrapOptions {
 
 /** The tab stops a user can actually land on, in order: rendered, and not disabled or skipped. */
 function tabStops(surface: HTMLElement): HTMLElement[] {
-  return [...surface.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((node) => {
+  return focusables(surface).filter((node) => {
     if (node.hasAttribute("disabled") || node.getAttribute("aria-hidden") === "true") return false;
     if (node.tabIndex < 0) return false;
     // hidden ancestors and collapsed sections report no box at all
     return node.getClientRects().length > 0;
   });
+}
+
+/**
+ * The focusable elements under `root` in tab order, including those inside open shadow roots
+ * (the diff's rows draw their expand controls there), each at its host's place.
+ */
+function focusables(root: Element | ShadowRoot): HTMLElement[] {
+  const found: HTMLElement[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (node.matches(FOCUSABLE)) found.push(node);
+    if (node.shadowRoot !== null) found.push(...focusables(node.shadowRoot));
+  }
+  return found;
+}
+
+/** The element that holds the focus, through the shadow roots it sits in. */
+function deepActive(): Element | null {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active;
 }
 
 /**
@@ -99,7 +121,7 @@ export function useFocusTrap<T extends HTMLElement>(open: boolean, options: Focu
       const stops = tabStops(node);
       // every control disabled (a deed that cannot be undone): Tab goes nowhere rather than out
       if (stops.length === 0) { event.preventDefault(); return; }
-      const active = document.activeElement;
+      const active = deepActive();
       const at = active instanceof HTMLElement ? stops.indexOf(active) : -1;
       const next = event.shiftKey
         ? (at <= 0 ? stops[stops.length - 1] : stops[at - 1])
