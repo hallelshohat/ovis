@@ -85,6 +85,7 @@ const BASE: Record<string, string> = {
   "Remove": "削除",
   "Remove {name}": "{name} を削除",
   "Save": "保存",
+  "Closed": "閉じています",
   "Goal": "目標",
   "Waiting for your answer": "回答待ち",
   "Back": "戻る",
