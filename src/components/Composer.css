@@ -1519,3 +1519,7 @@
     backdrop-filter: var(--glass-blur);
   }
 }
+
+.composer-strip-pr:empty {
+  display: none;
+}

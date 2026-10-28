@@ -2575,13 +2575,13 @@ button {
     animation: modal-pop-in var(--dur-base) var(--ease-out);
   }
 
-  .modal-scrim:has(> :is(.new-session-modal, .worktree-modal, .files-dialog, .settings-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail)) {
+  .modal-scrim:has(> :is(.new-session-modal, .worktree-modal, .files-dialog, .settings-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet)) {
     justify-content: flex-end;
     align-items: stretch;
     padding: var(--panel-inset);
   }
 
-  .modal-scrim > :is(.new-session-modal, .worktree-modal, .files-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail).modal {
+  .modal-scrim > :is(.new-session-modal, .worktree-modal, .files-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet).modal {
     width: min(100%, var(--side-sheet-w));
     max-height: none;
     border: var(--hairline) solid var(--border);
@@ -2604,7 +2604,7 @@ button {
     animation: modal-pop-out var(--dur-fast) var(--ease-in) forwards;
   }
 
-  .modal-scrim.is-leaving > :is(.new-session-modal, .worktree-modal, .files-dialog, .settings-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail) {
+  .modal-scrim.is-leaving > :is(.new-session-modal, .worktree-modal, .files-dialog, .settings-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet) {
     animation: side-sheet-out var(--dur-fast) var(--ease-in) forwards;
   }
 }

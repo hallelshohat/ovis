@@ -22,6 +22,9 @@ import { PULL_REQUESTS_KO } from "./i18n/pullRequests.ko.ts";
  * braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "failed": "실패",
+  "running": "실행 중",
+  "Pull requests": "풀 리퀘스트",
   "Back": "뒤로",
   "Scroll pane up": "패널 위로 스크롤",
   "Scroll pane down": "패널 아래로 스크롤",

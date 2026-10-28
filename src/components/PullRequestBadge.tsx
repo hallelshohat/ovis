@@ -1,8 +1,9 @@
 import "./PullRequestBadge.css";
 
 import { GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft } from "lucide-react";
-import { prLabel, type PullRequest } from "../../shared/pull-requests.ts";
+import { openCount, prLabel, type PullRequest } from "../../shared/pull-requests.ts";
 import { useT } from "../lib/i18n.ts";
+import { usePanePullRequests } from "../lib/usePanePullRequests.ts";
 
 export type PrTone = "open" | "failing" | "pending" | "review" | "changes" | "draft" | "merged" | "closed";
 
@@ -36,8 +37,9 @@ export interface PullRequestBadgeProps {
   pr: PullRequest;
   /** the chat's other open PRs, drawn as +N */
   more?: number;
-  /** "row": the number alone (a sidebar row, the composer strip); "full": the number and its state word */
-  size?: "row" | "full";
+  /** "icon": the glyph in its state's colour (a sidebar row, where the title needs the room);
+      "row": the number (the composer strip); "full": the number and its state word */
+  size?: "icon" | "row" | "full";
 }
 
 /** A pull request's number in its state's colour (DESIGN.md: Pull requests), with +N for the chat's others. */
@@ -50,9 +52,18 @@ export function PullRequestBadge({ pr, more = 0, size = "row" }: PullRequestBadg
   return (
     <span className={`pr-badge is-${tone}`} title={`${label} · ${word} · ${pr.title}`}>
       <Icon className="pr-badge-icon" aria-hidden="true" />
-      <span className="pr-badge-number">{label}</span>
+      <span className={size === "icon" ? "visually-hidden" : "pr-badge-number"}>{label}</span>
       {size === "full" ? <span className="pr-badge-word">{word}</span> : <span className="visually-hidden">{word}</span>}
       {more > 0 && <span className="pr-badge-more" aria-label={t("{n} more open", { n: more })}>+{more}</span>}
     </span>
   );
+}
+
+/** A pane's leading pull request, with +N for its other open ones; nothing when its chat has none. */
+export function PaneLeadBadge({ machineId, paneId, size = "row" }: { machineId: string; paneId: string; size?: "icon" | "row" | "full" }) {
+  const data = usePanePullRequests(machineId, paneId);
+  const lead = data?.pull_requests[0];
+  if (!lead) return null;
+  const more = openCount(data.pull_requests) - (lead.state === "open" || lead.state === "draft" ? 1 : 0);
+  return <PullRequestBadge pr={lead} more={more} size={size} />;
 }

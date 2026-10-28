@@ -828,3 +828,15 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 .plan-count.is-done svg {
   color: var(--status-done);
 }
+
+/* the row's leading pull request, its glyph in its state's colour, just before the state cell */
+.sidebar-pr {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-left: var(--space-1);
+}
+
+.sidebar-pr:empty {
+  display: none;
+}

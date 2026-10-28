@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type AnimationEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
+import { PaneLeadBadge } from "./PullRequestBadge.tsx";
 
 import "./Sidebar.css";
 
@@ -754,6 +755,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
             {foldedCount > 0 && <span className="workspace-fold-count" aria-hidden="true">+{foldedCount}</span>}
             {filterNote}
           </span>}
+          {online && <span className="sidebar-pr"><PaneLeadBadge machineId={machineId} paneId={pane.pane_id} size="icon" /></span>}
           <span className="sidebar-pane-meta">
             <span className="visually-hidden">{markName(pane)}</span>
             {online && pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge compact status={online ? rollupStatus(statusPanes.map((candidate) => activity.status(machineId, candidate))) : undefined} />}

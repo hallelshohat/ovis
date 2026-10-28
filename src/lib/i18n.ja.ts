@@ -24,6 +24,9 @@ import { PULL_REQUESTS_JA } from "./i18n/pullRequests.ja.ts";
  * in English. Placeholders in braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "failed": "失敗",
+  "running": "実行中",
+  "Pull requests": "プルリクエスト",
   "Back": "戻る",
   "Scroll pane up": "ペインを上にスクロール",
   "Scroll pane down": "ペインを下にスクロール",

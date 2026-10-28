@@ -26,6 +26,9 @@ import { PULL_REQUESTS_ZH } from "./i18n/pullRequests.zh.ts";
  * Placeholders in braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "failed": "失败",
+  "running": "运行中",
+  "Pull requests": "拉取请求",
   "Back": "返回",
   "Scroll pane up": "向上滚动面板",
   "Scroll pane down": "向下滚动面板",

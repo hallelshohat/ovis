@@ -1,5 +1,9 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
+import { agentDisplayLabel } from "./lib/compose.ts";
+import { Inspector } from "./components/Inspector.tsx";
+import { PrHeaderButton, PrSheet, PullRequestPanel } from "./components/PullRequestPanel.tsx";
+import { usePanePullRequests } from "./lib/usePanePullRequests.ts";
 
 import type { HerdrPane } from "../shared/protocol.ts";
 import { authenticate, createTab, pairDevice, shareSeen, signOut, splitPane, zoomPane } from "./lib/api.ts";
@@ -218,7 +222,13 @@ export function App() {
 
   useRosterEvents({ locked, receivePreferencesRef, snapshotRequests, onRoster, reorderCoordinator, setMachines, rosterIn, setMachineRosterLoaded, machinesRef, onPaneStatus, onPaneExited, followFocusRef, selectionRef, splitShownRef, splitRef, pendingLink, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, scheduleRefetch, preferencesResubscribedRef, preferencesDisconnectedRef, preferencesClosedRef, dropIn, chime, getTakeNotificationTargetRef: () => takeNotificationTargetRef });
 
-  const handleServerMessage = useServerMessageHandler(setOutputStopped);
+  const handleServerMessage = useServerMessageHandler(setOutputStopped, selectedMachineId);
+  // the chat's pull requests: an inspector column from 1200px, a sheet below it (DESIGN.md: Pull requests)
+  const pullRequests = usePanePullRequests(selectedMachineId, selectedPaneId);
+  const prDocked = useMediaQuery("(min-width: 1200px)");
+  const [prPanelOpen, setPrPanelOpen] = useState(true);
+  const [prSheetOpen, setPrSheetOpen] = useState(false);
+  const prShown = (pullRequests?.pull_requests.length ?? 0) > 0;
 
   const { enableNotifications, disableNotifications } = useNotificationSwitch({ updateSettings, locked, notifications, setNotifications, alerts, alertsRef, alertsOn, setPushOn });
 
@@ -575,6 +585,7 @@ export function App() {
         ) : (
           <><Brand /><span className="machine-context-name">{selectedMachine?.name ?? selectedMachineId}</span></>
         )}
+        {selectedPane && <PrHeaderButton data={pullRequests} expanded={prDocked ? prPanelOpen && prShown : prSheetOpen} controls="pull-requests" onToggle={() => { if (prDocked) setPrPanelOpen((open) => !open); else setPrSheetOpen(true); }} />}
         {selectedPane && (
           <div className="segmented view-switch" role="group" aria-label="Pane view">
             <button type="button" aria-pressed={view === "chat"} onClick={() => { setView("chat"); setDrawerOpen(false); }} title={t("Chat transcript (⌘⇧J)")}>
@@ -824,7 +835,14 @@ export function App() {
         </MachineContext.Provider>}
         {webPage !== null && filePanelAvailable && !(viewing !== null && fileDocked) &&
           <WebPanel key={webPage} url={webPage} onClose={() => setWebPage(null)} panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
+        {/* the workbench's inspector: the chat's pull requests beside the pane, where a file or a page is not docked */}
+        {prDocked && prPanelOpen && prShown && pullRequests && selectedPaneId !== null && viewing === null && webPage === null &&
+          <Inspector id="pull-requests" title={t("Pull requests")} onClose={() => setPrPanelOpen(false)}>
+            <PullRequestPanel data={pullRequests} machineId={selectedMachineId} paneId={selectedPaneId} agentName={agentDisplayLabel(selectedAgent)} />
+          </Inspector>}
       </div>
+      {!prDocked && prSheetOpen && pullRequests && selectedPaneId !== null &&
+        <PrSheet data={pullRequests} machineId={selectedMachineId} paneId={selectedPaneId} agentName={agentDisplayLabel(selectedAgent)} onClose={() => setPrSheetOpen(false)} />}
 
       <MachineContext.Provider value={newSessionMachineId}><NewSessionDialog
         key={newSessionMachineId}

@@ -1,0 +1,173 @@
+/* The chat's pull requests in the inspector (DESIGN.md: Pull requests): cards on the chrome's
+   surface, the one that needs the person first drawn whole and edged in its state's colour. */
+.pr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.pr-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pr-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-1);
+}
+
+.pr-section-hint {
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+}
+
+.pr-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  transition: border-color var(--dur-base) var(--ease-out), opacity var(--dur-base) var(--ease-out);
+}
+
+.pr-card.is-lead.is-failing,
+.pr-card.is-lead.is-changes {
+  border-color: color-mix(in srgb, var(--pr-failing) 45%, var(--border));
+}
+
+.pr-card.is-ended {
+  opacity: 0.75;
+}
+
+.pr-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pr-card-link {
+  flex: none;
+  width: var(--pointer-target);
+  height: var(--pointer-target);
+}
+
+.pr-card-link svg {
+  width: calc(var(--icon-size) * 0.75);
+  height: calc(var(--icon-size) * 0.75);
+}
+
+.pr-card-title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+
+.pr-card.is-line .pr-card-title {
+  font-weight: var(--fw-regular);
+  color: var(--text);
+}
+
+.pr-card-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.pr-card-meta svg {
+  flex: none;
+  width: calc(var(--icon-size) * 0.7);
+  height: calc(var(--icon-size) * 0.7);
+}
+
+.pr-card-branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.pr-plus { color: var(--pr-open); }
+.pr-minus { color: var(--pr-failing); }
+
+.pr-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pr-check,
+.pr-review {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-xs);
+}
+
+.pr-check svg,
+.pr-review svg {
+  flex: none;
+  width: calc(var(--icon-size) * 0.7);
+  height: calc(var(--icon-size) * 0.7);
+  color: var(--pr-open);
+}
+
+.pr-check.is-failing svg { color: var(--pr-failing); }
+.pr-check.is-pending svg { color: var(--pr-draft); }
+
+.pr-check-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-card-action {
+  margin-top: var(--space-2);
+  justify-content: center;
+}
+
+/* the header's way in: the leading PR's badge as a quiet button */
+.pr-header-button {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .pr-header-button:hover { background: var(--bg-hover); }
+}
+
+.pr-header-button[aria-expanded="true"] { background: var(--bg-hover); }
+
+@media (prefers-reduced-motion: reduce) {
+  .pr-card,
+  .pr-header-button { transition: none; }
+}
