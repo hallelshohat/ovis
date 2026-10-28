@@ -120,12 +120,14 @@
 /* The lone Host's group has no header (MachineSidebar.tsx): its + is this last row of the list, on the rows'
    grid, the + in the folders' leading cell and its words as dim as a section head's, so it reads as an action
    and not as one more workspace. Hover and focus are a row's. */
+.machine-host-actions { display: flex; align-items: center; margin: 0 var(--side-gutter); }
 .machine-new-row {
   display: flex;
   align-items: center;
-  width: calc(100% - var(--side-gutter) * 2);
+  flex: 1;
+  min-width: 0;
   min-height: var(--side-row);
-  margin: 0 var(--side-gutter);
+  margin: 0;
   padding: 0;
   background: transparent;
   border: 0;

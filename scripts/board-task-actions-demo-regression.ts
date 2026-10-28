@@ -243,6 +243,22 @@ try {
           await page.evaluate(() => (window as unknown as { __board: Board }).__board.release());
           await workspaceRow(page, working.workspace!).waitFor({ state: "detached" });
           assert.deepEqual((await calls()).at(-1), { action: "clear", id: working.id });
+          // Hiding the other PCs removes the Host header, but must keep its board reachable.
+          await page.evaluate(async () => {
+            const { machines } = await (await fetch("/api/machines")).json();
+            localStorage.setItem("ovis:hidden-pcs", JSON.stringify(machines.filter((machine: { kind: string }) => machine.kind !== "local").map((machine: { id: string }) => machine.id)));
+            window.dispatchEvent(new StorageEvent("storage", { key: "ovis:hidden-pcs" }));
+          });
+          const host = page.locator(".machine-group.is-headerless");
+          await host.waitFor();
+          assert.equal(await host.locator(".machine-header").count(), 0);
+          await host.getByRole("button", { name: "Board tasks on workstation" }).click({ timeout: 5000 });
+          await dialog.waitFor();
+          await entry.waitFor();
+          await settle();
+          if (evidence) await page.screenshot({ path: join(evidence, `board-tasks-${name}-headerless.png`) });
+          await page.keyboard.press("Escape");
+          await dialog.waitFor({ state: "detached" });
           assert.deepEqual(errors, []);
           console.log(`${name}: row menus, stale approve, permission, archive with Undo while pending, remove's question, Board tasks and a remove in the background pass`);
         } finally {
