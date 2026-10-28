@@ -9,6 +9,8 @@ import { createServer } from "./index.ts";
 import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, LanExposure, PortalStatus, PushKey, RemoteAccess, SessionSnapshot, TabMoved, PaneFindResponse, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { SUPPORTED_AGENT_KINDS } from "../shared/supported-agents.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
+import { resetPullRequestCache, setPullRequestRunner } from "./pull-requests/index.ts";
+import type { PanePullRequests } from "../shared/pull-requests.ts";
 import { PortalService } from "./portal.ts";
 import { noInstalledNotes, noUpdateNotes, unmanagedUpdateStatus, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes, type UpdateStatus } from "../shared/update.ts";
 import { USAGE_PROVIDERS, UsageService } from "./usage.ts";
@@ -1018,6 +1020,57 @@ describe("tab rename and close", () => {
       closed = !(await herdrRpc<{ snapshot: SessionSnapshot }>("session.snapshot", {})).snapshot.workspaces.some((w) => w.workspace_id === id);
       expect(closed).toBe(true);
     } finally { if (!closed) await workspaceClose(id); }
+  });
+});
+
+describe("pull requests", () => {
+  const pr = (number: number, state: string) => ({ number, url: `https://github.com/acme/api/pull/${number}`, title: `PR ${number}`, state, isDraft: false, reviewDecision: "APPROVED", headRefName: "feat/replay-metric", baseRefName: "main", additions: 4, deletions: 1, createdAt: "2026-10-28T14:09:00Z", mergedAt: state === "MERGED" ? "2026-10-28T15:00:00Z" : null, closedAt: null, updatedAt: "2026-10-28T14:10:00Z", statusCheckRollup: [] });
+  let viewState = "OPEN";
+  const merges: string[] = [];
+  const restore = setPullRequestRunner(async (argv) => {
+    if (argv[0] === "git") return { code: 0, stdout: "feat/replay-metric\n", stderr: "" };
+    if (argv[1] === "repo") return { code: 0, stdout: '{"nameWithOwner":"acme/api"}', stderr: "" };
+    if (argv[2] === "list") return { code: 0, stdout: JSON.stringify([pr(1931, "OPEN")]), stderr: "" };
+    if (argv[2] === "view") return { code: 0, stdout: JSON.stringify(pr(1931, viewState)), stderr: "" };
+    if (argv[2] === "merge") { merges.push(argv[3]!); return { code: 0, stdout: "", stderr: "" }; }
+    return { code: 1, stdout: "", stderr: "" };
+  });
+  afterAll(restore);
+  const merge = (body: unknown, headers: Record<string, string> = {}) => fetch(`${base()}/api/pane/pull-requests/merge`, {
+    method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1", ...headers }, body: JSON.stringify(body),
+  });
+
+  it("answers a pane's pull requests here and through the local PC's path, and merges only one that is still open", async () => {
+    resetPullRequestCache();
+    const owned = await workspaceCreate({ cwd: tmpdir(), label: "ovis-test-pull-requests" });
+    const paneId = owned.root_pane.pane_id;
+    try {
+      const listed = await fetch(`${base()}/api/pane/pull-requests?pane_id=${encodeURIComponent(paneId)}`);
+      expect(listed.status).toBe(200);
+      const answer = await listed.json() as PanePullRequests;
+      expect(answer.gh).toBe("ok");
+      expect(answer.pull_requests.map((p) => p.number)).toEqual([1931]);
+      const alias = await fetch(`${base()}/api/machines/local/pane/pull-requests?pane_id=${encodeURIComponent(paneId)}`);
+      expect(alias.status).toBe(200);
+
+      expect((await fetch(`${base()}/api/pane/pull-requests?pane_id=x`, { headers: { "sec-fetch-site": "cross-site" } })).status).toBe(403);
+      const stranger = await merge({ pane_id: paneId, url: "https://github.com/acme/api/pull/7" });
+      expect([stranger.status, ((await stranger.json()) as ApiError).error.code]).toEqual([404, "pr_not_in_chat"]);
+      viewState = "MERGED";
+      const late = await merge({ pane_id: paneId, url: "https://github.com/acme/api/pull/1931" });
+      expect([late.status, ((await late.json()) as ApiError).error.code]).toEqual([409, "pr_not_mergeable"]);
+      expect(merges).toEqual([]);
+      viewState = "OPEN";
+      const done = await merge({ pane_id: paneId, url: "https://github.com/acme/api/pull/1931" });
+      expect(done.status).toBe(200);
+      expect(merges).toEqual(["https://github.com/acme/api/pull/1931"]);
+    } finally { await workspaceClose(owned.workspace.workspace_id); }
+  });
+
+  it("names a pane that does not exist", async () => {
+    const missing = await fetch(`${base()}/api/pane/pull-requests?pane_id=unknown%3Ap9`);
+    expect(missing.status).toBeGreaterThanOrEqual(400);
+    expect(((await missing.json()) as ApiError).error.code).toBeTruthy();
   });
 });
 

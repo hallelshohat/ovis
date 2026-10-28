@@ -194,6 +194,13 @@ export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupR
  *         Grok requires exact live process/session evidence, Agy live process/session evidence;
  *         rewinds invalidate cursors.
  *         Grok/Agy optional activity describes the latest native turn, independently of pane status.)
+ *  GET    /api/pane/pull-requests?pane_id=&fresh=0|1 -> PanePullRequests (shared/pull-requests.ts:
+ *         the PR links the chat's transcript wrote and the PRs of every branch it ran on, read
+ *         with `gh` in the pane's folder; gh:"missing"|"unauthenticated"|"no_remote" says why there
+ *         are none. Open PRs are kept 60 s unless fresh=1; merged and closed ones are read once.)
+ *  POST   /api/pane/pull-requests/merge { pane_id, url } -> { ok: true } (gh pr merge --squash, only
+ *         for a PR of this chat that GitHub still says is open with no failing check: 404
+ *         pr_not_in_chat, 409 pr_not_mergeable { state }, 502 merge_failed)
  *  POST   /api/pane/close { pane_id }         -> { ok: true } (pane.close RPC; the collector's
  *         session-changed broadcast removes it from every client's sidebar)
  *  POST   /api/pane/rename { pane_id, label } -> { ok: true } (pane.rename; empty label clears it)

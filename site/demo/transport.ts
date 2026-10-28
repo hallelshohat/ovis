@@ -34,6 +34,7 @@ import agentsFixture from "./fixtures/agents.json";
 import commandsFixture from "./fixtures/commands.json";
 import panesFixture from "./fixtures/panes.json";
 import terminalFixture from "./fixtures/terminal.json";
+import { demoMerge, demoPullRequests } from "./pullRequests.ts";
 
 /** Only an explicit `demo logs` command starts this fictional retained history. */
 const histories = new Map<string, DemoHistory>();
@@ -1208,6 +1209,12 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     return json({ workspace_id: made.workspace_id, pane_id: made.pane_id, already_open: false, path: checkout.path, branch: checkout.branch, ...(agent ? { agent_started: made.agent_started } : {}) } satisfies WorktreeOpened);
   }
 
+  if (path === "/api/pane/pull-requests") return json(demoPullRequests(keyOfPane.get(paneId)));
+  if (path === "/api/pane/pull-requests/merge") {
+    if (method !== "POST") return error("method_not_allowed", "use POST", 400);
+    const merged = demoMerge(String((await bodyOf(init, input))["url"] ?? ""));
+    return "ok" in merged ? json(merged) : json(merged, 409);
+  }
   if (path === "/api/pane/conversation") {
     const key = keyOfPane.get(paneId);
     const chat = key ? chats.get(key) : undefined;

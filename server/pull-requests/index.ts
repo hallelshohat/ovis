@@ -5,7 +5,7 @@
  * open ones and the branch lists are kept OPEN_TTL_MS unless the caller asks for a fresh read.
  */
 import { byAttention, type GhStatus, type PanePullRequests, type PrEvent, type PullRequest } from "../../shared/pull-requests.ts";
-import { ghListHead, ghRepo, ghView, GH_TIMEOUT_MS, type Run } from "./gh.ts";
+import { bunRun, ghListHead, ghRepo, ghView, GH_TIMEOUT_MS, type Run } from "./gh.ts";
 import { chatSources, type ChatSources } from "./sources.ts";
 
 export const OPEN_TTL_MS = 60_000;
@@ -21,13 +21,26 @@ const repos = new Map<string, { status: GhStatus; repo: string | null; at: numbe
 const observed = new Map<string, { branch: string; at: string }[]>();
 const inflight = new Map<string, Promise<PanePullRequests>>();
 
-export function resetPullRequestCache(): void {
-  for (const map of [prs, lists, repos, observed, inflight]) map.clear();
+let runner: Run = bunRun;
+
+/** Tests answer gh and git with fixtures; returns the restore. */
+export function setPullRequestRunner(run: Run): () => void {
+  const previous = runner;
+  runner = run;
+  return () => { runner = previous; };
 }
 
-/** The PR at `url` if it is one of the pane's last answer, for the merge route. */
-export function cachedPullRequest(url: string): PullRequest | null {
-  return prs.get(url)?.pr ?? null;
+export function pullRequestDeps(): PrDeps {
+  return { run: runner, now: Date.now, currentBranch: gitBranchOf(runner) };
+}
+
+/** A merged PR is read again on the next answer, not taken from the open one kept here. */
+export function forgetPullRequest(url: string): void {
+  prs.delete(url);
+}
+
+export function resetPullRequestCache(): void {
+  for (const map of [prs, lists, repos, observed, inflight]) map.clear();
 }
 
 export function gitBranchOf(run: Run): (cwd: string) => Promise<string | null> {

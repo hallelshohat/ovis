@@ -19,6 +19,9 @@ import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "./dialogs/claude.ts";
 import { claudeRewindOpen } from "./prompt.ts";
 import { expandedDirectory } from "./workspace-routes.ts";
+import { ghMerge, ghView } from "./pull-requests/gh.ts";
+import { forgetPullRequest, panePullRequests, pullRequestDeps } from "./pull-requests/index.ts";
+import type { PanePullRequests } from "../shared/pull-requests.ts";
 
 /** the native stores createServer was given; unset, each reader finds its own */
 export type PaneStores = { codexHome?: string; grokHome?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string; openCodeStateDir?: string };
@@ -242,6 +245,45 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       // Claude embeds immutable bytes; Codex files and OpenCode tool-image ordinals can change.
       const cacheControl = ref.startsWith("codex-") || ref.startsWith("opencode:") ? "private, no-store" : "private, max-age=86400, immutable";
       return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  // a chat's pull requests: the links it wrote and the PRs of the branches it ran on (server/pull-requests/)
+  if (pathname === "/api/pane/pull-requests" || pathname === "/api/pane/pull-requests/merge") {
+    setRequestRoute(pathname);
+    const merge = pathname.endsWith("/merge");
+    if (request.method !== (merge ? "POST" : "GET")) return badRequest("method_not_allowed", merge ? "use POST" : "use GET");
+    if (request.headers.get("sec-fetch-site") === "cross-site") return jsonResponse({ error: { code: "cross_site", message: "A chat's pull requests are read from this app" } }, 403);
+    let paneId: string | null = url.searchParams.get("pane_id");
+    let target = "";
+    if (merge) {
+      const payload = await readJsonObject<{ pane_id?: unknown; url?: unknown }>(request);
+      if (payload instanceof Response) return payload;
+      paneId = typeof payload.pane_id === "string" ? payload.pane_id : null;
+      target = typeof payload.url === "string" ? payload.url : "";
+      if (!target) return badRequest("missing_url", "url is required");
+    }
+    if (!paneId) return badRequest("missing_pane_id", "pane_id is required");
+    try {
+      const { cwd } = await paneContext(paneId);
+      const transcript = await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome)
+        .then((found) => ({ path: found.path, source: found.source }), () => null);
+      const deps = pullRequestDeps();
+      const answer = await panePullRequests({ paneId, cwd, transcript, fresh: !merge && url.searchParams.get("fresh") === "1" }, deps);
+      if (!merge) return jsonResponse(answer satisfies PanePullRequests, 200, { "cache-control": "no-store" });
+      const listed = answer.pull_requests.find((pr) => pr.url === target);
+      if (!listed) return jsonResponse({ error: { code: "pr_not_in_chat", message: "That pull request is not one of this chat's" } }, 404);
+      // what GitHub says now, not what was shown: it may have merged or failed since
+      const now = await ghView(deps.run, cwd, target, listed.own ? listed.repo : null);
+      if (now === null || now.state !== "open" || now.checks === "failing") {
+        return jsonResponse({ error: { code: "pr_not_mergeable", message: now === null ? "GitHub did not answer for this pull request" : now.state !== "open" ? `It is ${now.state} now` : "Its checks are failing now" }, state: now }, 409);
+      }
+      const merged = await ghMerge(deps.run, cwd, target);
+      forgetPullRequest(target);
+      if (!merged.ok) return jsonResponse({ error: { code: "merge_failed", message: merged.reason || "gh could not merge it" } }, 502);
+      return jsonResponse({ ok: true });
     } catch (error) {
       return errorResponse(error);
     }
