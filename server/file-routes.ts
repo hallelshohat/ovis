@@ -9,7 +9,8 @@ import { sep } from "node:path";
 import type { ProjectFavicon } from "../shared/files.ts";
 import type { Access } from "./access.ts";
 import { isSecureRequest } from "./auth.ts";
-import { claudeSessionTempDir, claudeTempBases } from "./claude-store.ts";
+import { tmpdir } from "node:os";
+import { claudeSessionTempDir, claudeTempBases, processClaudeTmpDir } from "./claude-store.ts";
 import { claudePaneSession } from "./conversation.ts";
 import { fileResponse, findFile, crossSiteFileRead, pageMediaResponse, pageMediaSource, PAGE_MEDIA_PATH, watchPageMedia } from "./file-view.ts";
 import { paneGet } from "./herdr/client.ts";
@@ -24,12 +25,14 @@ export interface FileRequester { bridgeAuthorized: boolean; requestHost: string 
 const mayBeClaudeTemp = (path: string): boolean => claudeTempBases().some((base) => path.startsWith(base + sep));
 
 /** The temp folder of the Claude Code session in a pane, or null when the pane runs none or it has none. */
-async function claudeTempFolder(paneId: string): Promise<string | null> {
+export async function paneClaudeTempFolder(paneId: string): Promise<string | null> {
   try {
     const pane = await paneGet(paneId);
     if (resolveAgent(pane).agent !== "claude") return null;
     const session = await claudePaneSession(pane);
-    return session === null ? null : await claudeSessionTempDir(session.path);
+    if (session === null) return null;
+    const own = session.pid === null ? null : processClaudeTmpDir(session.pid);
+    return await claudeSessionTempDir(session.path, [...new Set([own, tmpdir(), "/tmp"].filter((root) => root !== null))]);
   } catch { return null; /* herdr busy or the pane gone: the path stays not found */ }
 }
 
@@ -71,7 +74,7 @@ async function fileRoute(request: Request, url: URL, pathname: string, { bridgeA
     try { cwd = (await paneContext(paneId)).cwd; } catch { /* an absolute path still opens */ }
   }
   const path = url.searchParams.get("path") ?? "";
-  const found = await findFile(path, cwd, () => paneId ? claudeTempFolder(paneId) : Promise.resolve(null), paneId ? mayBeClaudeTemp : undefined);
+  const found = await findFile(path, cwd, () => paneId ? paneClaudeTempFolder(paneId) : Promise.resolve(null), paneId ? mayBeClaudeTemp : undefined);
   if (found === null) return jsonResponse({ error: { code: "not_found", message: "no readable file at that path" } }, 404);
   // several files end in that name: the viewer lists them to choose from
   if ("candidates" in found) return jsonResponse({ error: { code: "ambiguous_path", message: "several files have that name", candidates: found.candidates } }, 409);
