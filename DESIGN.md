@@ -2133,9 +2133,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `--text-dim` `--fs-sm` with the exchange's one hairline under it.
 - A call of the running turn that has not answered runs now: a stepped `LoaderCircle` spins in its
   caret's place (it stands still under reduced motion) and the word "running" follows the object. A running
-  command opens on its live output, the end of the pane's own screen read once a second
-  (`pane.read`, read only) with the agent's input box under the last rule cut off, under "Live
-  output (terminal)": the transcripts record a call's output only once it ends. When the result
+  command opens on its live output, under "Live output (terminal)": only what that command printed
+  so far, never the agent's own screen around it (the transcripts record a call's output only once
+  it ends). Codex's polls of the command hold its chunks; Claude Code streams it to a
+  `tasks/<id>.output` file in its session temp folder (`GET /api/pane/live-output`, once a second);
+  any other agent's is the region under the command's own echo on its screen (`pane.read`, read
+  only). Nothing printed yet draws no box: the row's spinner says it runs. When the result
   arrives the row folds and the output is the call's own. A finished command says its exit status
   as the terminal does, `exit 0` in mono, a nonzero code in `--status-blocked`, only when the
   transcript records it (Claude's `Exit code N` result or ok flag, Codex's output line).

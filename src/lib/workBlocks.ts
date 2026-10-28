@@ -126,19 +126,81 @@ export function elapsedSince(ts: string | null, now: number): string | null {
   return formatWorkDuration(ts, ts === null ? null : new Date(Math.max(now, Date.parse(ts) || 0)).toISOString());
 }
 
+/** A running command's echo on the agent's screen: Claude's `⎿ $ cmd`, an older Claude's `⏺ Bash(cmd`, Codex's `• Running cmd`. */
+const RUN_HEADER = /^\s*(?:⎿\s+\$\s|⏺\s+Bash\(|•\s+Running\s)/;
+/** what the agent draws around a command's output: its timer, key hints, folded-line counts, a spinner word */
+const RUN_CHROME = /^(?:\((?:\d|ctrl\+|esc\b).*\)|… ?\+\d+ lines.*|\+\d+ (?:more )?lines.*|Running…)$/;
+const TIMER_SUFFIX = /\s*\(\d+(?:\.\d+)?[smh][^)]*\)$/;
+const squash = (text: string): string => text.replace(/\s+/g, "");
+
 /**
- * The end of the pane's screen as a running command's live output: the transcripts record a call's
- * output only once it ends, so while it runs the terminal is the only place it is. The agent's own
- * input box under it is not output: Claude Code draws it between two rules, so the screen is cut at
- * the first rule near the bottom. A screen with no rule keeps its last lines.
+ * A running command's output as the agent's screen shows it, when its own records do not hold it:
+ * only the lines under that command's own echo, found by the command's start. The agent's thinking
+ * and elapsed counters, its narration, the echo itself, key hints, tips and the input box are left
+ * out, and a screen that does not show the command answers nothing rather than something else.
  */
-export function liveOutputTail(screen: string, maxLines = 12): string {
+export function screenToolOutput(screen: string, command: string, maxLines = 12): string {
+  const whole = squash(command);
+  const start = whole.slice(0, 16);
+  if (start.length === 0) return "";
   const lines = screen.split("\n");
-  const bottom = Math.max(0, lines.length - 15);
-  const rule = lines.findIndex((line, index) => index >= bottom && /^[─━]{20,}/.test(line));
-  const kept = rule === -1 ? lines : lines.slice(0, rule);
-  while (kept.length > 0 && kept.at(-1)!.trim().length === 0) kept.pop();
-  return kept.slice(-maxLines).join("\n");
+  let header = -1;
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (RUN_HEADER.test(lines[index]!) && squash(lines[index]!).includes(start)) { header = index; break; }
+  }
+  if (header === -1) return "";
+  // the echo wraps over rows of its own: they are the command's text, not its output
+  const echoed = (line: string) => squash(line.replace(RUN_HEADER, "").replace(/^\s*│/, "").replace(TIMER_SUFFIX, "").replace(/\)$/, ""));
+  let echo = echoed(lines[header]!);
+  let at = header + 1;
+  while (at < lines.length && echo.length < whole.length && lines[at]!.trim().length > 0) {
+    const next = echo + echoed(lines[at]!);
+    if (!whole.startsWith(next)) break;
+    echo = next;
+    at++;
+  }
+  const body: string[] = [];
+  for (; at < lines.length; at++) {
+    const line = lines[at]!;
+    // a blank row, the input box's rule or anything back at the left edge ends the call's block
+    if (line.trim().length === 0 || /^[─━]{20,}/.test(line) || !/^\s/.test(line)) break;
+    const text = line.replace(/^(\s*)[⎿└│]/, (_, space: string) => `${space} `);
+    if (!RUN_CHROME.test(text.trim())) body.push(text.replace(TIMER_SUFFIX, ""));
+  }
+  const indent = Math.min(...body.filter((line) => line.trim().length > 0).map((line) => /^\s*/.exec(line)![0].length));
+  return body.map((line) => line.slice(Number.isFinite(indent) ? indent : 0).trimEnd()).slice(-maxLines).join("\n");
+}
+
+/** The id of the Codex exec session a call starts (named in its output) or polls (named in its input). */
+const codexSessionOf = (text: string): string | null => /session_id\W{1,3}(\d+)|session ID (\d+)/.exec(text)?.slice(1).find((id) => id !== undefined) ?? null;
+
+/** What one Codex exec call read of its command: the chunk's `output` string, or the text after an older one's `Output:` line. */
+function codexChunk(output: string): string {
+  const json = /"output":("(?:[^"\\]|\\.)*")/.exec(output);
+  if (json !== null) {
+    try { return JSON.parse(json[1]!) as string; } catch { return ""; }
+  }
+  if (!/session ID \d+/.test(output)) return "";
+  const at = output.lastIndexOf("Output:\n");
+  return at === -1 ? "" : output.slice(at + "Output:\n".length);
+}
+
+/**
+ * A running Codex command's output so far, from its own records: Codex runs a long command in an
+ * exec session and records each chunk it read as the answer of a poll (`write_stdin`), so the
+ * earlier calls of the turn on the running call's session hold it all. Null when the call names no
+ * session (Codex's first call of a command, another agent's tool).
+ */
+export function codexLiveOutput(parts: readonly ConversationPart[], part: ToolPart): string | null {
+  const session = codexSessionOf(part.input);
+  if (session === null) return null;
+  let text = "";
+  for (const other of parts) {
+    if (other === part) break;
+    if (other.kind !== "tool" || (codexSessionOf(other.input) ?? codexSessionOf(other.output)) !== session) continue;
+    text += codexChunk(other.output);
+  }
+  return text.replace(/\s+$/, "");
 }
 
 /**

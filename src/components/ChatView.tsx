@@ -32,7 +32,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
-import { commandExitCode, elapsedSince, isCommandTool, liveOutputTail, isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, turnSegments, todoGroups, visibleWorkParts, workFailed, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { commandExitCode, elapsedSince, isCommandTool, codexLiveOutput, screenToolOutput, isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, turnSegments, todoGroups, visibleWorkParts, workFailed, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -574,38 +574,60 @@ function Elapsed({ since }: { since: string | null }) {
   return elapsed === null ? null : <span className="work-block-elapsed">· {elapsed}</span>;
 }
 
-/** How often a running command's live output is read from the pane, and how much of the screen. */
+/** How often a running command's live output is read, and how much of the pane's screen when it is read there. */
 const LIVE_OUTPUT_MS = 1000;
 const LIVE_OUTPUT_LINES = 40;
 
+/** The command a call runs, as its input names it, for finding its echo on the screen. */
+function callCommand(part: ToolPartType): string {
+  try {
+    const input = JSON.parse(part.input) as { command?: unknown; cmd?: unknown };
+    const command = input.command ?? input.cmd;
+    if (typeof command === "string") return command;
+    if (Array.isArray(command)) return command.join(" ");
+  } catch { /* free-form input: the summary names it */ }
+  return part.summary;
+}
+
 /**
- * A running command's output while it runs. The transcripts record it only once the call ends, so
- * it is the end of the pane's own screen (herdr's pane.read: read only, nothing typed, no focus
- * moved), read again each second while the row is open and the page shown.
+ * A running command's output while it runs, and only its own: never the agent's screen around it.
+ * Codex's polls record each chunk the command printed (codexLiveOutput); Claude Code streams it to
+ * a file its server route reads (one per command running, in the order they started); any other
+ * agent's is the region under the command's own echo on its screen (screenToolOutput). Read again
+ * each second while the row is open and the page shown. Nothing printed yet draws nothing: the
+ * row's spinner and "running" already say it runs.
  */
-function LiveOutput({ paneId }: { paneId: string }) {
+function LiveOutput({ paneId, part, parts, since }: { paneId: string; part: ToolPartType; parts: readonly ConversationPart[]; since: string | null }) {
   const t = useT();
-  const { fetchPaneTranscript } = useMachineApi();
-  const [text, setText] = useState<string | null>(null);
+  const { fetchPaneLiveOutput, fetchPaneTranscript } = useMachineApi();
+  const codex = useMemo(() => codexLiveOutput(parts, part), [parts, part]);
+  // which of the commands running now this one is, as Claude's files are counted
+  const running = parts.filter((other): other is ToolPartType => other.kind === "tool" && other.state === "pending" && isCommandTool(other.name));
+  const index = running.indexOf(part) - running.length;
+  const command = callCommand(part);
+  const [read, setText] = useState<string | null>(null);
   useEffect(() => {
+    if (codex !== null) return;
     let stopped = false;
     let busy = false;
-    const read = async (): Promise<void> => {
+    const poll = async (): Promise<void> => {
       if (busy || document.visibilityState === "hidden") return;
       busy = true;
       try {
-        const result = await fetchPaneTranscript(paneId, LIVE_OUTPUT_LINES);
-        if (!stopped) setText(liveOutputTail(result.text));
+        const outputs = await fetchPaneLiveOutput(paneId, since);
+        const text = outputs !== null ? outputs.at(index) ?? "" : screenToolOutput((await fetchPaneTranscript(paneId, LIVE_OUTPUT_LINES)).text, command);
+        if (!stopped) setText(text);
       } catch {
         // a missed read leaves the last one up; the next tick tries again
       } finally {
         busy = false;
       }
     };
-    void read();
-    const timer = setInterval(() => void read(), LIVE_OUTPUT_MS);
+    void poll();
+    const timer = setInterval(() => void poll(), LIVE_OUTPUT_MS);
     return () => { stopped = true; clearInterval(timer); };
-  }, [paneId, fetchPaneTranscript]);
+  }, [paneId, since, index, command, codex, fetchPaneLiveOutput, fetchPaneTranscript]);
+  const text = codex ?? read;
   if (text === null || text.length === 0) return null;
   return <section className="chat-tool-output is-live"><h4>{t("Live output (terminal)")}</h4><pre className="chat-tool-io">{text}</pre></section>;
 }
@@ -615,7 +637,7 @@ function LiveOutput({ paneId }: { paneId: string }) {
  * verb table knows reads as verb + object, and its id moves to the title and the opened detail;
  * any other keeps its id in front, as the agent names it.
  */
-function WorkRow({ paneId, part, stateKey, state, live = false }: { paneId: string; part: ToolPartType; stateKey: string; state?: TodoAttempt["state"]; live?: boolean }) {
+function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], since = null }: { paneId: string; part: ToolPartType; stateKey: string; state?: TodoAttempt["state"]; live?: boolean; parts?: readonly ConversationPart[]; since?: string | null }) {
   const t = useT();
   // the files an output names open from it ("saved /tmp/shot/t0.png")
   const openFile = useContext(OpenFileContext);
@@ -654,7 +676,7 @@ function WorkRow({ paneId, part, stateKey, state, live = false }: { paneId: stri
     {/* opened, the row shows its pictures larger in its detail */}
     {!open && <LineImages paneId={paneId} images={images} />}
   </div>
-  {open && <div className="work-row-detail">{verb !== null && <p className="work-row-tool">{part.name}</p>}<ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{watching && <LiveOutput paneId={paneId} />}{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(output, openFile)}</pre>
+  {open && <div className="work-row-detail">{verb !== null && <p className="work-row-tool">{part.name}</p>}<ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{watching && <LiveOutput paneId={paneId} part={part} parts={parts} since={since} />}{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(output, openFile)}</pre>
     {part.output_ref !== undefined && whole.text === null && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
       {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
     </button>}</section>}</div>}
@@ -794,7 +816,7 @@ function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThin
         part.kind === "thinking" ? <ThinkingRow key={`thinking:${at.get(part)}`} stateKey={`thinking:${at.get(part)}`} text={part.text} />
           : part.kind === "text" ? <div key={`text:${at.get(part)}`} className="work-narration"><Markdown>{part.text}</Markdown></div>
             : part.kind === "tool" ? groups.has(part) ? <TodoGroupRow key={groups.get(part)!.id} paneId={paneId} group={groups.get(part)!} stateKeyOf={toolKey} />
-              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} /> : null)}
+              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} parts={parts} since={since} /> : null)}
       </div>
     </AnimatedHeight>
   </section>;
