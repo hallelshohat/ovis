@@ -195,36 +195,63 @@ function toolBody(lines: readonly string[], at: number, maxLines: number): strin
   return body.map((line) => line.slice(Number.isFinite(indent) ? indent : 0).trimEnd()).slice(-maxLines).join("\n");
 }
 
-/** The id of the Codex exec session a call starts (named in its output) or polls (named in its input). */
-const codexSessionOf = (text: string): string | null => /session_id\W{1,3}(\d+)|session ID (\d+)/.exec(text)?.slice(1).find((id) => id !== undefined) ?? null;
+/** Every Codex exec session a call's input names (a poll's `session_id`), in order. */
+const codexInputSessions = (input: string): string[] => [...input.matchAll(/session_id\W{1,3}(\d+)/g)].map((match) => match[1]!);
 
-/**
- * What one Codex exec call read of its command: the chunk's `output` string, or the text after an
- * older one's `Output:` line. A page carries a long output cut (`… trimmed`): its JSON string has
- * no end then, and the part of it there is read as far as it goes.
- */
-function codexChunk(output: string): string {
-  const at = output.indexOf('"output":"');
-  if (at !== -1) {
-    const rest = output.slice(at + '"output":"'.length).replace(/\n… trimmed$/, "");
-    const end = /^(?:[^"\\]|\\.)*/.exec(rest)![0];
-    // a cut string may stop inside an escape: what is left of it is dropped
-    const whole = end.replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, "");
-    try { return JSON.parse(`"${whole}"`) as string; } catch { return ""; }
-  }
-  if (!/session ID \d+/.test(output)) return "";
-  const text = output.lastIndexOf("Output:\n");
-  return text === -1 ? "" : output.slice(text + "Output:\n".length);
+/** A JSON string's body from its first character on, read as far as it goes: a page may carry it cut (`… trimmed`). */
+function jsonStringAt(text: string, at: number): { value: string; end: number } {
+  const body = /^(?:[^"\\]|\\.)*/.exec(text.slice(at))![0];
+  // a cut string may stop inside an escape: what is left of it is dropped
+  const whole = body.replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, "");
+  try { return { value: JSON.parse(`"${whole}"`) as string, end: at + body.length + 1 }; } catch { return { value: "", end: at + body.length + 1 }; }
 }
 
-/** The earlier calls of `parts` on the running call's Codex exec session; null when it names none. */
+/**
+ * The chunks of command output one Codex exec call read, each with the session it came from (null
+ * when the chunk does not say). A native call's text starts with its own envelope (`Process running
+ * with session ID N`, then `Output:`): the first `Output:` line is the envelope's, whatever the
+ * command printed after it. An exec cell's answer holds one JSON object per tool it ran, several
+ * sessions side by side when it ran several commands.
+ */
+function codexChunks(output: string): { session: string | null; text: string }[] {
+  const text = output.replace(/\n… trimmed$/, "");
+  const envelope = text.indexOf("Output:\n");
+  if (envelope !== -1) {
+    const native = /session ID (\d+)/.exec(text.slice(0, envelope));
+    if (native !== null) return [{ session: native[1]!, text: text.slice(envelope + "Output:\n".length) }];
+  }
+  const chunks: { session: string | null; text: string }[] = [];
+  for (const match of text.matchAll(/"output":"/g)) {
+    const at = match.index + match[0].length;
+    const { value, end } = jsonStringAt(text, at);
+    // the session is a key of the same object: before the output, back to its brace, or after it, up to its close
+    const before = text.slice(text.lastIndexOf("{", match.index) + 1, match.index);
+    const after = text.slice(end, text.indexOf("}", end) === -1 ? undefined : text.indexOf("}", end));
+    const session = /"session_id":\s*(\d+)/.exec(before)?.[1] ?? /"session_id":\s*(\d+)/.exec(after)?.[1] ?? null;
+    chunks.push({ session, text: value });
+  }
+  return chunks;
+}
+
+/** A call's chunks with a session each: one that names none is the session the call's input polls, when it names one. */
+function codexCallChunks(call: ToolPart, output: string): { session: string | null; text: string }[] {
+  const polled = codexInputSessions(call.input);
+  return codexChunks(output).map((chunk) => ({ session: chunk.session ?? (polled.length === 1 ? polled[0]! : null), text: chunk.text }));
+}
+
+/** The earlier calls of `parts` with output of the running call's Codex exec sessions; null when it names none. */
 export function codexSessionCalls(parts: readonly ConversationPart[], part: ToolPart): ToolPart[] | null {
-  const session = codexSessionOf(part.input);
-  if (session === null) return null;
+  const sessions = new Set(codexInputSessions(part.input));
+  if (sessions.size === 0) return null;
   const calls: ToolPart[] = [];
   for (const other of parts) {
     if (other === part) break;
-    if (other.kind === "tool" && (codexSessionOf(other.input) ?? codexSessionOf(other.output)) === session) calls.push(other);
+    if (other.kind !== "tool") continue;
+    const named = codexInputSessions(other.input).some((id) => sessions.has(id))
+      || codexCallChunks(other, other.output).some((chunk) => chunk.session !== null && sessions.has(chunk.session))
+      // a cut output may have lost the session id with its tail: the whole one says
+      || (other.output_ref !== undefined && /Output:\n|"output":"/.test(other.output));
+    if (named) calls.push(other);
   }
   return calls;
 }
@@ -232,15 +259,19 @@ export function codexSessionCalls(parts: readonly ConversationPart[], part: Tool
 /**
  * A running Codex command's output so far, from its own records: Codex runs a long command in an
  * exec session and records each chunk it read as the answer of a poll (`write_stdin`), so the
- * earlier calls of the turn on the running call's session hold it all. `parts` is the whole turn:
- * the agent's words between two polls do not hide the chunks before them. A chunk cut to the
- * page's length is read from `whole` (the call's whole output by its `output_ref`) once it is
- * there. Null when the call names no session (Codex's first call of a command, another agent's tool).
+ * earlier calls of the turn on the running call's session hold it all, and only the chunks of that
+ * session are taken from a call that read several. `parts` is the whole turn: the agent's words
+ * between two polls do not hide the chunks before them. A chunk cut to the page's length is read
+ * from `whole` (the call's whole output by its `output_ref`) once it is there. Null when the call
+ * names no session (Codex's first call of a command, another agent's tool).
  */
 export function codexLiveOutput(parts: readonly ConversationPart[], part: ToolPart, whole: ReadonlyMap<string, string> = new Map()): string | null {
   const calls = codexSessionCalls(parts, part);
   if (calls === null) return null;
-  return calls.map((call) => codexChunk((call.output_ref === undefined ? undefined : whole.get(call.output_ref)) ?? call.output)).join("").replace(/\s+$/, "");
+  const sessions = new Set(codexInputSessions(part.input));
+  return calls.flatMap((call) => codexCallChunks(call, (call.output_ref === undefined ? undefined : whole.get(call.output_ref)) ?? call.output))
+    .filter((chunk) => chunk.session !== null && sessions.has(chunk.session))
+    .map((chunk) => chunk.text).join("").replace(/\s+$/, "");
 }
 
 /** The ids of Claude Code task files the turn's results name: a background call's own file, which is no running command's. */

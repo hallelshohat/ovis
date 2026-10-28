@@ -200,6 +200,24 @@ describe("codexLiveOutput", () => {
     expect(codexLiveOutput([first, running], running, new Map([["call_cut", raw]]))).toBe(long);
   });
 
+  it("takes only the running session's chunks from a call that started several commands", () => {
+    const chunk = (session: number, output: string) => JSON.stringify({ chunk_id: `c${session}`, wall_time_seconds: 1, session_id: session, original_token_count: 3, output });
+    const both: ToolPart = { kind: "tool", name: "exec", summary: "exec", call_id: "both",
+      input: "const [a, b] = await Promise.all([tools.exec_command({cmd:'alpha'}), tools.exec_command({cmd:'beta'})]); text(a); text(b);",
+      output: `Script completed\nWall time 1.0 seconds\nOutput:\n\n${chunk(21931, "ALPHA stdout\n")}\n${chunk(64527, "BETA stdout\nBETA stderr\n")}` };
+    const poll = (session: number): ToolPart => ({ kind: "tool", name: "exec", summary: "exec", call_id: `poll${session}`, state: "pending", output: "",
+      input: `text(await tools.write_stdin({session_id:${session},chars:"",yield_time_ms:1000}));\n` });
+    expect(codexLiveOutput([both, poll(64527)], poll(64527))).toBe("BETA stdout\nBETA stderr");
+    expect(codexLiveOutput([both, poll(21931)], poll(21931))).toBe("ALPHA stdout");
+  });
+
+  it("splits a native result at its own envelope, whatever the command printed", () => {
+    const start: ToolPart = { kind: "tool", name: "exec_command", summary: "run", call_id: "start", input: JSON.stringify({ cmd: "./job.sh" }),
+      output: "Chunk ID: 1a2b\nWall time: 1.0 seconds\nProcess running with session ID 1234\nOriginal token count: 4\nOutput:\nbefore\nOutput:\nafter\n" };
+    const poll: ToolPart = { kind: "tool", name: "write_stdin", summary: "poll", call_id: "poll", state: "pending", output: "", input: JSON.stringify({ session_id: 1234, chars: "" }) };
+    expect(codexLiveOutput([start, poll], poll)).toBe("before\nOutput:\nafter");
+  });
+
   it("is null for a call that names no session, and empty before any chunk", () => {
     const first: ToolPart = { ...parts[0]!, output: "", state: "pending" };
     expect(codexLiveOutput([first], first)).toBeNull();
