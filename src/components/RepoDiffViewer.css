@@ -340,3 +340,27 @@
 .repo-diff-note.empty-state {
   margin: var(--space-6) 0 0;
 }
+
+/* The workbench: from 769px a diff takes the work panel's place, beside the sidebar and over the
+   header (and the Files sheet it may open from), with the panel's own edge and corners, so the pane it belongs to is what it covers and
+   the sidebar stays in reach. It fades in; Escape and the close put the pane back. */
+@media (min-width: 769px) {
+  .repo-diff-scrim {
+    inset: 0 0 0 var(--sidebar-shown-w, 0px);
+    padding: var(--panel-inset) var(--panel-inset) var(--panel-inset) 0;
+    align-items: stretch;
+    justify-content: stretch;
+    background: var(--bg-panel);
+    animation: none;
+  }
+
+  .repo-diff-scrim > .repo-diff-viewer {
+    width: 100%;
+    max-height: none;
+    height: 100%;
+    border: var(--hairline) solid var(--border);
+    border-radius: var(--panel-radius);
+    box-shadow: var(--shadow-card);
+    animation: fade-in var(--dur-base) var(--ease-out);
+  }
+}

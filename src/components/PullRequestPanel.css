@@ -171,3 +171,12 @@
   .pr-card,
   .pr-header-button { transition: none; }
 }
+
+/* a narrow header keeps the title: the state word goes first, then the number (the glyph and +N stay) */
+@media (max-width: 768px) {
+  .pr-header-button .pr-badge-word { display: none; }
+}
+
+@media (max-width: 480px) {
+  .pr-header-button .pr-badge-number { display: none; }
+}

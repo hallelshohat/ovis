@@ -8,7 +8,9 @@
   --side-row-2: calc(var(--control-h) + var(--space-3));
   --side-action: var(--space-6);
   --side-hover: color-mix(in srgb, var(--bg-hover) 50%, var(--bg-panel));
-  --side-selected: var(--bg-hover);
+  /* the selected row is a card of the work panel's own surface (the workbench, styles.css), on an edge */
+  --side-selected: var(--term-bg);
+  --side-selected-edge: inset 0 0 0 var(--hairline) var(--border-strong);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -403,6 +405,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 .workspace-group.is-selected > .workspace-header {
   background: var(--side-selected);
+  box-shadow: var(--side-selected-edge);
 }
 
 /* keyboard focus draws the ring on the whole row and no fill */

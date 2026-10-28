@@ -2583,6 +2583,7 @@ button {
 
   .modal-scrim > :is(.new-session-modal, .worktree-modal, .files-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet).modal {
     width: min(100%, var(--side-sheet-w));
+    height: auto;
     max-height: none;
     border: var(--hairline) solid var(--border);
     animation: side-sheet-in var(--dur-slow) var(--ease-out);
@@ -2590,6 +2591,7 @@ button {
 
   .modal-scrim > .settings-dialog.modal {
     width: min(100%, var(--side-sheet-w-wide));
+    height: auto;
     max-height: none;
     border: var(--hairline) solid var(--border);
     animation: side-sheet-in var(--dur-slow) var(--ease-out);

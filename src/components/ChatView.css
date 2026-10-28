@@ -1979,3 +1979,9 @@
   .work-row::before { transition: none; }
   .pr-event { animation: none; }
 }
+
+.pr-event .pr-badge,
+.pr-event .chat-time {
+  flex: none;
+  white-space: nowrap;
+}

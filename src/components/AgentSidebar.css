@@ -116,7 +116,7 @@
   .agent-item:has(> .agent-row:enabled):hover { background: var(--side-hover); }
 }
 
-.agent-item.is-selected { background: var(--side-selected); }
+.agent-item.is-selected { background: var(--side-selected); box-shadow: var(--side-selected-edge); }
 
 /* As a workspace row's: the ⋯ takes no room until the row is hovered, focused, selected or its
    menu is open, and stays in the focus order, since the menu hands the focus back to it. */
