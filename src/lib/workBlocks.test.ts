@@ -146,10 +146,11 @@ describe("screenToolOutput", () => {
     const screen = "• Running cd /work/long-project && echo SECOND\n  └ SECOND output\n\n› ";
     expect(screenToolOutput(screen, "cd /work/long-project && echo FIRST")).toBe("");
     expect(screenToolOutput(screen, "cd /work/long-project && echo SECOND")).toBe("SECOND output");
-    // an echo the agent cut with "…" is this command when the command starts with what it shows
-    const cut = "• Running cd /work/long-project && echo SEC…\n  └ SECOND output\n\n› ";
-    expect(screenToolOutput(cut, "cd /work/long-project && echo SECOND")).toBe("SECOND output");
-    expect(screenToolOutput(cut, "cd /work/long-project && echo FIRST")).toBe("");
+    // an echo the agent cut with "…" may be any command that starts the same: it is never taken
+    for (const cut of ["• Running cd /work/long-project && echo …\n  └ SECOND output\n\n› ", "• Running cd /work/long-project && echo SEC…\n  └ SECOND output\n\n› ", "⏺ Bash(cd /work/long-project && echo …)\n  ⎿  SECOND output\n\n"]) {
+      expect(screenToolOutput(cut, "cd /work/long-project && echo FIRST")).toBe("");
+      expect(screenToolOutput(cut, "cd /work/long-project && echo SECOND")).toBe("");
+    }
   });
 
   it("is empty when the running command is not on the screen", () => {
