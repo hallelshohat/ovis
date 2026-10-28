@@ -184,7 +184,7 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         pane_not_found)
  *  GET    /api/pane/live-output?pane_id=&since=  -> PaneLiveOutputResponse (a running Claude
  *         Code command's output so far, from the files Claude streams it to while it runs: every
- *         one born from `since`, an ISO time, on, oldest first, each its last 40 lines. `outputs`
+ *         one born from `since`, an ISO time, on, oldest first, each its task id and last 40 lines. `outputs`
  *         is null when the pane runs no Claude session with a temp folder; 400 missing_pane_id)
  *  GET    /api/pane/scroll?pane_id=      -> { scroll: PaneScrollInfo | null } (where the
  *         viewport sits: its top row in the history is max_offset_from_bottom - offset_from_bottom)
@@ -651,9 +651,13 @@ export interface CommandOutcome {
   updated_at: string;
 }
 
-/** GET /api/pane/live-output response: each running command's output so far, oldest first; null when the pane has no Claude session temp folder to read it from. */
+/**
+ * GET /api/pane/live-output response: each task file's output so far, oldest first, by Claude's
+ * task id (a background call's result names its id); null when the pane has no Claude session temp
+ * folder to read it from.
+ */
 export interface PaneLiveOutputResponse {
-  outputs: string[] | null;
+  outputs: { id: string; text: string }[] | null;
 }
 
 /** GET /api/pane/prompt response; `suggestion` and `restored` are absent from older servers. */

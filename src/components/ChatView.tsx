@@ -32,7 +32,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
-import { commandExitCode, elapsedSince, isCommandTool, codexLiveOutput, screenToolOutput, isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, turnSegments, todoGroups, visibleWorkParts, workFailed, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { commandExitCode, elapsedSince, isCommandTool, claudeLiveOutput, codexLiveOutput, codexSessionCalls, screenToolOutput, isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, turnSegments, todoGroups, visibleWorkParts, workFailed, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -591,23 +591,38 @@ function callCommand(part: ToolPartType): string {
 
 /**
  * A running command's output while it runs, and only its own: never the agent's screen around it.
- * Codex's polls record each chunk the command printed (codexLiveOutput); Claude Code streams it to
- * a file its server route reads (one per command running, in the order they started); any other
- * agent's is the region under the command's own echo on its screen (screenToolOutput). Read again
- * each second while the row is open and the page shown. Nothing printed yet draws nothing: the
- * row's spinner and "running" already say it runs.
+ * Codex's polls record each chunk the command printed (codexLiveOutput), a chunk cut to the page's
+ * length loaded whole; Claude Code streams it to a file its server route reads (claudeLiveOutput
+ * picks this command's); any other agent's is the region under the command's own echo on its
+ * screen (screenToolOutput). `parts` is the whole turn. Read again each second while the row is
+ * open and the page shown. Nothing printed yet draws nothing: the row's spinner and "running"
+ * already say it runs.
  */
 function LiveOutput({ paneId, part, parts, since }: { paneId: string; part: ToolPartType; parts: readonly ConversationPart[]; since: string | null }) {
   const t = useT();
+  const machineId = useMachineId();
   const { fetchPaneLiveOutput, fetchPaneTranscript } = useMachineApi();
-  const codex = useMemo(() => codexLiveOutput(parts, part), [parts, part]);
-  // which of the commands running now this one is, as Claude's files are counted
-  const running = parts.filter((other): other is ToolPartType => other.kind === "tool" && other.state === "pending" && isCommandTool(other.name));
-  const index = running.indexOf(part) - running.length;
-  const command = callCommand(part);
-  const [read, setText] = useState<string | null>(null);
+  // the chunks a page carries cut, loaded whole once each: a call's output never changes
+  const cut = useMemo(() => (codexSessionCalls(parts, part) ?? []).flatMap((call) => call.output_ref === undefined ? [] : [call.output_ref]), [parts, part]);
+  const [whole, setWhole] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const missing = cut.filter((ref) => !whole.has(ref)).join("\n");
   useEffect(() => {
-    if (codex !== null) return;
+    if (missing === "") return;
+    let stopped = false;
+    void Promise.all(missing.split("\n").map(async (ref) => {
+      const response = await fetch(machinePath(machineId, `pane/conversation/tool-output?${new URLSearchParams({ pane_id: paneId, ref }).toString()}`));
+      return response.ok ? [ref, await response.text()] as const : null;
+    })).then((loaded) => {
+      if (!stopped) setWhole((known) => new Map([...known, ...loaded.filter((entry) => entry !== null)]));
+    }, () => { /* the cut chunk stays read as far as it goes */ });
+    return () => { stopped = true; };
+  }, [missing, paneId, machineId]);
+  const codex = useMemo(() => codexLiveOutput(parts, part, whole), [parts, part, whole]);
+  const command = callCommand(part);
+  const fromCodex = codex !== null;
+  const [read, setRead] = useState<{ outputs: { id: string; text: string }[] } | { screen: string } | null>(null);
+  useEffect(() => {
+    if (fromCodex) return;
     let stopped = false;
     let busy = false;
     const poll = async (): Promise<void> => {
@@ -615,8 +630,8 @@ function LiveOutput({ paneId, part, parts, since }: { paneId: string; part: Tool
       busy = true;
       try {
         const outputs = await fetchPaneLiveOutput(paneId, since);
-        const text = outputs !== null ? outputs.at(index) ?? "" : screenToolOutput((await fetchPaneTranscript(paneId, LIVE_OUTPUT_LINES)).text, command);
-        if (!stopped) setText(text);
+        const next = outputs !== null ? { outputs } : { screen: screenToolOutput((await fetchPaneTranscript(paneId, LIVE_OUTPUT_LINES)).text, command) };
+        if (!stopped) setRead(next);
       } catch {
         // a missed read leaves the last one up; the next tick tries again
       } finally {
@@ -626,8 +641,8 @@ function LiveOutput({ paneId, part, parts, since }: { paneId: string; part: Tool
     void poll();
     const timer = setInterval(() => void poll(), LIVE_OUTPUT_MS);
     return () => { stopped = true; clearInterval(timer); };
-  }, [paneId, since, index, command, codex, fetchPaneLiveOutput, fetchPaneTranscript]);
-  const text = codex ?? read;
+  }, [paneId, since, command, fromCodex, fetchPaneLiveOutput, fetchPaneTranscript]);
+  const text = codex ?? (read === null ? null : "outputs" in read ? claudeLiveOutput(read.outputs, parts, part) : read.screen);
   if (text === null || text.length === 0) return null;
   return <section className="chat-tool-output is-live"><h4>{t("Live output (terminal)")}</h4><pre className="chat-tool-io">{text}</pre></section>;
 }
@@ -761,6 +776,8 @@ function PendingWorkHead({ title, className = "", since = null }: { title: strin
 
 /** What every work block of one turn reads, found once per turn rather than once per block. */
 interface TurnWork {
+  /** the turn's parts, every block's: a running command's earlier output may sit in another block */
+  parts: readonly ConversationPart[];
   /** each part's index in the turn: rows are keyed and remembered by it, whichever block holds them */
   at: ReadonlyMap<ConversationPart, number>;
   /** runs of todo updates, found in the turn's own order before anything is hidden */
@@ -772,6 +789,7 @@ interface TurnWork {
 function turnWork(parts: ConversationPart[], rowKey: string): TurnWork {
   const groups = todoGroups(parts, rowKey);
   return {
+    parts,
     at: new Map(parts.map((part, index) => [part, index])),
     groups,
     grouped: new Set([...groups.values()].flatMap((group) => group.attempts.slice(1).map((attempt) => attempt.part))),
@@ -816,7 +834,7 @@ function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThin
         part.kind === "thinking" ? <ThinkingRow key={`thinking:${at.get(part)}`} stateKey={`thinking:${at.get(part)}`} text={part.text} />
           : part.kind === "text" ? <div key={`text:${at.get(part)}`} className="work-narration"><Markdown>{part.text}</Markdown></div>
             : part.kind === "tool" ? groups.has(part) ? <TodoGroupRow key={groups.get(part)!.id} paneId={paneId} group={groups.get(part)!} stateKeyOf={toolKey} />
-              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} parts={parts} since={since} /> : null)}
+              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} parts={work.parts} since={since} /> : null)}
       </div>
     </AnimatedHeight>
   </section>;

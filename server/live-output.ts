@@ -14,9 +14,9 @@ const BIRTH_SLACK_MS = 2000;
 
 /**
  * The output files in a Claude session's temp folder born from `sinceMs` on, oldest first, each as
- * its last `maxLines` lines. None when there is no `tasks/` folder.
+ * its task id and its last `maxLines` lines. None when there is no `tasks/` folder.
  */
-export async function claudeRunningOutputs(sessionDir: string, sinceMs: number, maxLines = 40): Promise<string[]> {
+export async function claudeRunningOutputs(sessionDir: string, sinceMs: number, maxLines = 40): Promise<{ id: string; text: string }[]> {
   const dir = join(sessionDir, "tasks");
   let names: string[];
   try { names = (await readdir(dir)).filter((name) => name.endsWith(".output")); } catch { return []; }
@@ -39,9 +39,9 @@ export async function claudeRunningOutputs(sessionDir: string, sinceMs: number, 
         return length < size ? text.slice(text.indexOf("\n") + 1) : text;
       } finally { await handle.close(); }
     } catch { return ""; }
-  }))).map((text) => {
+  }))).map((text, index) => {
     const lines = text.split("\n");
     while (lines.length > 0 && lines.at(-1)!.trim() === "") lines.pop();
-    return lines.slice(-maxLines).join("\n");
+    return { id: files[index]!.name.slice(0, -".output".length), text: lines.slice(-maxLines).join("\n") };
   });
 }

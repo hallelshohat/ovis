@@ -296,7 +296,7 @@ export async function fetchPaneTranscript(paneId: string, lines: number, machine
  * GET /api/pane/live-output: what the running Claude Code commands of a turn started at `since`
  * have printed so far, oldest first; null when the pane has no Claude session to read it from.
  */
-export async function fetchPaneLiveOutput(paneId: string, since: string | null, machineId = "local"): Promise<string[] | null> {
+export async function fetchPaneLiveOutput(paneId: string, since: string | null, machineId = "local"): Promise<PaneLiveOutputResponse["outputs"]> {
   const query = new URLSearchParams({ pane_id: paneId, since: since ?? "" });
   return (await withChatReadDeadline((signal) => getJson<PaneLiveOutputResponse>(machinePath(machineId, `pane/live-output?${query.toString()}`), { signal }), chatReadDeadlineMs(machineId))).outputs;
 }

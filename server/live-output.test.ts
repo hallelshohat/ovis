@@ -19,7 +19,10 @@ describe("claudeRunningOutputs", () => {
     task("b", Array.from({ length: 100 }, (_, index) => `b ${index}`).join("\n"));
     writeFileSync(join(dir, "tasks", "notes.txt"), "not a task");
     const outputs = await claudeRunningOutputs(dir, Date.now() - 1000);
-    expect(outputs).toEqual(["progress line 1\nprogress line 2", Array.from({ length: 40 }, (_, index) => `b ${index + 60}`).join("\n")]);
+    expect(outputs).toEqual([
+      { id: "a", text: "progress line 1\nprogress line 2" },
+      { id: "b", text: Array.from({ length: 40 }, (_, index) => `b ${index + 60}`).join("\n") },
+    ]);
   });
 
   it("leaves out a file born before the call, and answers none without a tasks folder", async () => {

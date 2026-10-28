@@ -135,34 +135,52 @@ const squash = (text: string): string => text.replace(/\s+/g, "");
 
 /**
  * A running command's output as the agent's screen shows it, when its own records do not hold it:
- * only the lines under that command's own echo, found by the command's start. The agent's thinking
- * and elapsed counters, its narration, the echo itself, key hints, tips and the input box are left
- * out, and a screen that does not show the command answers nothing rather than something else.
+ * only the lines under that command's own echo. The echo must be the whole command, or its start
+ * cut with "…" where the agent shortens it: a command that only starts the same is another one.
+ * The agent's thinking and elapsed counters, its narration, the echo itself, key hints, tips and
+ * the input box are left out, and a screen that does not show the command answers nothing rather
+ * than something else.
  */
 export function screenToolOutput(screen: string, command: string, maxLines = 12): string {
   const whole = squash(command);
   const start = whole.slice(0, 16);
   if (start.length === 0) return "";
   const lines = screen.split("\n");
-  let header = -1;
-  for (let index = lines.length - 1; index >= 0; index--) {
-    if (RUN_HEADER.test(lines[index]!) && squash(lines[index]!).includes(start)) { header = index; break; }
+  for (let header = lines.length - 1; header >= 0; header--) {
+    if (!RUN_HEADER.test(lines[header]!) || !squash(lines[header]!).includes(start)) continue;
+    const body = echoedBody(lines, header, whole);
+    if (body !== null) return toolBody(lines, body, maxLines);
   }
-  if (header === -1) return "";
-  // the echo wraps over rows of its own: they are the command's text, not its output
-  const echoed = (line: string) => squash(line.replace(RUN_HEADER, "").replace(/^\s*│/, "").replace(TIMER_SUFFIX, "").replace(/\)$/, ""));
+  return "";
+}
+
+/** One row of a command's echo, squashed: its marker, timer and closing parenthesis left out. */
+const echoed = (line: string): string => squash(line.replace(RUN_HEADER, "").replace(/^\s*│/, "").replace(TIMER_SUFFIX, "").replace(/\)$/, ""));
+
+/**
+ * Where the output under a header starts, once the echo's own rows are passed (the echo wraps over
+ * rows of its own: they are the command's text, not its output); null when the echo is not this
+ * command, whole or cut with "…".
+ */
+function echoedBody(lines: readonly string[], header: number, whole: string): number | null {
   let echo = echoed(lines[header]!);
   let at = header + 1;
-  while (at < lines.length && echo.length < whole.length && lines[at]!.trim().length > 0) {
+  while (at < lines.length && echo.length < whole.length && !echo.endsWith("…") && lines[at]!.trim().length > 0) {
     const next = echo + echoed(lines[at]!);
-    if (!whole.startsWith(next)) break;
+    if (!whole.startsWith(next.replace(/…$/, ""))) break;
     echo = next;
     at++;
   }
+  if (echo === whole) return at;
+  const cut = echo.replace(/…$/, "");
+  return cut !== echo && cut.length > 0 && whole.startsWith(cut) ? at : null;
+}
+
+/** The call's own rows from `at`: up to a blank row, the input box's rule or a row back at the left edge, chrome left out. */
+function toolBody(lines: readonly string[], at: number, maxLines: number): string {
   const body: string[] = [];
   for (; at < lines.length; at++) {
     const line = lines[at]!;
-    // a blank row, the input box's rule or anything back at the left edge ends the call's block
     if (line.trim().length === 0 || /^[─━]{20,}/.test(line) || !/^\s/.test(line)) break;
     const text = line.replace(/^(\s*)[⎿└│]/, (_, space: string) => `${space} `);
     if (!RUN_CHROME.test(text.trim())) body.push(text.replace(TIMER_SUFFIX, ""));
@@ -174,33 +192,73 @@ export function screenToolOutput(screen: string, command: string, maxLines = 12)
 /** The id of the Codex exec session a call starts (named in its output) or polls (named in its input). */
 const codexSessionOf = (text: string): string | null => /session_id\W{1,3}(\d+)|session ID (\d+)/.exec(text)?.slice(1).find((id) => id !== undefined) ?? null;
 
-/** What one Codex exec call read of its command: the chunk's `output` string, or the text after an older one's `Output:` line. */
+/**
+ * What one Codex exec call read of its command: the chunk's `output` string, or the text after an
+ * older one's `Output:` line. A page carries a long output cut (`… trimmed`): its JSON string has
+ * no end then, and the part of it there is read as far as it goes.
+ */
 function codexChunk(output: string): string {
-  const json = /"output":("(?:[^"\\]|\\.)*")/.exec(output);
-  if (json !== null) {
-    try { return JSON.parse(json[1]!) as string; } catch { return ""; }
+  const at = output.indexOf('"output":"');
+  if (at !== -1) {
+    const rest = output.slice(at + '"output":"'.length).replace(/\n… trimmed$/, "");
+    const end = /^(?:[^"\\]|\\.)*/.exec(rest)![0];
+    // a cut string may stop inside an escape: what is left of it is dropped
+    const whole = end.replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, "");
+    try { return JSON.parse(`"${whole}"`) as string; } catch { return ""; }
   }
   if (!/session ID \d+/.test(output)) return "";
-  const at = output.lastIndexOf("Output:\n");
-  return at === -1 ? "" : output.slice(at + "Output:\n".length);
+  const text = output.lastIndexOf("Output:\n");
+  return text === -1 ? "" : output.slice(text + "Output:\n".length);
+}
+
+/** The earlier calls of `parts` on the running call's Codex exec session; null when it names none. */
+export function codexSessionCalls(parts: readonly ConversationPart[], part: ToolPart): ToolPart[] | null {
+  const session = codexSessionOf(part.input);
+  if (session === null) return null;
+  const calls: ToolPart[] = [];
+  for (const other of parts) {
+    if (other === part) break;
+    if (other.kind === "tool" && (codexSessionOf(other.input) ?? codexSessionOf(other.output)) === session) calls.push(other);
+  }
+  return calls;
 }
 
 /**
  * A running Codex command's output so far, from its own records: Codex runs a long command in an
  * exec session and records each chunk it read as the answer of a poll (`write_stdin`), so the
- * earlier calls of the turn on the running call's session hold it all. Null when the call names no
- * session (Codex's first call of a command, another agent's tool).
+ * earlier calls of the turn on the running call's session hold it all. `parts` is the whole turn:
+ * the agent's words between two polls do not hide the chunks before them. A chunk cut to the
+ * page's length is read from `whole` (the call's whole output by its `output_ref`) once it is
+ * there. Null when the call names no session (Codex's first call of a command, another agent's tool).
  */
-export function codexLiveOutput(parts: readonly ConversationPart[], part: ToolPart): string | null {
-  const session = codexSessionOf(part.input);
-  if (session === null) return null;
-  let text = "";
-  for (const other of parts) {
-    if (other === part) break;
-    if (other.kind !== "tool" || (codexSessionOf(other.input) ?? codexSessionOf(other.output)) !== session) continue;
-    text += codexChunk(other.output);
+export function codexLiveOutput(parts: readonly ConversationPart[], part: ToolPart, whole: ReadonlyMap<string, string> = new Map()): string | null {
+  const calls = codexSessionCalls(parts, part);
+  if (calls === null) return null;
+  return calls.map((call) => codexChunk((call.output_ref === undefined ? undefined : whole.get(call.output_ref)) ?? call.output)).join("").replace(/\s+$/, "");
+}
+
+/** The ids of Claude Code task files the turn's results name: a background call's own file, which is no running command's. */
+function claudeNamedTasks(parts: readonly ConversationPart[]): Set<string> {
+  const ids = new Set<string>();
+  for (const part of parts) {
+    if (part.kind !== "tool") continue;
+    for (const match of part.output.matchAll(/tasks\/([A-Za-z0-9_-]+)\.output|\bwith ID: ([A-Za-z0-9_-]+)/g)) ids.add(match[1] ?? match[2]!);
   }
-  return text.replace(/\s+$/, "");
+  return ids;
+}
+
+/**
+ * A running Claude Code command's output among the task files the server read for its turn
+ * (oldest first): the files a result of the turn names are background tasks' and are left out; the
+ * rest are the commands still running, in the order they started, as the turn's pending commands are.
+ */
+export function claudeLiveOutput(outputs: readonly { id: string; text: string }[], parts: readonly ConversationPart[], part: ToolPart): string {
+  const named = claudeNamedTasks(parts);
+  const files = outputs.filter((output) => !named.has(output.id));
+  const running = parts.filter((other): other is ToolPart => other.kind === "tool" && other.state === "pending" && isCommandTool(other.name));
+  const index = running.indexOf(part);
+  // a file per running command, the last ones started: one not made yet leaves this row empty
+  return index === -1 || files.length < running.length ? "" : files[files.length - running.length + index]!.text;
 }
 
 /**
