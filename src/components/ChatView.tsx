@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, Hourglass, Layers, SquareTerminal, Target,
+  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, Hourglass, Layers, LoaderCircle, SquareTerminal, Target,
   type LucideProps,
 } from "lucide-react";
 
@@ -34,7 +34,7 @@ import type { GalleryImage } from "../lib/imageViewer.ts";
 import { toolGalleryImage, userGalleryImages } from "../lib/chatImages.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
-import { answerItems, endedOnAnswer, foldedRequestsMatch, isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, runNames, splitTurn, turnSegments, type WorkSegment, todoGroups, visibleWorkParts, workBlockStartsOpen, workFailed, workSummary, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { answerItems, endedOnAnswer, foldedRequestsMatch, commandExitCode, elapsedSince, isCommandTool, liveOutputTail, isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, runNames, splitTurn, turnSegments, todoGroups, visibleWorkParts, workBlockStartsOpen, workFailed, workSummary, type WorkSegment, type TodoAttempt, type TodoGroup, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, goalWaitSources, goalWaitUntil, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -612,17 +612,75 @@ function LineImages({ paneId, images }: { paneId: string; images: readonly WorkI
   </div>;
 }
 
+/** The time, once a second while `active`: a running head's elapsed time counts up as the terminal's does. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+/** "Working… · 12s": a live head's elapsed time, from the turn's start; nothing when it is unknown. */
+function Elapsed({ since }: { since: string | null }) {
+  const elapsed = elapsedSince(since, useNow(since !== null));
+  return elapsed === null ? null : <span className="work-block-elapsed">· {elapsed}</span>;
+}
+
+/** How often a running command's live output is read from the pane, and how much of the screen. */
+const LIVE_OUTPUT_MS = 1000;
+const LIVE_OUTPUT_LINES = 40;
+
+/**
+ * A running command's output while it runs. The transcripts record it only once the call ends, so
+ * it is the end of the pane's own screen (herdr's pane.read: read only, nothing typed, no focus
+ * moved), read again each second while the row is open and the page shown.
+ */
+function LiveOutput({ paneId }: { paneId: string }) {
+  const t = useT();
+  const { fetchPaneTranscript } = useMachineApi();
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    let stopped = false;
+    let busy = false;
+    const read = async (): Promise<void> => {
+      if (busy || document.visibilityState === "hidden") return;
+      busy = true;
+      try {
+        const result = await fetchPaneTranscript(paneId, LIVE_OUTPUT_LINES);
+        if (!stopped) setText(liveOutputTail(result.text));
+      } catch {
+        // a missed read leaves the last one up; the next tick tries again
+      } finally {
+        busy = false;
+      }
+    };
+    void read();
+    const timer = setInterval(() => void read(), LIVE_OUTPUT_MS);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [paneId, fetchPaneTranscript]);
+  if (text === null || text.length === 0) return null;
+  return <section className="chat-tool-output is-live"><h4>{t("Live output (terminal)")}</h4><pre className="chat-tool-io">{text}</pre></section>;
+}
+
 /**
  * One row of a work block: `▸ Ran bun test`, expanding to the call's input and output. A tool the
  * verb table knows reads as verb + object, and its id moves to the title and the opened detail;
  * any other keeps its id in front, as the agent names it.
  */
-function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: ToolPartType; stateKey: string; state?: TodoAttempt["state"] }) {
+function WorkRow({ paneId, part, stateKey, state, live = false }: { paneId: string; part: ToolPartType; stateKey: string; state?: TodoAttempt["state"]; live?: boolean }) {
   const t = useT();
   // the files an output names open from it ("saved /tmp/shot/t0.png")
   const openFile = useContext(OpenFileContext);
-  const [chosen, setOpen] = useChatRowToggle(stateKey, false);
-  const open = chosen === true;
+  // a call of the running turn that has not answered: it runs now, as the terminal's spinner says
+  const running = live && part.state === "pending";
+  // a running command opens on its live output, as the terminal shows it; once it ends it folds
+  const watching = running && isCommandTool(part.name);
+  const [chosen, setOpen] = useChatRowToggle(stateKey, null);
+  const open = chosen ?? watching;
   const focus = useRowFocus<HTMLButtonElement>(stateKey);
   // an update inside a todo run: the run already shows the list it left, so the update shows what it sent and got back
   const attempt = state !== undefined;
@@ -636,26 +694,30 @@ function WorkRow({ paneId, part, stateKey, state }: { paneId: string; part: Tool
   const stateWord = state === undefined || part.error ? null
     : state === "ok" ? t("succeeded") : state === "pending" ? t("pending") : state === "error" ? t("failed") : t("outcome not recorded");
   const images = useMemo(() => linePictures([part]), [part]);
+  // what the terminal prints under a finished command
+  const exitCode = commandExitCode(part);
   return <div className={`work-row${part.error ? " is-error" : ""}`}>
-    <div className="work-row-line">
-      <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)} {...focus}>
-        <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
-        {!narration && (verb !== null ? <span className="work-row-name is-verb">{t(verb)}</span> : <span className="work-row-name">{part.name}</span>)}
-        {/* the spaces are for a screen reader: the row is read as words, not "Ranbun test" */}
-        {!narration && part.error && verb === null && <>{" "}<span className="work-row-failed">{t("failed")}</span></>}
-        {summary.length > 0 && summary !== part.name && <>{" "}<span className="work-row-summary">{summary}</span></>}
-        {/* after a verb, or the agent's own sentence, the word follows it: "Ran pnpm test failed", not "Ran failed pnpm test" */}
-        {part.error && (narration || verb !== null) && <>{" "}<span className="work-row-failed">{t("failed")}</span></>}
-        {stateWord !== null && <>{" "}<span className={state === "error" ? "work-row-failed" : `work-row-state is-${state}`}>{stateWord}</span></>}
-      </button>
-      {/* opened, the row shows its pictures larger in its detail */}
-      {!open && <LineImages paneId={paneId} images={images} />}
-    </div>
-    {open && <div className="work-row-detail">{verb !== null && <p className="work-row-tool">{part.name}</p>}{attempt ? <RawToolInput part={part} /> : <ToolInputView part={part} />}<ToolImages paneId={paneId} part={part} />{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(output, openFile)}</pre>
-      {part.output_ref !== undefined && whole.text === null && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
-        {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
-      </button>}</section>}</div>}
-  </div>;
+  <div className="work-row-line">
+    <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)} {...focus}>
+      <span className="work-row-caret" aria-hidden="true">{running ? <LoaderCircle className="work-row-spinner" /> : open ? <ChevronDown /> : <ChevronRight />}</span>
+      {!narration && (verb !== null ? <span className="work-row-name is-verb">{t(verb)}</span> : <span className="work-row-name">{part.name}</span>)}
+      {/* the spaces are for a screen reader: the row is read as words, not "Ranbun test" */}
+      {!narration && part.error && verb === null && <>{" "}<span className="work-row-failed">{t("failed")}</span></>}
+      {summary.length > 0 && summary !== part.name && <>{" "}<span className="work-row-summary">{summary}</span></>}
+      {/* after a verb, or the agent's own sentence, the word follows it: "Ran pnpm test failed", not "Ran failed pnpm test" */}
+      {part.error && (narration || verb !== null) && <>{" "}<span className="work-row-failed">{t("failed")}</span></>}
+      {stateWord !== null && <>{" "}<span className={state === "error" ? "work-row-failed" : `work-row-state is-${state}`}>{stateWord}</span></>}
+      {exitCode !== null && <>{" "}<span className={`work-row-state is-exit${exitCode === 0 ? "" : " is-error"}`}>{t("exit {n}", { n: exitCode })}</span></>}
+      {running && state === undefined && <>{" "}<span className="work-row-state is-running">{t("running")}</span></>}
+    </button>
+    {/* opened, the row shows its pictures larger in its detail */}
+    {!open && <LineImages paneId={paneId} images={images} />}
+  </div>
+  {open && <div className="work-row-detail">{verb !== null && <p className="work-row-tool">{part.name}</p>}{attempt ? <RawToolInput part={part} /> : <ToolInputView part={part} />}<ToolImages paneId={paneId} part={part} />{watching && <LiveOutput paneId={paneId} />}{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(output, openFile)}</pre>
+    {part.output_ref !== undefined && whole.text === null && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
+      {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
+    </button>}</section>}</div>}
+</div>;
 }
 
 /**
@@ -731,9 +793,9 @@ function ThinkingRow({ text, stateKey, defaultOpen }: { text: string; stateKey: 
  * the first row draws takes its place without a change of look; nothing to open yet, so its caret
  * holds only the room.
  */
-function PendingWorkHead({ title, className = "", reserved = false }: { title: string; className?: string; reserved?: boolean }) {
+function PendingWorkHead({ title, className = "", reserved = false, since = null }: { title: string; className?: string; reserved?: boolean; since?: string | null }) {
   return <div className={`work-block is-live is-pending ${className}`} role="status" aria-hidden={reserved || undefined}>
-    <div className="work-block-head"><span className="work-row-caret" aria-hidden="true" /><span className="work-block-title">{title}</span></div>
+    <div className="work-block-head"><span className="work-row-caret" aria-hidden="true" /><span className="work-block-title">{title}</span><Elapsed since={since} /></div>
   </div>;
 }
 
@@ -756,10 +818,12 @@ function turnWork(parts: ConversationPart[], rowKey: string): TurnWork {
   };
 }
 
-function WorkBlockView({ paneId, parts, work, memoryKey, duration, live, waiting, defaultOpen, showThinking, expandThinking, pendingHead }: { paneId: string; parts: ConversationPart[]; work: TurnWork; memoryKey: string; duration: string | null; live: boolean; waiting: boolean; defaultOpen: boolean; showThinking: boolean; expandThinking: boolean; pendingHead: boolean }) {
+function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThinking, expandThinking, foldWork, since }: { paneId: string; parts: ConversationPart[]; work: TurnWork; memoryKey: string; live: boolean; waiting: boolean; showThinking: boolean; expandThinking: boolean; foldWork: boolean; since: string | null }) {
   const t = useT();
+  // named by its first part's place in the turn: appended parts never rename it
   const [chosenOpen, setOpen] = useChatRowToggle(memoryKey, null);
-  const open = chosenOpen ?? defaultOpen;
+  // only the run the agent is in now is open; a run it left reads as the terminal's one folded line
+  const open = chosenOpen ?? workBlockStartsOpen({ live, waiting, last: false }, parts, foldWork);
   // reading or working inside the block is a choice to keep it: the fold at the end of the turn
   // must not take the rows from under the reader's focus or close the row they opened
   const keepOpen = () => { if (chosenOpen === null) setOpen(true); };
@@ -767,17 +831,19 @@ function WorkBlockView({ paneId, parts, work, memoryKey, duration, live, waiting
   const toolKey = (part: ConversationPart) => `tool:${at.get(part)}`;
   const images = useMemo(() => linePictures(parts), [parts]);
   const visible = visibleWorkParts(parts, showThinking);
-  if (visible.length === 0) return live && !waiting && pendingHead ? <PendingWorkHead title={t("Working…")} /> : null;
+  if (visible.length === 0) return !live ? null : waiting ? <PendingWorkHead className="is-waiting" title={t("Needs you")} /> : <PendingWorkHead title={t("Working…")} since={since} />;
   const summary = workSummary(parts);
   const failed = workFailed(parts);
-  // a blocked agent is not working: the open block takes the sidebar's words for it
-  const title = waiting ? t("Needs you") : live ? t("Working…") : duration !== null ? t("Worked for {duration}", { duration }) : t("Worked");
+  // a blocked agent is not working: the open block takes the sidebar's words for it. A settled run
+  // is named by what it did, as the terminal's "Ran 2 commands"; the turn's time closes the turn
+  const title = waiting ? t("Needs you") : live ? t("Working…") : summary.length > 0 ? summary : t("Worked");
   return <section className={`work-block${live ? " is-live" : ""}${waiting ? " is-waiting" : ""}${open ? "" : " is-folded"}`}>
     <div className="work-block-line">
       <button type="button" className="work-block-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
         <span className="work-block-title">{title}</span>
-        {summary.length > 0 && <span className="work-block-summary">· {summary}</span>}
+        {live && !waiting && <Elapsed since={since} />}
+        {(live || waiting) && summary.length > 0 && <span className="work-block-summary">· {summary}</span>}
         {/* its own span: the counts before it are cut on a narrow screen, a failure never is */}
         {failed > 0 && <span className="work-block-failed">· {t("{n} failed", { n: failed })}</span>}
       </button>
@@ -790,7 +856,7 @@ function WorkBlockView({ paneId, parts, work, memoryKey, duration, live, waiting
         part.kind === "thinking" ? <ThinkingRow key={`thinking:${at.get(part)}`} stateKey={`thinking:${at.get(part)}`} text={part.text} defaultOpen={expandThinking} />
           : part.kind === "text" ? <div key={`text:${at.get(part)}`} className="work-narration"><Markdown>{part.text}</Markdown></div>
             : part.kind === "tool" ? groups.has(part) ? <TodoGroupRow key={groups.get(part)!.id} paneId={paneId} group={groups.get(part)!} stateKeyOf={toolKey} />
-              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} /> : null)}
+              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} /> : null)}
       </div>
     </AnimatedHeight>
   </section>;
@@ -1220,14 +1286,11 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
   // a failed request drawn as its row is not the answer: Copy leaves it out
   const answerText = answer.filter((part) => !requestDetails || part.failed !== true).map((part) => part.text).join("\n\n");
   const goal = turnGoal(turn.parts);
-  // in the agent's own order, as the terminal shows it: words written before a tool stay above it
+  // the turn as the terminal draws it: words and runs of tool calls in the order they happened
   const segments = turnSegments(turn.parts);
-  const runs = segments.filter((segment): segment is WorkSegment => segment.kind === "work");
-  // the turn's head is its last run that draws a row: it reads Working… while the turn runs and
-  // carries the turn's duration once it settles, even below the answer when tools came after it.
-  // The runs before it have the agent's words after them: they are done, read Worked and fold.
-  const head = runs.filter((run) => visibleWorkParts(run.parts, showThinking).length > 0).at(-1) ?? runs.at(-1);
+  const duration = live ? null : formatWorkDuration(turn.ts, turn.end_ts ?? null);
   const work = turnWork(turn.parts, rowKey);
+  const runs = segments.flatMap((segment) => segment.kind === "work" ? [segment] : []);
   // a run keeps its block and fold while its parts change (runNames); the stand-in is named by the
   // part that will start the turn's first run, and is drawn only while the turn has none
   const drawn = (run: WorkSegment): boolean => visibleWorkParts(run.parts, showThinking).length > 0;
@@ -1236,26 +1299,23 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
   // comes first once the two merge (#2111)
   const partNames = (shown: boolean) => new Map(runs.flatMap((run, index) => drawn(run) === shown ? run.parts.map((part) => [work.at.get(part)!, names[index]!] as const) : []));
   named.current = { runs: partNames(true), dormant: partNames(false) };
-  // `null`: the head standing in while the running turn has no work yet
-  const block = (run: WorkSegment | null) => {
-    const isHead = run === null || run === head;
-    const key = run === null ? `work:${turn.parts.length}` : names[runs.indexOf(run)]!;
-    return <WorkBlockView key={key} paneId={paneId} parts={run?.parts ?? []} work={work} memoryKey={key}
-      duration={isHead ? formatWorkDuration(turn.ts, turn.end_ts ?? null) : null} live={live && isHead} waiting={waiting && isHead}
-      // a settled turn folds its work, unless words the agent said last are in its final run
-      defaultOpen={workBlockStartsOpen({ live: live && isHead, waiting: waiting && isHead, last: run !== null && run === segments.at(-1) }, turn.parts, foldWork)}
-      showThinking={showThinking} expandThinking={expandThinking} pendingHead={isHead && answer.length === 0} />;
-  };
   return <article className="chat-turn chat-turn-agent">
     <SkillActivityList parts={turn.parts} />
     {goal !== null && <GoalActivity goal={goal} />}
-    {/* the pending head stands only above no answer: one above words would leave a gap when the turn ends */}
-    {head === undefined && live && answer.length === 0 && block(null)}
-    {segments.map((segment) => segment.kind === "work" ? block(segment)
-      : answerItems(segment.parts, requestDetails).map((item) => item.kind === "text"
-        ? <Markdown key={`answer:${work.at.get(item.part)}`} skills={skills}>{item.part.text}</Markdown>
-        // a later part of the turn is a later request: what the record shows, not whether it was a retry
-        : <FailedRequests key={`failed:${work.at.get(item.parts[0]!)}`} at={work.at.get(item.parts[0]!)!} parts={item.parts} followed={work.at.get(item.parts.at(-1)!)! < turn.parts.length - 1} />))}
+    {segments.map((segment, index) => {
+      const last = index === segments.length - 1;
+      return segment.kind === "answer"
+        ? answerItems(segment.parts, requestDetails).map((item) => item.kind === "text"
+          ? <Markdown key={`text:${work.at.get(item.part)}`} skills={skills}>{item.part.text}</Markdown>
+          : <FailedRequests key={`failed:${work.at.get(item.parts[0]!)}`} at={work.at.get(item.parts[0]!)!} parts={item.parts} followed={work.at.get(item.parts.at(-1)!)! < turn.parts.length - 1} />)
+        : <WorkBlockView key={names[runs.indexOf(segment)]!} paneId={paneId} parts={segment.parts} work={work} memoryKey={names[runs.indexOf(segment)]!} live={live && last} waiting={waiting && last} showThinking={showThinking} expandThinking={expandThinking} foldWork={foldWork} since={turn.ts} />;
+    })}
+    {/* a running turn that has written nothing yet: the head stands where its first run will be */}
+    {live && !waiting && segments.length === 0 && <PendingWorkHead title={t("Working…")} since={turn.ts} />}
+    {/* a blocked agent whose newest part is words: it waits under them, where the terminal draws its prompt */}
+    {waiting && segments.at(-1)?.kind !== "work" && <PendingWorkHead className="is-waiting" title={t("Needs you")} />}
+    {/* the terminal's "✻ Worked for 52s" line: always shown, it closes a turn that did work */}
+    {duration !== null && segments.some((segment) => segment.kind === "work") && <p className="chat-turn-duration">{t("Worked for {duration}", { duration })}</p>}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       {/* a mouse reads one copy glyph and the words "Plain text"; touch reads the two formats */}
       <CopyButton className="chat-meta-btn" text={answerText} label={t("Copy as markdown")} onResult={copied}><span className="chat-meta-fmt">MD</span></CopyButton>
@@ -2483,12 +2543,11 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const timer = window.setTimeout(() => setAnswerWait(null), ANSWER_READ_WAIT_MS);
     return () => window.clearTimeout(timer);
   }, [answerWait, awaitedPage]);
-  const lastSplit = lastShownTurn !== undefined && isLiveWorkTurn(lastShownTurn, true, workStatus, finishedBeforeSend) ? splitTurn(lastShownTurn.parts) : null;
-  // the last turn runs and already says the agent works: its work block, or the head standing in
-  // for one while it has no answer yet
-  const workBlockLive = lastSplit !== null && (visibleWorkParts(lastSplit.work, settings.showThinking).length > 0 || lastSplit.answer.length === 0);
-  // a running turn with words and no work rows: the activity is a line under its words, as before
-  const answerOnlyLive = lastSplit !== null && !workBlockLive;
+  const lastSegments = lastShownTurn !== undefined && isLiveWorkTurn(lastShownTurn, true, workStatus, finishedBeforeSend) ? turnSegments(lastShownTurn.parts) : null;
+  // The running turn's final action run carries its activity; prose leaves the activity below it.
+  const workBlockLive = lastSegments !== null && lastSegments.at(-1)?.kind !== "answer";
+  const answerOnlyLive = lastSegments !== null && !workBlockLive;
+  const activitySince = state.source === "conversation" ? lastShownTurn?.ts ?? null : null;
   // the last turn ended on its answer, named by its row (two turns can share a start time)
   const answeredRow = lastShownTurn?.role === "assistant" && endedOnAnswer(lastShownTurn) ? slots.current.rows[shownTurns.length - 1]?.key ?? null : null;
   // the answered row the pane was last seen at rest under: working again after that, a turn began.
@@ -2774,12 +2833,12 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           turn's own head. None seen under an answer while the status may still be catching up with it. */}
       {connected && loaded && !ended && activity !== "idle" && agentStatus !== "blocked" && prompt === null && !(greeted && blank) && (activity === "thinking" || !workBlockLive) && (workBlockLive
         // under the running turn's own head, a second head would read as a second block
-        ? <p className={`${activityClass} chat-activity-line`} role="status" aria-hidden={activityReserved || undefined}><CircleDot aria-hidden="true" />{t("Thinking…")}</p>
+        ? <p className={`${activityClass} chat-activity-line`} role="status" aria-hidden={activityReserved || undefined}><CircleDot aria-hidden="true" />{t("Thinking…")}<Elapsed since={activitySince} /></p>
         // under a running turn's words: removing a line below them moves nothing when it ends
         : answerOnlyLive
-          ? <p className={`${activityClass} chat-activity-line`} role="status" aria-hidden={activityReserved || undefined}><CircleDot aria-hidden="true" />{activity === "thinking" ? t("Thinking…") : t("Working…")}</p>
+          ? <p className={`${activityClass} chat-activity-line`} role="status" aria-hidden={activityReserved || undefined}><CircleDot aria-hidden="true" />{activity === "thinking" ? t("Thinking…") : t("Working…")}<Elapsed since={activitySince} /></p>
           // before the turn has a row at all, where its work block will be drawn
-          : <PendingWorkHead className={activityClass} reserved={activityReserved} title={activity === "thinking" ? t("Thinking…") : t("Working…")} />)}
+          : <PendingWorkHead className={activityClass} reserved={activityReserved} title={activity === "thinking" ? t("Thinking…") : t("Working…")} since={activitySince} />)}
       {loaded && empty && error === null && prompt === null && activity === "idle" && !(greeted && blank) && sentWaiting.length === 0 && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}
   </>;
