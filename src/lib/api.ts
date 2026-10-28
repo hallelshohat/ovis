@@ -36,6 +36,7 @@ import type {
   PaneInfo,
   PanePlan,
   PanePromptResponse,
+  PaneLiveOutputResponse,
   PaneReadResult,
   PaneResized,
   RepoBranchComparison,
@@ -289,6 +290,15 @@ export async function fetchPaneTranscript(paneId: string, lines: number, machine
     wrappedOnly.add(machineId);
     return read("recent");
   }
+}
+
+/**
+ * GET /api/pane/live-output: what the running Claude Code commands of a turn started at `since`
+ * have printed so far, oldest first; null when the pane has no Claude session to read it from.
+ */
+export async function fetchPaneLiveOutput(paneId: string, since: string | null, machineId = "local"): Promise<string[] | null> {
+  const query = new URLSearchParams({ pane_id: paneId, since: since ?? "" });
+  return (await withChatReadDeadline((signal) => getJson<PaneLiveOutputResponse>(machinePath(machineId, `pane/live-output?${query.toString()}`), { signal }), chatReadDeadlineMs(machineId))).outputs;
 }
 
 /** Which turns (ConversationResponse.cursor): the page `before` a cursor, not past `since`; the newest ones `from` a held start. */
