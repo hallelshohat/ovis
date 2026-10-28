@@ -1721,9 +1721,10 @@ button {
 
 /* The workbench (Codex app, Conductor): from 641px the chrome (header, sidebar, tab rows) is one
    surface with no rules between its parts, and each pane is a panel inset from it, its own edge
-   and corners, so the work reads as the thing on the desk. A split shows two panels. A phone keeps
-   the pane edge to edge. */
-@media (min-width: 641px) {
+   and corners, so the work reads as the thing on the desk. A split shows two panels. A touch screen
+   (a phone, also turned sideways, or a tablet) keeps the pane edge to edge: its key bar and message
+   box sit on the screen's bottom edge, over the home indicator's room. */
+@media (min-width: 641px) and (pointer: fine) {
   .app-header,
   .tab-strip,
   .tab-strip-row,

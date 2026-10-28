@@ -19,13 +19,14 @@ stays the base every theme block overrides and the look a browser keeps when it 
 while amber was the default; the saved theme, not amber, is the page's first frame (see Rules). Settings are saved on a user's first
 change, so a browser that never changed one moves to Codex with everyone new.
 
-The app is a workbench (the Codex app, Conductor): from `641px` the chrome (header, sidebar, tab
+The app is a workbench (the Codex app, Conductor): from `641px`, with a mouse or trackpad, the chrome (header, sidebar, tab
 rows) is one surface with no rules between its parts, and each pane is a panel inset from it by
 `--panel-inset`, with its own hairline edge and `--panel-radius` corners, so the work reads as the
 thing on the desk. A split shows two panels. Beside the panel, from `1200px`, the inspector column
 holds what the selected pane is about (its pull requests, below). Dialogs that hold a form or a list
 open as a sheet down the right side so the chat stays in view; a diff takes the panel's place. A
-phone keeps the pane edge to edge and its bottom sheets.
+touch screen keeps the pane edge to edge (its key bar sits on the screen's bottom edge), and a
+phone its bottom sheets.
 
 The sidebar is one grid: a leading cell that says who or what a row is (the coding agent's brand
 mark, else the place's own glyph), a title, and a trailing cell that says how it is. Workspaces
