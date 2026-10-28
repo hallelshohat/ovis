@@ -36,22 +36,28 @@ describe("an agent turn's work blocks", () => {
     }
   });
 
-  it("draws each run where the agent ran it, with the turn's state and duration on the last", () => {
+  it("draws each run where the agent ran it, with the duration after the answer", () => {
     const parts = [text("Checking first."), tool("ls"), text("Now the loans."), tool("cat loans"), text("No book is on loan.")];
     const settled = render(parts, { live: false });
-    const order = ["Checking first.", "Worked<", "Now the loans.", "Worked for 1m", "No book is on loan."].map((needle) => settled.indexOf(needle));
+    const order = ["Checking first.", "1 command<", "Now the loans.", "No book is on loan.", "Worked for 1m"].map((needle) => settled.indexOf(needle));
     expect(order.every((at, index) => at >= 0 && (index === 0 || at > order[index - 1]!))).toBe(true);
-    expect(titles(settled)).toEqual(["Worked", "Worked for 1m"]);
+    expect(titles(settled)).toEqual(["1 command", "1 command"]);
     expect(expanded(settled)).toEqual([false, false]);
     const live = render(parts, { live: true });
-    expect(titles(live)).toEqual(["Worked", "Working…"]);
-    expect(expanded(live)).toEqual([false, true]);
-    expect(titles(render(parts, { live: true, waiting: true }))).toEqual(["Worked", "Needs you"]);
+    expect(titles(live)).toEqual(["1 command", "1 command"]);
+    expect(expanded(live)).toEqual([false, false]);
+    expect(live).not.toContain("chat-turn-duration");
+    expect(titles(render(parts, { live: true, waiting: true }))).toEqual(["1 command", "1 command", "Needs you"]);
+    const running = parts.slice(0, -1);
+    expect(titles(render(running, { live: true }))).toEqual(["1 command", "Working…"]);
+    expect(expanded(render(running, { live: true }))).toEqual([false, true]);
+    expect(titles(render(running, { live: true, waiting: true }))).toEqual(["1 command", "Needs you"]);
   });
 
   it("keeps one block for tools followed by the answer", () => {
     const html = render([tool("ls"), tool("cat a"), text("Done.")], { live: false });
-    expect(titles(html)).toEqual(["Worked for 1m"]);
-    expect(html.indexOf("Worked for 1m")).toBeLessThan(html.indexOf("Done."));
+    expect(titles(html)).toEqual(["2 commands"]);
+    expect(html.indexOf("2 commands")).toBeLessThan(html.indexOf("Done."));
+    expect(html.indexOf("Done.")).toBeLessThan(html.indexOf("Worked for 1m"));
   });
 });

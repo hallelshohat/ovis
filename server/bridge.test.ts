@@ -266,15 +266,16 @@ describe("loopback relay", () => {
   });
 
   /** a client sending `total` bytes through the relay to a server that reads nothing */
-  async function stuckUpstream(total: number): Promise<{ client: Socket; relay: { stop(): void }; written: Promise<void>; clientClosed: Promise<void>; upstreamClosed: Promise<void> }> {
+  async function stuckUpstream(total: number): Promise<{ client: Socket; relay: { stop(): void }; written: Promise<void>; clientClosed: Promise<void>; relayPeerClosed: Promise<void> }> {
     const upstreamConnected = Promise.withResolvers<void>();
-    const upstreamClosed = Promise.withResolvers<void>();
+    const relayPeerClosed = Promise.withResolvers<void>();
     const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: {
       open(socket) { socket.pause(); upstreamConnected.resolve(); },
       data() {},
-      close() { upstreamClosed.resolve(); },
     } });
     stops.push(() => server.stop(true));
+    const connections = spyOn(Bun, "connect");
+    stops.push(() => connections.mockRestore());
     const relay = loopbackRelay("127.0.0.1", server.port);
     stops.push(() => relay.stop());
     const written = Promise.withResolvers<void>();
@@ -293,34 +294,41 @@ describe("loopback relay", () => {
     };
     const client = await Bun.connect({ hostname: "127.0.0.1", port: relay.port, socket: { open: push, drain: push, data() {}, close() { clientClosed.resolve(); } } });
     await upstreamConnected.promise;
-    return { client, relay, written: written.promise, clientClosed: clientClosed.promise, upstreamClosed: upstreamClosed.promise };
+    // A paused macOS receiver can miss a reset; observe the relay's real outgoing socket closing.
+    const attempt = connections.mock.calls.findIndex(([options]) => "port" in options && options.port === server.port);
+    const handlers = connections.mock.calls[attempt]![0].socket;
+    const peer = await connections.mock.results[attempt]!.value as Socket;
+    connections.mockRestore();
+    if (peer.readyState === -1 || peer.readyState === 0) relayPeerClosed.resolve();
+    else peer.reload({ socket: { ...handlers, close(socket) { handlers.close?.(socket); relayPeerClosed.resolve(); } } });
+    return { client, relay, written: written.promise, clientClosed: clientClosed.promise, relayPeerClosed: relayPeerClosed.promise };
   }
 
   it("lets go of a server that reads nothing once its client leaves", async () => {
-    const { client, written, upstreamClosed } = await stuckUpstream(16 * 1024 * 1024);
+    const { client, written, relayPeerClosed } = await stuckUpstream(16 * 1024 * 1024);
     await written;
     // Bun's forced reset after a large write is not reliably delivered on macOS; send a FIN here.
     client.end();
-    await upstreamClosed;
+    await relayPeerClosed;
   });
 
   it("lets go of a stalled server when its connected client resets the connection", async () => {
-    const { client, written, upstreamClosed } = await stuckUpstream(1);
+    const { client, written, relayPeerClosed } = await stuckUpstream(1);
     await written;
     client.terminate();
-    await upstreamClosed;
+    await relayPeerClosed;
   });
 
   it("lets go of a server that reads nothing when it stops", async () => {
-    const { relay, written, upstreamClosed } = await stuckUpstream(16 * 1024 * 1024);
+    const { relay, written, relayPeerClosed } = await stuckUpstream(16 * 1024 * 1024);
     await written;
     relay.stop();
-    await upstreamClosed;
+    await relayPeerClosed;
   });
 
   it("cuts off a client that gets too far ahead of a server that reads nothing", async () => {
-    const { clientClosed, upstreamClosed } = await stuckUpstream(RELAY_CLIENT_AHEAD_BYTES + 16 * 1024 * 1024);
-    await Promise.all([clientClosed, upstreamClosed]);
+    const { clientClosed, relayPeerClosed } = await stuckUpstream(RELAY_CLIENT_AHEAD_BYTES + 16 * 1024 * 1024);
+    await Promise.all([clientClosed, relayPeerClosed]);
   });
 
   // macOS gives its loopback interface 127.0.0.1 alone
