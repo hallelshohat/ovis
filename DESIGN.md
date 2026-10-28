@@ -19,6 +19,14 @@ stays the base every theme block overrides and the look a browser keeps when it 
 while amber was the default; the saved theme, not amber, is the page's first frame (see Rules). Settings are saved on a user's first
 change, so a browser that never changed one moves to Codex with everyone new.
 
+The app is a workbench (the Codex app, Conductor): from `641px` the chrome (header, sidebar, tab
+rows) is one surface with no rules between its parts, and each pane is a panel inset from it by
+`--panel-inset`, with its own hairline edge and `--panel-radius` corners, so the work reads as the
+thing on the desk. A split shows two panels. Beside the panel, from `1200px`, the inspector column
+holds what the selected pane is about (its pull requests, below). Dialogs that hold a form or a list
+open as a sheet down the right side so the chat stays in view; a diff takes the panel's place. A
+phone keeps the pane edge to edge and its bottom sheets.
+
 The sidebar is one grid: a leading cell that says who or what a row is (the coding agent's brand
 mark, else the place's own glyph), a title, and a trailing cell that says how it is. Workspaces
 and Agents are independent lists, as in herdr's Spaces and Agents panels; tab and pane navigation
@@ -1901,6 +1909,40 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   message), so those are not greeted; an omo session not yet written answers an empty
   conversation and is.
 
+### Inspector (`.inspector`)
+- A column on the chrome's surface beside the work panel (`--inspector-w`), from `1200px`: its head
+  is a section label and a close; Escape inside it closes it, and it never takes the focus on its
+  own. It slides in from `16px` (`--dur-slow`). It shows only when the selected pane has something
+  to show (today: pull requests), and a docked file or page takes its place. Below `1200px` the same
+  content opens as a side sheet, and on a phone as a bottom sheet, from the header.
+
+### Pull requests (`.pr-badge`, `.pr-card`, `.pr-event`)
+- A chat holds a list of pull requests, never one (T3 Code's threads keep a list too; Conductor's
+  one workspace, one PR, and the Codex app's one PR per task, do not fit an agent that switches
+  branches in one worktree). The server (`server/pull-requests/`) collects the GitHub PR links the
+  chat's transcript wrote and the PRs of every branch the chat ran on (Claude Code's per-message
+  `gitBranch`, Codex's session-start branch, else the branch seen while the chat was open), and asks
+  `gh` in the pane's folder. A PR found only through a branch that ended before the chat began is
+  left out; one the chat links stays. Open PRs are read again after the chat has been quiet `10s`
+  past a change and every `60s` while the page is seen; merged and closed ones are read once.
+- One leads: the one that needs the person first (failing checks, requested changes, a requested
+  review, running checks, ready to merge, draft, merged, closed). Its badge is the state's colour
+  (`--pr-*`, aliases of the agent states', so every palette draws it) and a glyph; `+N` counts the
+  chat's other open ones. A sidebar row draws the glyph alone, the composer strip the number, the
+  header the number and the state word (the word goes below `768px`, the number below `480px`).
+  Another repository's PR is named `repo#N`. A state change fades the colour (`--dur-base`).
+- The inspector lists the open ones first, the lead drawn whole (title, `head → base`, lines, every
+  check, the review), the others one line each, then the merged and closed ones under Earlier in this
+  chat. Ask … to fix puts a request naming the failing checks in the message box, after anything
+  already there, and focuses it: nothing is sent. Squash and merge shows only on an open lead with
+  green checks, asks first (a confirm), and the server reads the PR again before it merges and says
+  what it is now when it no longer can (`409 pr_not_mergeable`).
+- The thread tells the story where it happened: one line per PR opened, merged or closed, edged in
+  its state's colour, and a quieter line for a branch switch, each placed before the first turn that
+  began after it.
+- No `gh`, a signed-out `gh` or a folder with no GitHub remote draws nothing on the rows; the
+  inspector says the one sentence for it.
+
 ### Work block (`.work-block`, `.work-row`)
 - One per assistant turn: a `▸ Worked for 7s · 1 edit · 2 commands` header (duration = next turn's
   timestamp minus this one's; "Working…" in `--status-working` behind a breathing dot while the agent runs;
@@ -1908,6 +1950,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   agent is blocked, by the pane's status and not by whether a prompt card was parsed) over
   one-line rows on the header's own left edge, which is the prose edge too (the hover plate
   overhangs it by `--space-1`).
+- The rows hang on a timeline (the Codex app's run log): a `--timeline-rail` rail down the block's
+  left, `--status-working` while the agent runs, and a `--timeline-node` node per call in its
+  state's colour (done, error) or an open ring while the call is still running, which fills as it
+  settles (`--dur-base`). A row's detail opens and folds with the block's own height motion.
 - A row is caret + verb + object: `▸ Read src/metrics.ts`, `▸ Edited src/pages/Reports.tsx`,
   `▸ Ran pnpm test`. The caret is always shown; there is no per-tool icon and no separator. The
   verb (Read, Edited, Wrote, Ran; `lib/toolVerbs.ts`, by exact tool id) is in the interface face,
