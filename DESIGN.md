@@ -151,6 +151,16 @@ The glass tokens are expressions over the palette above, not colors of their own
 | Glass card | `--card-glass` | `color-mix(in srgb, var(--bg-elevated) 80%, transparent)` | same expression |
 | Glass blur | `--glass-blur` | `saturate(180%) blur(20px)` | same |
 
+A pull request's state takes the agent states' colours, so every palette draws it:
+
+| Role | Token | Dark | Light |
+|------|-------|------|-------|
+| PR open | `--pr-open` | `var(--status-done)` | same expression |
+| PR checks failing | `--pr-failing` | `var(--status-blocked)` | same expression |
+| PR draft | `--pr-draft` | `var(--status-idle)` | same expression |
+| PR review requested | `--pr-review` | `var(--notice)` | same expression |
+| PR merged | `--pr-merged` | `var(--syntax-meta)` | same expression |
+
 `--pdf-page` is the one color with the same value in both columns, on purpose: a PDF page is
 paper, not UI, and the viewer (`.file-viewer-pdf`) must not tint it for the theme. It is named in
 `src/styles.css` under the same note and no theme or palette block overrides it.
@@ -705,6 +715,13 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--chat-fold-lines` | `12` | — | Lines of prose a long user message shows before it folds behind Show full message (Chat turn); `lib/userMessageFold.ts` folds a message past the same count |
 | `--palette-w` | `640px` | — | Command palette |
 | `--palette-top` | `12vh` | — | Palette top offset |
+| `--panel-inset` | `var(--space-2)` | — | Workbench: the gap between the app's edge and the inset work panel, and around a desktop side sheet |
+| `--panel-radius` | `var(--radius-lg)` | — | Workbench: the work panel's corners |
+| `--inspector-w` | `300px` | — | Workbench: the inspector column beside the work panel, until the person drags its edge |
+| `--side-sheet-w` | `480px` | — | A desktop side sheet (a dialog that holds a form or a list) |
+| `--side-sheet-w-wide` | `760px` | — | Settings as a desktop side sheet |
+| `--timeline-rail` | `2px` | — | A work block's rail its tool calls hang on |
+| `--timeline-node` | `8px` | — | A tool call's node on that rail |
 | `--context-line` | `calc(var(--fs-lg) * var(--lh-base))` = `24px` | `21.75px`, through the scale | The selected pane's crumb row, min and max height. Scoped to `.context`, not `:root`, so it follows `--fs-lg`/`--lh-base` in either density |
 
 ### Focus and layers
@@ -827,8 +844,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - `Mod` resolves to `⌘` on Apple platforms and `Ctrl` elsewhere.
 
 ### Modal (`.modal*`)
-- `.modal-scrim` centers an `aria-modal` dialog at `--z-modal`; `.modal` is a capped scrollable
+- `.modal-scrim` holds an `aria-modal` dialog at `--z-modal`; `.modal` is a capped scrollable
   column with header, body and footer and `--shadow-pop`.
+- From `641px` a dialog that holds a form or a list (New workspace, Worktree, Files, Settings,
+  Session history, a plan account, a background agent) is a sheet down the right side, full height
+  inside `--panel-inset`, `--side-sheet-w` wide (`--side-sheet-w-wide` for Settings), so the chat
+  stays in view beside it, as the Codex app and Conductor open their side panels. It slides in from
+  `24px` with a fade (`--dur-slow`) and out the same way (`--dur-fast`, `--ease-in`). A confirm, the
+  palette, the file and diff viewers and the lightboxes stay centred: they pop in from `0.97` scale
+  (`--dur-base`) and shrink away. lib/sheets.ts draws every exit, desktop and phone.
 - At `<=640px`, it becomes a bottom sheet with top `--radius-xl` corners and safe-area padding.
   Every surface on a `.modal-scrim` (dialogs, the palette, the row sheet) rises from the bottom
   edge as an iPhone's sheet does (`--dur-sheet` on `--ease-spring`, the scrim darkening with it),
@@ -2859,13 +2883,15 @@ The values are the ones in `src/styles.css`.
 | Spring easing | `--ease-spring` | `cubic-bezier(0.32, 0.72, 0, 1)` | Voice recording pill enter (180ms, scale 0.96->1 + opacity, from the mic button) and exit (120ms); a phone's sheet rising and springing back |
 | Sheet in | `--dur-sheet` | `360ms` | A phone's sheet rising, and springing back after a short drag |
 | Sheet out | `--dur-sheet-out` | `240ms` | A phone's sheet dropping, however it closed |
+| Slow | `--dur-slow` | `240ms` | A desktop side sheet or the inspector sliding in |
+| Ease in | `--ease-in` | `cubic-bezier(0.4, 0, 1, 1)` | Anything leaving: a dialog's exit, a popover closing |
 
 ### Rules
 - Only state changes move: hover/press, the drawer, a phone's sheets, settings switches, working and
   reconnecting.
-- From `641px` dialogs and their scrims snap open and closed; they have no entrance or exit
-  animation. At `<=640px` they are bottom sheets and move as an iPhone's do (Modal, above): what a
-  finger drags follows the finger, and the rest rises and drops.
+- From `641px` a side sheet slides in from the right and a centred dialog pops in (Modal, above);
+  both leave the way they came, faster than they came. At `<=640px` they are bottom sheets and move
+  as an iPhone's do: what a finger drags follows the finger, and the rest rises and drops.
 - The voice recording waveform is the one surface allowed to draw every frame: only while
   recording, driven by the live microphone level, transform-only (`scaleY` on 7 bars). The pill is
   a state change, not a dialog, so the snap rule above does not apply to it.

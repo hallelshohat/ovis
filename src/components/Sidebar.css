@@ -20,7 +20,7 @@
   padding: 0 var(--side-gutter);
 }
 
-/* a section head (Agents): quiet words, never a rule */
+/* a section head (Agents): the one section label (styles.css .section-label), never a rule */
 .sidebar-section-label {
   display: flex;
   align-items: center;
@@ -30,12 +30,8 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-regular);
+  font-family: inherit;
   border-radius: var(--radius-md);
-  line-height: var(--lh-tight);
   text-align: left;
 }
 

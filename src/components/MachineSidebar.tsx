@@ -73,7 +73,7 @@ export function MachineSidebar(props: Props) {
   // filter above the lists is a row of the same grid, one field and its clear, never taller than a row.
   return <SidebarActivityProvider value={activity}><SidebarFilterProvider value={filterView}><div className="sidebar-shell">
     <div className="sidebar-filter" role="search" aria-label={t("Filter workspaces and agents")}>
-      <label className="sidebar-filter-label" htmlFor={filterId}>{t("Filter")}</label>
+      <label className="sidebar-filter-label visually-hidden" htmlFor={filterId}>{t("Filter")}</label>
       <input ref={filterInput} id={filterId} className="input sidebar-filter-input" type="search" value={query} aria-label={t("Filter workspaces and agents")} placeholder={t("Workspaces and agents")} list={suggestionsId} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="search" onChange={(event) => setQuery(event.target.value)} onKeyDown={onFilterKeyDown} />
       <datalist id={suggestionsId}>{suggestions.map((label) => <option key={label} value={label} />)}</datalist>
       {query !== "" && <button type="button" className="sidebar-filter-clear" aria-label={t("Clear filter")} title={t("Clear filter")} onClick={clearFilter}><X aria-hidden="true" /></button>}

@@ -1207,8 +1207,8 @@
 }
 
 .composer-queue-toggle:focus-visible {
-  outline: var(--hairline) solid var(--accent);
-  outline-offset: var(--space-1);
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
   border-radius: var(--radius-sm);
 }
 

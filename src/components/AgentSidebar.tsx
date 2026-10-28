@@ -237,7 +237,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
   // Settings -> Sidebar rows -> One line: an agent row is one line too, its place dim after its title
   const oneLine = settings.sidebarRows === "one";
   return <section ref={sectionRef} className={`agents-sidebar${folded ? " is-collapsed" : ""}${rows.length === 0 ? " is-empty" : ""}${oneLine ? " is-one-line" : ""}`} aria-label={t("Agents")}>
-    <button type="button" className="agent-section-toggle sidebar-section-label" aria-expanded={!folded} aria-controls={listId} onClick={() => { if (filter.active) setFilterFold(!folded); else setCollapsed(!collapsed); }}>
+    <button type="button" className="agent-section-toggle sidebar-section-label section-label" aria-expanded={!folded} aria-controls={listId} onClick={() => { if (filter.active) setFilterFold(!folded); else setCollapsed(!collapsed); }}>
       {folded ? <ChevronRight className="agent-section-caret" aria-hidden="true" /> : <ChevronDown className="agent-section-caret" aria-hidden="true" />}
       <span>{t("Agents")}</span>
       {/* the count is of the agents running, filter or not */}
