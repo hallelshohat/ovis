@@ -31,6 +31,13 @@ export function demoPullRequests(key: string | undefined, shiftMs = 0): PanePull
   };
 }
 
+const ONE: Record<string, PullRequest> = {
+  web: pr(1934, "Guard the export button", { state: "draft", head: "feat/export-guard", checks: "pending", check_runs: [{ name: "Fast checks", state: "pending", url: null }] }),
+  flaky: pr(1936, "Fix the flaky retry test", { head: "fix/flaky-retry", checks: "failing", check_runs: [{ name: "Integration and browser", state: "failing", url: null }] }),
+  cli: pr(1929, "Ship the retry flag", { state: "merged", head: "feat/retry-flag", merged_at: t(3), updated_at: t(3) }),
+  hermes: pr(1940, "Changelog for 2.0", { head: "docs/changelog", review: "review_required", check_runs: passing("Fast checks") }),
+};
+
 function fixtureAnswer(key: string | undefined): PanePullRequests {
   if (key === "api") {
     const prs = [merged1925, open1931, failing88].sort(byAttention);
@@ -46,21 +53,21 @@ function fixtureAnswer(key: string | undefined): PanePullRequests {
       ],
     };
   }
-  const one: Record<string, PullRequest> = {
-    web: pr(1934, "Guard the export button", { state: "draft", head: "feat/export-guard", checks: "pending", check_runs: [{ name: "Fast checks", state: "pending", url: null }] }),
-    flaky: pr(1936, "Fix the flaky retry test", { head: "fix/flaky-retry", checks: "failing", check_runs: [{ name: "Integration and browser", state: "failing", url: null }] }),
-    cli: pr(1929, "Ship the retry flag", { state: "merged", head: "feat/retry-flag", merged_at: t(3), updated_at: t(3) }),
-    hermes: pr(1940, "Changelog for 2.0", { head: "docs/changelog", review: "review_required", check_runs: passing("Fast checks") }),
-  };
-  const only = key ? one[key] : undefined;
-  return { gh: "ok", pull_requests: only ? [only] : [], events: only ? [{ at: only.created_at, kind: "opened", url: only.url }] : [] };
+  const only = key ? ONE[key] : undefined;
+  if (!only) return { gh: "ok", pull_requests: [], events: [] };
+  return { gh: "ok", pull_requests: [only], events: [{ at: only.created_at, kind: "opened", url: only.url }, ...(only.merged_at ? [{ at: only.merged_at, kind: "merged" as const, url: only.url }] : [])] };
 }
 
-/** The demo's merge: a listed open PR with no failing check turns merged. */
+/** The demo's merge: a listed open PR with no failing check turns merged, in the fixtures' own clock (demoPullRequests moves it to now). */
 export function demoMerge(url: string): { ok: true } | { error: { code: string; message: string } } {
   if (url === open1931.url && open1931.state === "open") {
-    // in the fixtures' own clock, which demoPullRequests moves to now with the rest
     open1931 = { ...open1931, state: "merged", merged_at: t(6, 50), updated_at: t(6, 50) };
+    return { ok: true };
+  }
+  const key = Object.keys(ONE).find((candidate) => ONE[candidate]!.url === url);
+  const listed = key === undefined ? undefined : ONE[key]!;
+  if (key !== undefined && listed && listed.state === "open" && listed.checks !== "failing") {
+    ONE[key] = { ...listed, state: "merged", merged_at: t(16), updated_at: t(16) };
     return { ok: true };
   }
   return { error: { code: "pr_not_mergeable", message: "Its checks are failing now" } };

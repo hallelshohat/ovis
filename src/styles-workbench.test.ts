@@ -29,9 +29,12 @@ describe("the workbench's shared styles", () => {
   it("opens a form dialog as a sheet down the right side from 641px", () => {
     const desktop = mediaBodies("(min-width: 641px)").join("\n");
     expect(desktop).toMatch(/\.modal-scrim:has\([^{]*\.new-session-modal[^{]*\)\s*\{[^}]*justify-content: flex-end;/);
-    expect(desktop).toContain("animation: side-sheet-in");
-    expect(desktop).toContain("animation: side-sheet-out");
-    expect(desktop).toContain("animation: modal-pop-in");
+    // the motion only where the person has not asked for less: a rule this specific would outrank the reduced-motion block
+    expect(desktop).not.toContain("animation:");
+    const moving = mediaBodies("(min-width: 641px) and (prefers-reduced-motion: no-preference)").join("\n");
+    expect(moving).toContain("animation: side-sheet-in");
+    expect(moving).toContain("animation: side-sheet-out");
+    expect(moving).toContain("animation: modal-pop-in");
   });
 
   it("stills every new animation when the person asks for reduced motion", () => {

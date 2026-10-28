@@ -2567,14 +2567,6 @@ button {
    Conductor), the chat still in view beside it; a confirmation, the palette, a viewer and a
    lightbox stay centred and pop. Each one leaves as it came (lib/sheets.ts watchSheetExits). */
 @media (min-width: 641px) {
-  .modal-scrim {
-    animation: scrim-in var(--dur-base) var(--ease-out);
-  }
-
-  .modal-scrim > :is(.modal, .menu) {
-    animation: modal-pop-in var(--dur-base) var(--ease-out);
-  }
-
   .modal-scrim:has(> :is(.new-session-modal, .worktree-modal, .files-dialog, .settings-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet)) {
     justify-content: flex-end;
     align-items: stretch;
@@ -2586,7 +2578,6 @@ button {
     height: auto;
     max-height: none;
     border: var(--hairline) solid var(--border);
-    animation: side-sheet-in var(--dur-slow) var(--ease-out);
   }
 
   .modal-scrim > .settings-dialog.modal {
@@ -2594,11 +2585,28 @@ button {
     height: auto;
     max-height: none;
     border: var(--hairline) solid var(--border);
-    animation: side-sheet-in var(--dur-slow) var(--ease-out);
   }
 
   .modal-scrim.is-leaving {
     pointer-events: none;
+  }
+}
+
+/* the motion of the above, only where the person has not asked for less */
+@media (min-width: 641px) and (prefers-reduced-motion: no-preference) {
+  .modal-scrim {
+    animation: scrim-in var(--dur-base) var(--ease-out);
+  }
+
+  .modal-scrim > :is(.modal, .menu) {
+    animation: modal-pop-in var(--dur-base) var(--ease-out);
+  }
+
+  .modal-scrim > :is(.new-session-modal, .worktree-modal, .files-dialog, .settings-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet).modal {
+    animation: side-sheet-in var(--dur-slow) var(--ease-out);
+  }
+
+  .modal-scrim.is-leaving {
     animation: scrim-out var(--dur-fast) var(--ease-in) forwards;
   }
 

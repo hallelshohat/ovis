@@ -361,6 +361,11 @@
     border: var(--hairline) solid var(--border);
     border-radius: var(--panel-radius);
     box-shadow: var(--shadow-card);
+  }
+}
+
+@media (min-width: 769px) and (prefers-reduced-motion: no-preference) {
+  .repo-diff-scrim > .repo-diff-viewer {
     animation: fade-in var(--dur-base) var(--ease-out);
   }
 }
