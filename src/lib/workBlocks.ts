@@ -58,6 +58,8 @@ export const CATEGORY_LABEL: Record<WorkCategory, [singular: string, plural: str
 
 function categorize(name: string): WorkCategory {
   const lower = name.toLowerCase();
+  // Codex's poll of a running command's terminal: it writes to stdin, it edits nothing
+  if (lower === "write_stdin") return "command";
   if (/edit|write|patch|create_file|multiedit/.test(lower)) return "edit";
   if (/^(read|glob|grep|ls|list|search|find|cat)/.test(lower)) return "read";
   if (/bash|command|shell|exec|eval|run/.test(lower)) return "command";
@@ -131,48 +133,53 @@ const RUN_HEADER = /^\s*(?:⎿\s+\$\s|⏺\s+Bash\(|•\s+Running\s)/;
 /** what the agent draws around a command's output: its timer, key hints, folded-line counts, a spinner word */
 const RUN_CHROME = /^(?:\((?:\d|ctrl\+|esc\b).*\)|… ?\+\d+ lines.*|\+\d+ (?:more )?lines.*|Running…)$/;
 const TIMER_SUFFIX = /\s*\(\d+(?:\.\d+)?[smh][^)]*\)$/;
-const squash = (text: string): string => text.replace(/\s+/g, "");
+/** A command as an echo shows it: tabs as spaces, a line break and the indent around it as one break, no blank ends. */
+const echoForm = (text: string): string => text.replace(/\t/g, " ").replace(/ *\r?\n\s*/g, "\n").trim();
 
 /**
  * A running command's output as the agent's screen shows it, when its own records do not hold it:
- * only the lines under that command's own echo. The echo must be the whole command: one the agent
- * cut with "…" may be any command that starts the same, so it shows nothing rather than maybe
- * another command's output.
+ * only the lines under that command's own echo. The echo must be the whole command, every space in
+ * it as typed (`echo "A B"` is not `echo "AB"`): one the agent cut with "…" may be any command that
+ * starts the same, so it shows nothing rather than maybe another command's output.
  * The agent's thinking and elapsed counters, its narration, the echo itself, key hints, tips and
  * the input box are left out, and a screen that does not show the command answers nothing rather
  * than something else.
  */
 export function screenToolOutput(screen: string, command: string, maxLines = 12): string {
-  const whole = squash(command);
-  const start = whole.slice(0, 16);
-  if (start.length === 0) return "";
+  const whole = echoForm(command);
+  if (whole.length === 0) return "";
   const lines = screen.split("\n");
   for (let header = lines.length - 1; header >= 0; header--) {
-    if (!RUN_HEADER.test(lines[header]!) || !squash(lines[header]!).includes(start)) continue;
+    if (!RUN_HEADER.test(lines[header]!)) continue;
     const body = echoedBody(lines, header, whole);
     if (body !== null) return toolBody(lines, body, maxLines);
   }
   return "";
 }
 
-/** One row of a command's echo, squashed: its marker, timer and closing parenthesis left out. */
-const echoed = (line: string): string => squash(line.replace(RUN_HEADER, "").replace(/^\s*│/, "").replace(TIMER_SUFFIX, "").replace(/\)$/, ""));
+/** One row of a command's echo: its marker and its row's own indent and trailing blanks left out. */
+const echoRow = (line: string): string => line.replace(RUN_HEADER, "").replace(/^\s*│/, "").trim();
 
 /**
  * Where the output under a header starts, once the echo's own rows are passed (the echo wraps over
  * rows of its own: they are the command's text, not its output); null when the echo is not this
- * whole command.
+ * whole command. A wrap stands for a space, a line break of the command or nothing (a word cut at
+ * the edge); only the joins that keep the echo the command's start are taken. The echo's last row
+ * may end in Claude's timer, and an older Claude's `Bash(…)` in its closing parenthesis.
  */
 function echoedBody(lines: readonly string[], header: number, whole: string): number | null {
-  let echo = echoed(lines[header]!);
+  const target = /⏺\s+Bash\(/.test(lines[header]!) ? `${whole})` : whole;
+  const ends = (echo: string): boolean => echo === target || echo.replace(TIMER_SUFFIX, "") === target;
+  let echo = echoRow(lines[header]!);
   let at = header + 1;
-  while (at < lines.length && echo.length < whole.length && lines[at]!.trim().length > 0) {
-    const next = echo + echoed(lines[at]!);
-    if (!whole.startsWith(next)) break;
+  while (!ends(echo) && at < lines.length && lines[at]!.trim().length > 0) {
+    const row = echoRow(lines[at]!);
+    const next = ["", " ", "\n"].map((join) => echo + join + row).find((joined) => target.startsWith(joined) || ends(joined));
+    if (next === undefined) break;
     echo = next;
     at++;
   }
-  return echo === whole ? at : null;
+  return ends(echo) ? at : null;
 }
 
 /** The call's own rows from `at`: up to a blank row, the input box's rule or a row back at the left edge, chrome left out. */

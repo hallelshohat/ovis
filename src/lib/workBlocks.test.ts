@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { formatWorkDuration, splitTurn, todoGroups, turnSegments, commandExitCode, elapsedSince, claudeLiveOutput, codexLiveOutput, screenToolOutput, visibleWorkParts, workFailed, workSummary, type ToolPart } from "./workBlocks.ts";
+import { formatWorkDuration, splitTurn, todoGroups, turnSegments, commandExitCode, elapsedSince, claudeLiveOutput, codexLiveOutput, isCommandTool, screenToolOutput, visibleWorkParts, workFailed, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -153,6 +153,18 @@ describe("screenToolOutput", () => {
     }
   });
 
+  it("tells commands apart by the spaces inside them", () => {
+    const screen = '• Running echo "A B"\n  └ A B\n\n› ';
+    expect(screenToolOutput(screen, 'echo "AB"')).toBe("");
+    expect(screenToolOutput(screen, 'echo "A B"')).toBe("A B");
+    // a wrap at the screen's edge is a space, a line break of the command or a word cut in two
+    const wrapped = "  ⎿  $ printf '%s' alpha\n     beta-gamma\n     delta\n     out\n     (3s)";
+    expect(screenToolOutput(wrapped, "printf '%s' alpha beta-gammadelta")).toBe("out");
+    expect(screenToolOutput(wrapped, "printf '%s' alpha\nbeta-gamma delta")).toBe("out");
+    expect(screenToolOutput(wrapped, "printf '%s' alphabeta-gamma delta")).toBe("out");
+    expect(screenToolOutput(wrapped, "printf '%s' alpha beta gamma delta")).toBe("");
+  });
+
   it("is empty when the running command is not on the screen", () => {
     expect(screenToolOutput(fixture("claude-thinking-two-commands-120.txt"), "bun run build")).toBe("");
     expect(screenToolOutput("⏺ Bash(bun test)\n  ⎿  3 pass", "")).toBe("");
@@ -193,6 +205,14 @@ describe("codexLiveOutput", () => {
     expect(codexLiveOutput([first], first)).toBeNull();
     const poll: ToolPart = { ...parts[1]!, output: "", state: "pending" };
     expect(codexLiveOutput([poll], poll)).toBe("");
+  });
+});
+
+describe("isCommandTool", () => {
+  it("counts Codex's poll of a running command's terminal as a command, not an edit", () => {
+    expect(isCommandTool("write_stdin")).toBe(true);
+    expect(isCommandTool("exec_command")).toBe(true);
+    expect(isCommandTool("Write")).toBe(false);
   });
 });
 
