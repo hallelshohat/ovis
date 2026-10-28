@@ -100,7 +100,8 @@ async function phone(browser: Browser, origin: string): Promise<void> {
     await button.tap();
     const sheet = page.locator(".modal.pr-sheet");
     await sheet.waitFor();
-    await page.waitForTimeout(500);
+    // where it rests once it has risen
+    await sheet.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
     const box = await sheet.boundingBox();
     assert.ok(box && Math.abs(box.y + box.height - 844) <= 1, "on a phone the pull requests rise as a bottom sheet");
     await shot(page, "phone-sheet");
