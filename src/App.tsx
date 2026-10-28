@@ -3,7 +3,7 @@ import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Searc
 import { agentDisplayLabel } from "./lib/compose.ts";
 import { Inspector } from "./components/Inspector.tsx";
 import { PrHeaderButton, PrSheet, PullRequestPanel } from "./components/PullRequestPanel.tsx";
-import { usePullRequestInspector } from "./lib/usePanePullRequests.ts";
+import { PullRequestsContext, usePullRequestInspector } from "./lib/usePanePullRequests.ts";
 
 import type { HerdrPane } from "../shared/protocol.ts";
 import { authenticate, createTab, pairDevice, shareSeen, signOut, splitPane, zoomPane } from "./lib/api.ts";
@@ -527,7 +527,7 @@ export function App() {
   if (locked) return <AccessGate reason={lockReason} initialCode={pairCode} onUnlocked={unlock} />;
 
   return (
-    <MachineSessionsProvider machineIds={machines.map((machine) => machine.id)}><MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null && filePanelWidth === null ? undefined : {
+    <PullRequestsContext.Provider value={true}><MachineSessionsProvider machineIds={machines.map((machine) => machine.id)}><MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null && filePanelWidth === null ? undefined : {
       ...(sidebarWidth === null ? {} : { "--sidebar-user-w": `${sidebarWidth}px` }),
       ...(filePanelWidth === null ? {} : { "--file-panel-user-w": `${filePanelWidth}px` }),
     } as CSSProperties}>
@@ -911,6 +911,6 @@ export function App() {
       <CommandPalette key={selectedMachineId} machines={machines} onSelect={selectTarget} open={paletteOpen} initialQuery={paletteQuery} onClose={() => setPaletteOpen(false)} snapshot={snapshot} online={selectedMachine?.state === "connected"} selectedPaneId={selectedPaneId}
         // a peek shows the terminal: its toggle says Switch to chat, which ends the peek
         view={terminalPeek !== null ? "terminal" : view} actions={actions} />
-    </div></MachineContext.Provider></MachineSessionsProvider>
+    </div></MachineContext.Provider></MachineSessionsProvider></PullRequestsContext.Provider>
   );
 }

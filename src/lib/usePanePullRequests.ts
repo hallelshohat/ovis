@@ -4,12 +4,15 @@
  * PR_POLL_MS while the page is seen and online, and fresh once a chat has been quiet for
  * TURN_SETTLE_MS after its transcript changed (a turn ended, a push went out).
  */
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import type { PanePullRequests } from "../../shared/pull-requests.ts";
 import { fetchPullRequests } from "./api.ts";
 import { useMediaQuery } from "./useMediaQuery.ts";
 
 export const PR_POLL_MS = 60_000;
+
+/** Whether this tree asks for pull requests: the app does (App.tsx); a surface drawn alone (a test's fixture) does not. */
+export const PullRequestsContext = createContext(false);
 export const TURN_SETTLE_MS = 10_000;
 
 interface Entry {
@@ -84,7 +87,11 @@ export function refreshPullRequests(machineId: string, paneId: string): Promise<
 }
 
 export function usePanePullRequests(machineId: string | null, paneId: string | null): PanePullRequests | null {
-  const key = machineId !== null && paneId !== null ? keyOf(machineId, paneId) : null;
+  return usePullRequestData(machineId, paneId, useContext(PullRequestsContext));
+}
+
+function usePullRequestData(machineId: string | null, paneId: string | null, enabled: boolean): PanePullRequests | null {
+  const key = enabled && machineId !== null && paneId !== null ? keyOf(machineId, paneId) : null;
   useEffect(() => {
     if (key === null) return;
     const own = entry(key);
@@ -116,7 +123,8 @@ export function usePanePullRequests(machineId: string | null, paneId: string | n
  * 1200px, which the person can hide, or a sheet the header opens below that.
  */
 export function usePullRequestInspector(machineId: string, paneId: string | null) {
-  const pullRequests = usePanePullRequests(machineId, paneId);
+  // App holds the provider it would ask, so it asks for itself
+  const pullRequests = usePullRequestData(machineId, paneId, true);
   const docked = useMediaQuery("(min-width: 1200px)");
   const [panelOpen, setPanelOpen] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
