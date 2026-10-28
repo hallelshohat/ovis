@@ -25,6 +25,7 @@ import { RELAY_KO } from "./i18n/relay.ko.ts";
  */
 const BASE: Record<string, string> = {
   "Save": "저장",
+  "Closed": "닫힘",
   "Goal": "목표",
   "Waiting for your answer": "답변을 기다리는 중",
   "Back": "뒤로",

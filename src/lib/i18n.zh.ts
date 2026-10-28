@@ -29,6 +29,7 @@ import { RELAY_ZH } from "./i18n/relay.zh.ts";
  */
 const BASE: Record<string, string> = {
   "Save": "保存",
+  "Closed": "已关闭",
   "Goal": "目标",
   "Waiting for your answer": "等待你的回答",
   "Back": "返回",
