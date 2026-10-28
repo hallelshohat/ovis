@@ -10,7 +10,8 @@ import { isAbsolute, sep } from "node:path";
 import type { ProjectFavicon } from "../shared/files.ts";
 import type { Access } from "./access.ts";
 import { isSecureRequest } from "./auth.ts";
-import { claudeSessionTempDir, claudeTempBases } from "./claude-store.ts";
+import { tmpdir } from "node:os";
+import { claudeSessionTempDir, claudeTempBases, processClaudeTmpDir } from "./claude-store.ts";
 import { claudePaneSession } from "./conversation.ts";
 import { MAX_TEXT_SAVE_BODY_BYTES, readCappedText, saveEditableText, TextEditRefused } from "./file-edit.ts";
 import { fileTask } from "./file-pool.ts";
@@ -28,12 +29,14 @@ export interface FileRequester { bridgeAuthorized: boolean; requestHost: string 
 const mayBeClaudeTemp = (path: string): boolean => claudeTempBases().some((base) => path.startsWith(base + sep));
 
 /** The temp folder of the Claude Code session in a pane, or null when the pane runs none or it has none. */
-async function claudeTempFolder(paneId: string): Promise<string | null> {
+export async function paneClaudeTempFolder(paneId: string): Promise<string | null> {
   try {
     const pane = await paneGet(paneId);
     if (resolveAgent(pane).agent !== "claude") return null;
     const session = await claudePaneSession(pane);
-    return session === null ? null : await claudeSessionTempDir(session.path);
+    if (session === null) return null;
+    const own = session.pid === null ? null : processClaudeTmpDir(session.pid);
+    return await claudeSessionTempDir(session.path, [...new Set([own, tmpdir(), "/tmp"].filter((root) => root !== null))]);
   } catch { return null; /* herdr busy or the pane gone: the path stays not found */ }
 }
 
@@ -117,7 +120,7 @@ async function fileRoute(request: Request, url: URL, pathname: string, { bridgeA
     try { cwd = (await paneContext(paneId)).cwd; } catch { paneUnread = true; /* an absolute path still opens */ }
   }
   const path = url.searchParams.get("path") ?? "";
-  const found = await findFile(path, cwd, () => paneId ? claudeTempFolder(paneId) : Promise.resolve(null), paneId ? mayBeClaudeTemp : undefined);
+  const found = await findFile(path, cwd, () => paneId ? paneClaudeTempFolder(paneId) : Promise.resolve(null), paneId ? mayBeClaudeTemp : undefined);
   // a relative path whose pane could not be read was not looked for: the chat keeps its link (src/lib/fileNameLookup.ts)
   if (found === null && paneUnread && !isAbsolute(path)) return jsonResponse({ error: { code: "pane_unknown", message: "the pane a relative path belongs to could not be read" } }, 404);
   if (found === null) return jsonResponse({ error: { code: "not_found", message: "no readable file at that path" } }, 404);

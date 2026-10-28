@@ -40,6 +40,7 @@ export function useMachineApi() {
   const id = useMachineId();
   return useMemo(() => ({
     fetchPaneTranscript: (pane: string, lines: number, signal?: AbortSignal) => api.fetchPaneTranscript(pane, lines, id, signal),
+    fetchPaneLiveOutput: (pane: string, since: string | null) => api.fetchPaneLiveOutput(pane, since, id),
     fetchPaneConversation: (pane: string, page?: api.ConversationPageQuery) => api.fetchPaneConversation(pane, id, page),
     peekPaneConversation: (pane: string, prompts?: number) => api.peekPaneConversation(pane, id, prompts),
     searchPaneConversation: (pane: string, query: string, page?: Parameters<typeof api.searchPaneConversation>[3]) => api.searchPaneConversation(pane, query, id, page),
