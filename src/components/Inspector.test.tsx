@@ -8,7 +8,7 @@ Object.defineProperty(navigator, "languages", { configurable: true, value: ["en-
 
 describe("the inspector column", () => {
   it("is a named complementary region with its head and a close button", () => {
-    const html = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(Inspector, { title: "Pull requests", onClose: () => {} }, "body") }));
+    const html = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(Inspector, { title: "Pull requests", onClose: () => {}, children: "body" }) }));
     expect(html).toContain('class="inspector"');
     expect(html).toContain('role="complementary"');
     expect(html).toContain('aria-label="Pull requests"');
