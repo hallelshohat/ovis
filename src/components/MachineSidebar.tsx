@@ -457,6 +457,7 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
     toggleCollapsed();
   };
   const agentCount = useMemo(() => sidebarAgents(machine.snapshot).length, [machine.snapshot]);
+  const boardTasks = <MachineContext.Provider value={machine.id}><BoardTasksButton machineName={machine.name} enabled={online && !props.watching} /></MachineContext.Provider>;
   const current = props.selectedMachineId === machine.id;
   // a watching device is refused a new workspace (G-040): the + stays where it is, disabled, and says why
   const canCreate = online && !props.watching;
@@ -486,7 +487,7 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
       dot={online ? null : { state: machineDotState(machine), title: quiet ? dotWords : stateWords }}
       actions={machine.kind !== "local" && <button ref={manageButton} type="button" className="sidebar-row-action machine-manage" aria-label={t("Manage {name}", { name: machine.name })} title={t("Manage PC")} aria-haspopup={sheet ? "dialog" : "menu"} aria-expanded={menu !== null} onClick={(event) => setMenu(menu === null ? event.currentTarget : null)}><SlidersHorizontal aria-hidden="true" /></button>}
       end={<>
-        <MachineContext.Provider value={machine.id}><BoardTasksButton machineName={machine.name} enabled={online && !props.watching} /></MachineContext.Provider>
+        {boardTasks}
         <button className="sidebar-row-action machine-new" disabled={!canCreate} aria-label={t("New workspace on {name}", { name: machine.name })} title={createTitle} onClick={() => props.onNew(machine.id)}><Plus aria-hidden="true" /></button>
       </>} />}
     {/* C3 pin 2 (#16): the hosted app's own PC, new in the account: its tag and one-tap removal on the row itself */}
@@ -513,7 +514,13 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
     {(!folded || filtered !== null) && (machine.snapshot !== null || online) && <div className={online ? "" : "machine-offline"} inert={!online} hidden={folded}>
       <MachineContext.Provider value={machine.id}><AppLayoutContext.Provider value={props.appLayout?.(machine.id) ?? FULL_LAYOUT}><Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} watching={props.watching} /></AppLayoutContext.Provider></MachineContext.Provider>
     </div>}
-    {headerless && (!compact || drawer) && online && machine.snapshot?.workspaces.length !== 0 && !filter.active && <button type="button" className="machine-new-row" disabled={!canCreate} title={props.watching ? createTitle : undefined} onClick={() => props.onNew(machine.id)}><span className="sidebar-mark" aria-hidden="true"><Plus /></span><span className="machine-new-row-label">{t("New workspace")}</span></button>}
+    {/* the header's +, as the list's last row, also while the roster loads: an empty roster has its own New
+        workspace, and a filtered list shows only what was looked for; a watching device sees it disabled (G-040).
+        A desktop's one-line rows leave it out: the + beside the logo starts one there (App.tsx) */}
+    {headerless && <div className="machine-host-actions">
+      {(!compact || drawer) && online && machine.snapshot?.workspaces.length !== 0 && !filter.active && <button type="button" className="machine-new-row" disabled={!canCreate} title={props.watching ? createTitle : undefined} onClick={() => props.onNew(machine.id)}><span className="sidebar-mark" aria-hidden="true"><Plus /></span><span className="machine-new-row-label">{t("New workspace")}</span></button>}
+      {boardTasks}
+    </div>}
   </section>;
 }
 
