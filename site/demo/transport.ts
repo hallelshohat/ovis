@@ -1411,6 +1411,12 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     if (cwd !== "" && !cwd.startsWith("/home/demo") && !cwd.startsWith("~")) return error("invalid_cwd", "cwd must be an existing directory", 400);
     return json({ commands: agentSkillRows(agent) });
   }
+  // the demo's agents run no real command: none has output streaming to a file
+  if (path === "/api/pane/live-output") {
+    if (method !== "GET") return error("method_not_allowed", "use GET", 400);
+    if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);
+    return json({ outputs: null });
+  }
   if (path === "/api/pane/scroll") {
     const body = method === "POST" ? await bodyOf(init, input) : {};
     const target = method === "POST" ? String(body["pane_id"] ?? "") : paneId;

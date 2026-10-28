@@ -13,6 +13,7 @@ export function useMachineApi() {
   const id = useMachineId();
   return useMemo(() => ({
     fetchPaneTranscript: (pane: string, lines: number) => api.fetchPaneTranscript(pane, lines, id),
+    fetchPaneLiveOutput: (pane: string, since: string | null) => api.fetchPaneLiveOutput(pane, since, id),
     fetchPaneConversation: (pane: string, page?: api.ConversationPageQuery) => api.fetchPaneConversation(pane, id, page),
     peekPaneConversation: (pane: string) => api.peekPaneConversation(pane, id),
     fetchPanePrompt: (pane: string) => api.fetchPanePrompt(pane, id),

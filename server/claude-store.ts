@@ -14,7 +14,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { constants, type Dirent } from "node:fs";
+import { constants, readFileSync, type Dirent } from "node:fs";
 import { open, readFile, readdir, readlink, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import nodePath, { basename, dirname, isAbsolute, join, type PlatformPath } from "node:path";
@@ -1062,6 +1062,25 @@ export async function claudeTranscriptFile(home: string, session: string, cwds: 
     path = nextPath;
   }
   return null;
+}
+
+/**
+ * The CLAUDE_CODE_TMPDIR a Claude process was started with: Claude keeps its session folders
+ * (claudeSessionTempDir) under it instead of the system's temp folder. Null when it has none or
+ * its environment cannot be read (another user's process, Windows).
+ */
+export function processClaudeTmpDir(
+  pid: number,
+  platform: string = process.platform,
+  environ: (pid: number) => string | null = (id) => platform === "darwin" ? darwinProcess.environment(id) : readFileSyncOrNull(`/proc/${id}/environ`),
+): string | null {
+  if (platform !== "linux" && platform !== "darwin") return null;
+  const entry = environ(pid)?.split("\0").find((word) => word.startsWith("CLAUDE_CODE_TMPDIR="));
+  return entry?.slice("CLAUDE_CODE_TMPDIR=".length) || null;
+}
+
+function readFileSyncOrNull(path: string): string | null {
+  try { return readFileSync(path, "utf8"); } catch { return null; }
 }
 
 /**

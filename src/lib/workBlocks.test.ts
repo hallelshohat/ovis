@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 
-import { formatWorkDuration, splitTurn, todoGroups, turnSegments, commandExitCode, elapsedSince, liveOutputTail, visibleWorkParts, workFailed, workSummary, type ToolPart } from "./workBlocks.ts";
+import { formatWorkDuration, splitTurn, todoGroups, turnSegments, commandExitCode, elapsedSince, claudeLiveOutput, codexLiveOutput, screenToolOutput, visibleWorkParts, workFailed, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -106,33 +107,114 @@ describe("elapsedSince", () => {
   });
 });
 
-describe("liveOutputTail", () => {
-  // a Claude Code pane while a command runs (its shape as herdr pane read gives it): the output
-  // above, the input box and the status lines under the rule
-  const claudeScreen = [
-    "⏺ Re-running the PR update from the repo.",
-    "",
-    "⏺ Bash(bun test --watch)",
-    "  ⎿  3 pass",
-    "     1 fail",
-    "     Running…",
-    "",
-    "✻ Cogitating… (12s · ↓ 1.2k tokens)",
-    "",
-    "─".repeat(120),
-    "❯ merged, finish up",
-    "─".repeat(120),
-    "  /work/app Opus 5.5 [medium] ctx:71%",
-    "  ⏵⏵ bypass permissions on · 1 shell",
-  ].join("\n");
+describe("screenToolOutput", () => {
+  const fixture = (name: string) => readFileSync(new URL(`./fixtures-live-output/${name}`, import.meta.url), "utf8");
+  const slowJob = 'cd /tmp && for i in 1 2 3 4 5 6; do echo "progress line $i of a slow job that prints steadily"; sleep 2; done; sleep 90; echo finished';
 
-  it("drops the agent's input box and status lines under the rule", () => {
-    expect(liveOutputTail(claudeScreen)).toBe(claudeScreen.split("\n").slice(0, 8).join("\n"));
+  it("finds nothing of the agent's own screen when the command has printed nothing there", () => {
+    // the OVS-13 screenshot: thinking counters, narration, the echo, key hints, the spinner and a tip
+    expect(screenToolOutput(fixture("claude-thinking-two-commands-120.txt"), "cd /Users/hallel/.herdr/worktrees/main/hallelshohat-rd-11022-separate-external-ent-19; until [ -s .peer/plan/round-1-peer.md ]; do sleep 5; done; cat .peer/plan/round-1-peer.md")).toBe("");
+    // Claude 2.1.312 folds the output into "(21s · 7 lines)" on the echo's last row
+    expect(screenToolOutput(fixture("claude-2.1.312-running-120.txt"), slowJob)).toBe("");
+    // Codex 0.165 waits on a background terminal and shows only the command
+    expect(screenToolOutput(fixture("codex-0.165.0-running-120.txt"), slowJob)).toBe("");
   });
 
-  it("keeps the last lines of a screen with no input box, without trailing blank lines", () => {
-    const lines = Array.from({ length: 30 }, (_, index) => `line ${index}`);
-    expect(liveOutputTail(`${lines.join("\n")}\n\n`, 12)).toBe(lines.slice(-12).join("\n"));
+  it("keeps only the lines under the running command's own echo", () => {
+    const screen = [
+      "  Thinking for 6s, running 1 shell command · 10s…",
+      "  ⎿  $ cd /work && for i in 1 2 3; do echo \"step $i\"; sleep 2;",
+      "     done",
+      "     step 1",
+      "       step 2 indented",
+      "     (10s)",
+      "     (ctrl+b to run in background)",
+      "",
+      "· SirMixALotting… (3m 52s · ↓ 20.4k tokens)",
+    ].join("\n");
+    expect(screenToolOutput(screen, 'cd /work && for i in 1 2 3; do echo "step $i"; sleep 2; done')).toBe("step 1\n  step 2 indented");
+  });
+
+  it("reads an older Claude Code's Bash block and a Codex Running block", () => {
+    const claude = ["⏺ Re-running the PR update.", "", "⏺ Bash(bun test --watch)", "  ⎿  3 pass", "     1 fail", "     Running…", "", "✻ Cogitating… (12s · ↓ 1.2k tokens)", "", "─".repeat(120), "❯ ", "─".repeat(120)].join("\n");
+    expect(screenToolOutput(claude, "bun test --watch")).toBe("3 pass\n1 fail");
+    const codex = "  >_ OpenAI Codex (v0.164.0)\n\n• Running python3 emit-log.py\n  └ line 1\n    line 2\n    … +4 lines\n\n• Working (2s • esc to interrupt)\n\n› ";
+    expect(screenToolOutput(codex, "python3 emit-log.py")).toBe("line 1\nline 2");
+  });
+
+  it("never takes another command's echo that only starts the same", () => {
+    const screen = "• Running cd /work/long-project && echo SECOND\n  └ SECOND output\n\n› ";
+    expect(screenToolOutput(screen, "cd /work/long-project && echo FIRST")).toBe("");
+    expect(screenToolOutput(screen, "cd /work/long-project && echo SECOND")).toBe("SECOND output");
+    // an echo the agent cut with "…" is this command when the command starts with what it shows
+    const cut = "• Running cd /work/long-project && echo SEC…\n  └ SECOND output\n\n› ";
+    expect(screenToolOutput(cut, "cd /work/long-project && echo SECOND")).toBe("SECOND output");
+    expect(screenToolOutput(cut, "cd /work/long-project && echo FIRST")).toBe("");
+  });
+
+  it("is empty when the running command is not on the screen", () => {
+    expect(screenToolOutput(fixture("claude-thinking-two-commands-120.txt"), "bun run build")).toBe("");
+    expect(screenToolOutput("⏺ Bash(bun test)\n  ⎿  3 pass", "")).toBe("");
+  });
+});
+
+describe("codexLiveOutput", () => {
+  const parts = JSON.parse(readFileSync(new URL("./fixtures-live-output/codex-0.165.0-running-parts.json", import.meta.url), "utf8")) as ToolPart[];
+
+  it("joins the chunks every earlier poll of the running command's session answered", () => {
+    // the last poll still waits: no output record yet
+    const running: ToolPart = { ...parts.at(-1)!, output: "", state: "pending" };
+    const lines = [1, 2, 3, 4, 5].map((n) => `progress line ${n} of a slow job that prints steadily`).join("\n");
+    expect(codexLiveOutput([...parts.slice(0, -1), running], running)).toBe(lines);
+  });
+
+  it("keeps the chunks when the agent's words sit between the command and its next poll", () => {
+    const running: ToolPart = { ...parts.at(-1)!, output: "", state: "pending" };
+    const words: ConversationPart = { kind: "text", text: "Still waiting on the slow job.", phase: "commentary" };
+    const turn = [...parts.slice(0, -1), words, running];
+    expect(codexLiveOutput(turn, running)).toContain("progress line 5 of a slow job");
+  });
+
+  it("reads a chunk cut to the page's length as far as it goes, and whole once loaded", () => {
+    const long = Array.from({ length: 100 }, (_, n) => `line ${n} ${"x".repeat(45)}`).join("\n");
+    const raw = `Script completed\nWall time 5.0 seconds\nOutput:\n\n${JSON.stringify({ chunk_id: "c", session_id: 28799, output: `${long}\n` })}`;
+    // as the server's trimOutput leaves it: the head, then the mark
+    const first: ToolPart = { ...parts[1]!, output: `${raw.slice(0, 4000)}\n… trimmed`, output_ref: "call_cut", output_size: raw.length };
+    const running: ToolPart = { ...parts.at(-1)!, output: "", state: "pending" };
+    const preview = codexLiveOutput([first, running], running)!;
+    expect(preview.startsWith("line 0 ")).toBe(true);
+    expect(long.startsWith(preview)).toBe(true);
+    expect(codexLiveOutput([first, running], running, new Map([["call_cut", raw]]))).toBe(long);
+  });
+
+  it("is null for a call that names no session, and empty before any chunk", () => {
+    const first: ToolPart = { ...parts[0]!, output: "", state: "pending" };
+    expect(codexLiveOutput([first], first)).toBeNull();
+    const poll: ToolPart = { ...parts[1]!, output: "", state: "pending" };
+    expect(codexLiveOutput([poll], poll)).toBe("");
+  });
+});
+
+describe("claudeLiveOutput", () => {
+  const bash = (id: string, rest: Partial<ToolPart>): ToolPart => ({ kind: "tool", name: "Bash", summary: id, input: "{}", output: "", call_id: id, ...rest });
+
+  it("never shows a background task's file as a running command's", () => {
+    const foreground = bash("fg", { state: "pending" });
+    // the later parallel call went to the background: its result names its file
+    const background = bash("bg", { state: "ok", output: "Command running in background with ID: b2. Output is being written to: /tmp/claude-501/p/s/tasks/b2.output" });
+    const files = [{ id: "b1", text: "FOREGROUND output" }, { id: "b2", text: "BACKGROUND output" }];
+    expect(claudeLiveOutput(files, [foreground, background], foreground)).toBe("FOREGROUND output");
+    expect(claudeLiveOutput([...files].reverse(), [foreground, background], foreground)).toBe("FOREGROUND output");
+  });
+
+  it("gives parallel running commands their files in the order they started, and nothing before a file exists", () => {
+    const first = bash("one", { state: "pending" });
+    const second = bash("two", { state: "pending" });
+    const files = [{ id: "a", text: "A" }, { id: "b", text: "B" }];
+    expect(claudeLiveOutput(files, [first, second], first)).toBe("A");
+    expect(claudeLiveOutput(files, [first, second], second)).toBe("B");
+    expect(claudeLiveOutput([{ id: "a", text: "A" }], [first, second], second)).toBe("");
+    expect(claudeLiveOutput(files, [first], bash("done", { state: "ok" }))).toBe("");
   });
 });
 
