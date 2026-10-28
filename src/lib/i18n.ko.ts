@@ -83,6 +83,7 @@ const BASE: Record<string, string> = {
   "Remove": "제거",
   "Remove {name}": "{name} 제거",
   "Save": "저장",
+  "Closed": "닫힘",
   "Goal": "목표",
   "Waiting for your answer": "답변을 기다리는 중",
   "Back": "뒤로",
