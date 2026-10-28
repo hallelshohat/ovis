@@ -1,0 +1,51 @@
+/* A pull request's number in its state's colour (--pr-* tokens, styles.css); the colour fades when
+   the state changes, so a check going red or a merge reads as a change, not a jump. */
+.pr-badge {
+  --pr-tone: var(--pr-open);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--pr-tone);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  transition: color var(--dur-base) var(--ease-out);
+}
+
+.pr-badge.is-failing,
+.pr-badge.is-changes { --pr-tone: var(--pr-failing); }
+.pr-badge.is-review { --pr-tone: var(--pr-review); }
+.pr-badge.is-pending,
+.pr-badge.is-draft,
+.pr-badge.is-closed { --pr-tone: var(--pr-draft); }
+.pr-badge.is-merged { --pr-tone: var(--pr-merged); }
+
+.pr-badge-icon {
+  flex: none;
+  width: calc(var(--icon-size) * 0.75);
+  height: calc(var(--icon-size) * 0.75);
+}
+
+.pr-badge-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.pr-badge-word {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pr-badge-more {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pr-badge { transition: none; }
+}
