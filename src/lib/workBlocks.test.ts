@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workBlockStartsOpen, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
+import { formatWorkDuration, runNames, workStartsOpen, workBlockStartsOpen, splitTurn, todoGroups, turnSegments, commandExitCode, elapsedSince, liveOutputTail, visibleWorkParts, workFailed, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -40,46 +40,106 @@ describe("splitTurn", () => {
     const closing = text("The report is ready.");
     const parts = [answer, check, closing];
     expect(splitTurn(parts)).toEqual({ work: [check], answer: [answer, closing] });
-    expect(workStartsOpen(true, parts)).toBe(true);
-    expect(workStartsOpen(false, parts)).toBe(false);
+    // drawn in order: the answer, its run of work, the closing sentence
+    expect(turnSegments(parts)).toEqual([{ kind: "text", part: answer }, { kind: "actions", parts: [check] }, { kind: "text", part: closing }]);
   });
 });
 
 describe("turnSegments", () => {
-  it("keeps words written before a tool above it, and each run of work where it happened", () => {
-    const parts = [thinking("hm"), text("I'll check."), tool("eval"), tool("eval"), text("  \n"), text("Found it."), tool("edit"), text("Done.")];
-    expect(turnSegments(parts)).toEqual([
-      { kind: "work", start: 0, parts: [thinking("hm")] },
-      { kind: "answer", start: 1, parts: [text("I'll check.")] },
-      { kind: "work", start: 2, parts: [tool("eval"), tool("eval")] },
-      { kind: "answer", start: 5, parts: [text("Found it.")] },
-      { kind: "work", start: 6, parts: [tool("edit")] },
-      { kind: "answer", start: 7, parts: [text("Done.")] },
+  it("keeps a later run's first part when an earlier run splits around arriving prose", () => {
+    const parts: ConversationPart[] = [tool("A"), text(""), tool("B"), text("between"), tool("C")];
+    const before = turnSegments(parts);
+    const after = turnSegments(parts.map((part, index) => index === 1 ? text("arrived") : part));
+    const firstParts = (segments: typeof before) => segments.flatMap((segment) => segment.kind === "actions" ? [parts.indexOf(segment.parts[0]!)] : []);
+    expect(firstParts(before)).toEqual([0, 4]);
+    expect(firstParts(after)).toEqual([0, 2, 4]);
+  });
+
+  it("keeps the turn in the order it was written: words between runs of actions, as the terminal draws it", () => {
+    expect(turnSegments([thinking("hm"), text("a"), tool("bash"), tool("read"), text("b"), tool("bash"), text("done")])).toEqual([
+      { kind: "actions", parts: [thinking("hm")] },
+      { kind: "text", part: text("a") },
+      { kind: "actions", parts: [tool("bash"), tool("read")] },
+      { kind: "text", part: text("b") },
+      { kind: "actions", parts: [tool("bash")] },
+      { kind: "text", part: text("done") },
     ]);
   });
 
-  it("names each run by its first part, so a run that splits keeps the later run's name", () => {
-    const before = turnSegments([tool("A"), text(""), tool("B"), text("between"), tool("C")]);
-    const after = turnSegments([tool("A"), text("arrived"), tool("B"), text("between"), tool("C")]);
-    const runs = (segments: typeof before) => segments.flatMap((segment) => segment.kind === "work" ? [segment.start] : []);
-    expect(runs(before)).toEqual([0, 4]);
-    expect(runs(after)).toEqual([0, 2, 4]);
+  it("keeps an answer before a later action where it was written", () => {
+    const final = { ...text("Done"), phase: "final_answer" as const };
+    expect(turnSegments([final, tool("cleanup")])).toEqual([{ kind: "text", part: final }, { kind: "actions", parts: [tool("cleanup")] }]);
   });
 
-  it("keeps commentary inside its run of work and a tools-then-answer turn as one run", () => {
-    const narration = { ...text("looking\u2026"), phase: "commentary" as const };
-    expect(turnSegments([tool("read"), narration, tool("edit"), text("done")])).toEqual([
-      { kind: "work", start: 0, parts: [tool("read"), narration, tool("edit")] },
-      { kind: "answer", start: 3, parts: [text("done")] },
-    ]);
+  it("drops blank words, and a blank line does not split a run of actions", () => {
     expect(turnSegments([])).toEqual([]);
+    expect(turnSegments([text("  ")])).toEqual([]);
+    expect(turnSegments([tool("a"), text(" \n"), tool("b")])).toEqual([{ kind: "actions", parts: [tool("a"), tool("b")] }]);
+  });
+});
+
+describe("commandExitCode", () => {
+  const run = (over: Partial<ToolPart>): ToolPart => ({ ...tool("Bash"), ...over });
+  it("reads the code each agent records for a finished command", () => {
+    // Claude flags a failed Bash call and starts its result with the code
+    expect(commandExitCode(run({ state: "error", error: true, output: "Exit code 128\nfatal: not a git repository" }))).toBe(128);
+    expect(commandExitCode(run({ state: "ok", output: "clean" }))).toBe(0);
+    // Codex writes it into the output, flag or no flag
+    expect(commandExitCode({ ...tool("exec_command"), output: "Process exited with code 2\nboom" })).toBe(2);
+    expect(commandExitCode({ ...tool("exec_command"), output: "Chunk ID: 1\nExit code: 0\nOutput:\nok" })).toBe(0);
+  });
+
+  it("says nothing it does not know", () => {
+    // a failure with no code (a hook refused it, a timeout) is a failure, not an exit status
+    expect(commandExitCode(run({ state: "error", error: true, output: "Hook PreToolUse denied this call" }))).toBeNull();
+    expect(commandExitCode(run({ state: "pending" }))).toBeNull();
+    expect(commandExitCode({ ...tool("Read"), state: "ok", output: "Exit code 1" })).toBeNull();
+    expect(commandExitCode({ ...tool("exec_command"), output: "" })).toBeNull();
+  });
+});
+
+describe("elapsedSince", () => {
+  it("counts from the turn's start, and says nothing for a time it cannot read", () => {
+    expect(elapsedSince("2026-10-26T17:00:00Z", Date.parse("2026-10-26T17:00:12Z"))).toBe("12s");
+    expect(elapsedSince(null, Date.now())).toBeNull();
+    expect(elapsedSince("garbage", Date.now())).toBeNull();
+  });
+});
+
+describe("liveOutputTail", () => {
+  // a Claude Code pane while a command runs (its shape as herdr pane read gives it): the output
+  // above, the input box and the status lines under the rule
+  const claudeScreen = [
+    "⏺ Re-running the PR update from the repo.",
+    "",
+    "⏺ Bash(bun test --watch)",
+    "  ⎿  3 pass",
+    "     1 fail",
+    "     Running…",
+    "",
+    "✻ Cogitating… (12s · ↓ 1.2k tokens)",
+    "",
+    "─".repeat(120),
+    "❯ merged, finish up",
+    "─".repeat(120),
+    "  /work/app Opus 5.5 [medium] ctx:71%",
+    "  ⏵⏵ bypass permissions on · 1 shell",
+  ].join("\n");
+
+  it("drops the agent's input box and status lines under the rule", () => {
+    expect(liveOutputTail(claudeScreen)).toBe(claudeScreen.split("\n").slice(0, 8).join("\n"));
+  });
+
+  it("keeps the last lines of a screen with no input box, without trailing blank lines", () => {
+    const lines = Array.from({ length: 30 }, (_, index) => `line ${index}`);
+    expect(liveOutputTail(`${lines.join("\n")}\n\n`, 12)).toBe(lines.slice(-12).join("\n"));
   });
 });
 
 describe("runNames", () => {
   // what Turn keeps between draws: each part's run name, by part index
   const draw = (parts: ConversationPart[], previous: ReadonlyMap<number, string>) => {
-    const runs = turnSegments(parts).flatMap((segment) => segment.kind === "work" ? [segment] : []);
+    const runs = turnSegments(parts).flatMap((segment) => segment.kind === "actions" ? [segment] : []);
     const names = runNames(runs, new Map(parts.map((part, index) => [part, index])), previous);
     return { names, next: new Map(runs.flatMap((run, index) => run.parts.map((part) => [parts.indexOf(part), names[index]!] as const))) };
   };
