@@ -19,7 +19,7 @@ export const USAGE_KO: Record<string, string> = {
   "Signed in as {account}. Continuing may replace it.": "{account}로 로그인돼 있어요. 계속하면 바뀔 수 있어요.",
   "an existing account": "기존 계정",
   "Choose OpenCode Go or Zen for plan limits.": "요금제 한도는 OpenCode Go나 Zen을 고르세요.",
-  "Follow the steps in the new tab.": "새 탭의 안내를 따르세요.",,
+  "Follow the steps in the new tab.": "새 탭의 안내를 따르세요.",
   "Sign-in timed out. Try again.": "로그인 시간이 지났어요. 다시 시도하세요.",
   "Allow popups to sign in": "로그인하려면 팝업을 허용하세요",
   "Choose a provider": "제공업체 선택",
