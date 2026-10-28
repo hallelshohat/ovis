@@ -65,6 +65,19 @@ function categorize(name: string): WorkCategory {
 }
 
 /**
+ * A finished command's exit status, as the terminal prints it, from what the transcript records:
+ * Claude starts a failed Bash result with `Exit code N` and flags a success `ok`; Codex writes the
+ * code into the output. Null when the call is no command, still runs, or records no code.
+ */
+export function commandExitCode(part: ToolPart): number | null {
+  if (categorize(part.name) !== "command" || part.state === "pending") return null;
+  const head = part.output.slice(0, 2000);
+  const code = /^(?:Process exited with code|Exit code:?) (\d+)$/m.exec(head) ?? /"exit_code":\s*(\d+)/.exec(head);
+  if (code !== null) return Number(code[1]);
+  return part.state === "ok" ? 0 : null;
+}
+
+/**
  * "1 edit · 2 file reads · 1 command" — the block's header, in the order a reader cares about.
  * The failures are not in it (`workFailed`): a narrow header cuts this line short.
  */

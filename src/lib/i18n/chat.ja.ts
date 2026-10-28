@@ -67,6 +67,7 @@ export const CHAT_JA: Record<string, string> = {
   "succeeded": "成功",
   "pending": "待機中",
   "outcome not recorded": "結果の記録なし",
+  "exit {n}": "終了コード {n}",
   "{n} updates": "{n} 回の更新",
   "{n} pending": "待機 {n} 件",
   "no update completed": "完了した更新なし",

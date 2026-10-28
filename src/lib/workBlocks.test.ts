@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, splitTurn, todoGroups, turnSegments, visibleWorkParts, workFailed, workSummary, type ToolPart } from "./workBlocks.ts";
+import { formatWorkDuration, splitTurn, todoGroups, turnSegments, commandExitCode, visibleWorkParts, workFailed, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -66,6 +66,26 @@ describe("turnSegments", () => {
     expect(turnSegments([])).toEqual([]);
     expect(turnSegments([text("  ")])).toEqual([]);
     expect(turnSegments([tool("a"), text(" \n"), tool("b")])).toEqual([{ kind: "actions", parts: [tool("a"), tool("b")] }]);
+  });
+});
+
+describe("commandExitCode", () => {
+  const run = (over: Partial<ToolPart>): ToolPart => ({ ...tool("Bash"), ...over });
+  it("reads the code each agent records for a finished command", () => {
+    // Claude flags a failed Bash call and starts its result with the code
+    expect(commandExitCode(run({ state: "error", error: true, output: "Exit code 128\nfatal: not a git repository" }))).toBe(128);
+    expect(commandExitCode(run({ state: "ok", output: "clean" }))).toBe(0);
+    // Codex writes it into the output, flag or no flag
+    expect(commandExitCode({ ...tool("exec_command"), output: "Process exited with code 2\nboom" })).toBe(2);
+    expect(commandExitCode({ ...tool("exec_command"), output: "Chunk ID: 1\nExit code: 0\nOutput:\nok" })).toBe(0);
+  });
+
+  it("says nothing it does not know", () => {
+    // a failure with no code (a hook refused it, a timeout) is a failure, not an exit status
+    expect(commandExitCode(run({ state: "error", error: true, output: "Hook PreToolUse denied this call" }))).toBeNull();
+    expect(commandExitCode(run({ state: "pending" }))).toBeNull();
+    expect(commandExitCode({ ...tool("Read"), state: "ok", output: "Exit code 1" })).toBeNull();
+    expect(commandExitCode({ ...tool("exec_command"), output: "" })).toBeNull();
   });
 });
 

@@ -1279,6 +1279,16 @@
   color: var(--status-blocked);
 }
 
+/* a finished command's exit status, as the terminal prints it: the code is mono, a nonzero one the failure's color */
+.work-row-state.is-exit {
+  font-family: var(--font-mono);
+  font-weight: var(--fw-regular);
+}
+
+.work-row-state.is-exit.is-error {
+  color: var(--status-blocked);
+}
+
 .work-row-failed {
   flex: none;
   padding: 0 var(--space-1);
