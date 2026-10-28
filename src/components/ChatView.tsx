@@ -654,7 +654,7 @@ function WorkBlockView({ paneId, parts, turnParts, rowKey, live, waiting, showTh
   const grouped = new Set([...groups.values()].flatMap((group) => group.attempts.slice(1).map((attempt) => attempt.part)));
   const toolKey = (part: ConversationPart) => `tool:${turnParts.indexOf(part)}`;
   const visible = visibleWorkParts(parts, showThinking);
-  if (visible.length === 0) return live && !waiting ? <PendingWorkHead title={t("Working…")} since={since} /> : null;
+  if (visible.length === 0) return !live ? null : waiting ? <PendingWorkHead className="is-waiting" title={t("Needs you")} /> : <PendingWorkHead title={t("Working…")} since={since} />;
   const summary = workSummary(parts);
   const failed = workFailed(parts);
   // a blocked agent is not working: the open block takes the sidebar's words for it. A settled run
@@ -1035,6 +1035,8 @@ const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, showThink
     })}
     {/* a running turn that has written nothing yet: the head stands where its first run will be */}
     {live && !waiting && segments.length === 0 && <PendingWorkHead title={t("Working…")} since={turn.ts} />}
+    {/* a blocked agent whose newest part is words: it waits under them, where the terminal draws its prompt */}
+    {waiting && segments.at(-1)?.kind !== "actions" && <PendingWorkHead className="is-waiting" title={t("Needs you")} />}
     {/* the terminal's "✻ Worked for 52s" line: always shown, it closes a turn that did work */}
     {duration !== null && segments.some((segment) => segment.kind === "actions") && <p className="chat-turn-duration">{t("Worked for {duration}", { duration })}</p>}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
