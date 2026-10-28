@@ -3,7 +3,7 @@ import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rename
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
-import { AmbiguousClaudeStore, claudeAttachArgs, claudeAttachedJob, claudeAttachSession, claudeForegroundSession, claudeJobSession, claudeProcessSession, claudeSessionTempDir, claudeStoreKey, claudeStoreOf, claudeProjectDir, claudeTranscriptFile, claudeRecordOnlyIn, configDirInPsLine, darwinProcess, forgetClaudeSessions, herdrLaunchSource, hintedClaudeConfigDir, isClaudeProcess, paneClaudeSource, processClaudeConfigDir, processClaudeSource, processLaunchSource, procArgsEnvironment, windowsShellClaude } from "./claude-store.ts";
+import { AmbiguousClaudeStore, claudeAttachArgs, claudeAttachedJob, claudeAttachSession, claudeForegroundSession, claudeJobSession, claudeProcessSession, claudeSessionTempDir, processClaudeTmpDir, claudeStoreKey, claudeStoreOf, claudeProjectDir, claudeTranscriptFile, claudeRecordOnlyIn, configDirInPsLine, darwinProcess, forgetClaudeSessions, herdrLaunchSource, hintedClaudeConfigDir, isClaudeProcess, paneClaudeSource, processClaudeConfigDir, processClaudeSource, processLaunchSource, procArgsEnvironment, windowsShellClaude } from "./claude-store.ts";
 import { procStartTime } from "./darwin-process.ts";
 import type { ProcessRow } from "./windows-processes.ts";
 
@@ -1666,5 +1666,14 @@ describe.skipIf(process.platform !== "linux")("hintedClaudeConfigDir", () => {
       await expect(hintedClaudeConfigDir([{ pid: process.pid }], proc)).rejects.toBeInstanceOf(AmbiguousClaudeStore);
       expect(await hintedClaudeConfigDir([{ pid: gone.pid }], proc)).toBeNull();
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+describe("processClaudeTmpDir", () => {
+  it("reads CLAUDE_CODE_TMPDIR from the process's environment", () => {
+    expect(processClaudeTmpDir(7, "linux", () => "A=1\0CLAUDE_CODE_TMPDIR=/x/t\0")).toBe("/x/t");
+    expect(processClaudeTmpDir(7, "darwin", () => "A=1\0CLAUDE_CODE_TMPDIR=/x/t")).toBe("/x/t");
+    expect(processClaudeTmpDir(7, "linux", () => "A=1\0")).toBeNull();
+    expect(processClaudeTmpDir(7, "linux", () => null)).toBeNull();
+    expect(processClaudeTmpDir(7, "win32", () => "CLAUDE_CODE_TMPDIR=/x/t")).toBeNull();
   });
 });
