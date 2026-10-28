@@ -1382,9 +1382,11 @@
   color: var(--status-blocked);
 }
 
-/* a running call's spinner stands in the caret's place, stepped like the send button's */
+/* a running call's spinner stands in the caret's place. It turns smoothly, unlike the stepped send
+   button's: a transform on its own layer is turned by the compositor, without repainting the page */
 .work-row-spinner {
-  animation: work-row-spin var(--dur-spin) steps(8) infinite;
+  animation: work-row-spin 1s linear infinite;
+  will-change: transform;
 }
 
 @keyframes work-row-spin {
