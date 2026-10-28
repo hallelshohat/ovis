@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, splitTurn, todoGroups, turnSegments, commandExitCode, visibleWorkParts, workFailed, workSummary, type ToolPart } from "./workBlocks.ts";
+import { formatWorkDuration, splitTurn, todoGroups, turnSegments, commandExitCode, elapsedSince, liveOutputTail, visibleWorkParts, workFailed, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -86,6 +86,44 @@ describe("commandExitCode", () => {
     expect(commandExitCode(run({ state: "pending" }))).toBeNull();
     expect(commandExitCode({ ...tool("Read"), state: "ok", output: "Exit code 1" })).toBeNull();
     expect(commandExitCode({ ...tool("exec_command"), output: "" })).toBeNull();
+  });
+});
+
+describe("elapsedSince", () => {
+  it("counts from the turn's start, and says nothing for a time it cannot read", () => {
+    expect(elapsedSince("2026-10-26T17:00:00Z", Date.parse("2026-10-26T17:00:12Z"))).toBe("12s");
+    expect(elapsedSince(null, Date.now())).toBeNull();
+    expect(elapsedSince("garbage", Date.now())).toBeNull();
+  });
+});
+
+describe("liveOutputTail", () => {
+  // a Claude Code pane while a command runs (its shape as herdr pane read gives it): the output
+  // above, the input box and the status lines under the rule
+  const claudeScreen = [
+    "⏺ Re-running the PR update from the repo.",
+    "",
+    "⏺ Bash(bun test --watch)",
+    "  ⎿  3 pass",
+    "     1 fail",
+    "     Running…",
+    "",
+    "✻ Cogitating… (12s · ↓ 1.2k tokens)",
+    "",
+    "─".repeat(120),
+    "❯ merged, finish up",
+    "─".repeat(120),
+    "  /work/app Opus 5.5 [medium] ctx:71%",
+    "  ⏵⏵ bypass permissions on · 1 shell",
+  ].join("\n");
+
+  it("drops the agent's input box and status lines under the rule", () => {
+    expect(liveOutputTail(claudeScreen)).toBe(claudeScreen.split("\n").slice(0, 8).join("\n"));
+  });
+
+  it("keeps the last lines of a screen with no input box, without trailing blank lines", () => {
+    const lines = Array.from({ length: 30 }, (_, index) => `line ${index}`);
+    expect(liveOutputTail(`${lines.join("\n")}\n\n`, 12)).toBe(lines.slice(-12).join("\n"));
   });
 });
 

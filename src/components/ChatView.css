@@ -1138,6 +1138,7 @@
   .markdown-code-header,
   .work-block { transition: none; }
   .work-block.is-live .work-block-title::before { animation: none; }
+  .work-row-spinner { animation: none; }
 }
 
 .todo-list ul {
@@ -1277,6 +1278,27 @@
 /* a call that failed: its name in the alert colour and a word that says so, even folded */
 .work-row.is-error .work-row-name {
   color: var(--status-blocked);
+}
+
+/* a running call's spinner stands in the caret's place, stepped like the send button's */
+.work-row-spinner {
+  animation: work-row-spin var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes work-row-spin {
+  to { transform: rotate(360deg); }
+}
+
+.work-row-state.is-running {
+  color: var(--status-working);
+}
+
+/* a live head's elapsed time: the clock counts, the words hold still */
+.work-block-elapsed {
+  flex: none;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-regular);
 }
 
 /* a finished command's exit status, as the terminal prints it: the code is mono, a nonzero one the failure's color */

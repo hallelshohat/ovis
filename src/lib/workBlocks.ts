@@ -64,13 +64,18 @@ function categorize(name: string): WorkCategory {
   return "other";
 }
 
+/** A tool that runs a command in a shell: the terminal shows its output as it comes. */
+export function isCommandTool(name: string): boolean {
+  return categorize(name) === "command";
+}
+
 /**
  * A finished command's exit status, as the terminal prints it, from what the transcript records:
  * Claude starts a failed Bash result with `Exit code N` and flags a success `ok`; Codex writes the
  * code into the output. Null when the call is no command, still runs, or records no code.
  */
 export function commandExitCode(part: ToolPart): number | null {
-  if (categorize(part.name) !== "command" || part.state === "pending") return null;
+  if (!isCommandTool(part.name) || part.state === "pending") return null;
   const head = part.output.slice(0, 2000);
   const code = /^(?:Process exited with code|Exit code:?) (\d+)$/m.exec(head) ?? /"exit_code":\s*(\d+)/.exec(head);
   if (code !== null) return Number(code[1]);
@@ -114,6 +119,26 @@ export function formatWorkDuration(startTs: string | null, endTs: string | null)
   const rest = seconds % 60;
   if (minutes < 60) return rest > 0 ? t("{m}m {s}s", { m: minutes, s: rest }) : t("{m}m", { m: minutes });
   return t("{h}h {m}m", { h: Math.floor(minutes / 60), m: minutes % 60 });
+}
+
+/** "12s" since a turn started, for a head that is still running; null when the time is unreadable. */
+export function elapsedSince(ts: string | null, now: number): string | null {
+  return formatWorkDuration(ts, ts === null ? null : new Date(Math.max(now, Date.parse(ts) || 0)).toISOString());
+}
+
+/**
+ * The end of the pane's screen as a running command's live output: the transcripts record a call's
+ * output only once it ends, so while it runs the terminal is the only place it is. The agent's own
+ * input box under it is not output: Claude Code draws it between two rules, so the screen is cut at
+ * the first rule near the bottom. A screen with no rule keeps its last lines.
+ */
+export function liveOutputTail(screen: string, maxLines = 12): string {
+  const lines = screen.split("\n");
+  const bottom = Math.max(0, lines.length - 15);
+  const rule = lines.findIndex((line, index) => index >= bottom && /^[─━]{20,}/.test(line));
+  const kept = rule === -1 ? lines : lines.slice(0, rule);
+  while (kept.length > 0 && kept.at(-1)!.trim().length === 0) kept.pop();
+  return kept.slice(-maxLines).join("\n");
 }
 
 /**

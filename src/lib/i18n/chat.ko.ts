@@ -68,6 +68,7 @@ export const CHAT_KO: Record<string, string> = {
   "pending": "대기 중",
   "outcome not recorded": "결과 기록 없음",
   "exit {n}": "종료 코드 {n}",
+  "Live output (terminal)": "실시간 출력 (터미널)",
   "{n} updates": "업데이트 {n}번",
   "{n} pending": "대기 {n}개",
   "no update completed": "완료된 업데이트 없음",
