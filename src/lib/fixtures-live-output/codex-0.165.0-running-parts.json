@@ -1,0 +1,34 @@
+[
+  {
+    "kind": "tool",
+    "name": "exec",
+    "summary": "exec",
+    "input": "text(await tools.exec_command({cmd:'cd /tmp && for i in 1 2 3 4 5 6; do echo \"progress line $i of a slow job that prints steadily\"; sleep 2; done; sleep 90; echo finished',yield_time_ms:1000,max_output_tokens:1000}));\n",
+    "output": "Script completed\nWall time 1.3 seconds\nOutput:\n\n{\"chunk_id\":\"a7fc94\",\"wall_time_seconds\":1.001622625,\"session_id\":28799,\"original_token_count\":13,\"output\":\"progress line 1 of a slow job that prints steadily\\n\"}",
+    "call_id": "call_yZT3Vu9pZyMvTM1D3Z9Oybhc"
+  },
+  {
+    "kind": "tool",
+    "name": "exec",
+    "summary": "exec",
+    "input": "text(await tools.write_stdin({session_id:28799,chars:\"\",yield_time_ms:1000,max_output_tokens:1000}));\n",
+    "output": "Script completed\nWall time 5.0 seconds\nOutput:\n\n{\"chunk_id\":\"0e043b\",\"wall_time_seconds\":5.002387834,\"session_id\":28799,\"original_token_count\":51,\"output\":\"progress line 2 of a slow job that prints steadily\\nprogress line 3 of a slow job that prints steadily\\nprogress line 4 of a slow job that prints steadily\\nprogress line 5 of a slow job that prints steadily\\n\"}",
+    "call_id": "call_edmodCmQmdfeICjhmp7EBi5G"
+  },
+  {
+    "kind": "tool",
+    "name": "exec",
+    "summary": "exec",
+    "input": "text(await tools.write_stdin({session_id:28799,chars:\"\",yield_time_ms:50000,max_output_tokens:1000}));\n",
+    "output": "Script running with cell ID 3\nWall time 31.0 seconds\nOutput:\n",
+    "call_id": "call_I0qhMrYmEA1hsKNTwf2ef278"
+  },
+  {
+    "kind": "tool",
+    "name": "exec",
+    "summary": "exec",
+    "input": "text(await tools.write_stdin({session_id:28799,chars:\"\",yield_time_ms:50000,max_output_tokens:1000}));\n",
+    "output": "Script running with cell ID 4\nWall time 31.0 seconds\nOutput:\n",
+    "call_id": "call_LKtP4p4h7hVih1pyDDqpz6c8"
+  }
+]
