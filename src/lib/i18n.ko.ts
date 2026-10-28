@@ -96,6 +96,7 @@ const BASE: Record<string, string> = {
   "Sign in to use this PC from your phone and your other PCs.|account group": "로그인하면 폰과 다른 PC에서도 이 PC를 쓸 수 있어요.",
   "Remove {name}": "{name} 제거",
   "Save": "저장",
+  "Closed": "닫힘",
   "Goal": "목표",
   "Waiting for your answer": "답변을 기다리는 중",
   "Back": "뒤로",

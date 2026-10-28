@@ -100,6 +100,7 @@ const BASE: Record<string, string> = {
   "Sign in to use this PC from your phone and your other PCs.|account group": "登录后，可以从手机和其他 PC 使用这台 PC。",
   "Remove {name}": "移除 {name}",
   "Save": "保存",
+  "Closed": "已关闭",
   "Goal": "目标",
   "Waiting for your answer": "等待你的回答",
   "Back": "返回",

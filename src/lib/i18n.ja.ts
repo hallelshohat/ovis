@@ -98,6 +98,7 @@ const BASE: Record<string, string> = {
   "Sign in to use this PC from your phone and your other PCs.|account group": "サインインすると、スマートフォンやほかの PC からもこの PC を使えます。",
   "Remove {name}": "{name} を削除",
   "Save": "保存",
+  "Closed": "閉じています",
   "Goal": "目標",
   "Waiting for your answer": "回答待ち",
   "Back": "戻る",
