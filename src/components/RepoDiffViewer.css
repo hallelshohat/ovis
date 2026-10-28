@@ -335,3 +335,8 @@
     min-height: max(44px, var(--touch-target));
   }
 }
+
+/* a diff with nothing to draw is the app's one empty state (EmptyState.tsx), a little below the header */
+.repo-diff-note.empty-state {
+  margin: var(--space-6) 0 0;
+}
