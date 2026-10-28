@@ -59,7 +59,6 @@ export const SIDEBAR_KO: Record<string, string> = {
   "Pull request #{number}, closed": "풀 리퀘스트 #{number}, 닫힘",
   "Draft": "초안",
   "Merged": "병합됨",
-  "Closed": "닫힘",
   "Archive task": "작업 보관",
   "Approve plan": "계획 승인",
   "Approve and merge…": "승인하고 병합…",

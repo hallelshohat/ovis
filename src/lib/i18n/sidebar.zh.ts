@@ -59,7 +59,6 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Pull request #{number}, closed": "拉取请求 #{number}，已关闭",
   "Draft": "草稿",
   "Merged": "已合并",
-  "Closed": "已关闭",
   "Archive task": "归档任务",
   "Approve plan": "批准计划",
   "Approve and merge…": "批准并合并…",
