@@ -906,3 +906,15 @@ it("ends the request at once when the asker goes away during a read, reading no 
     read.mockRestore(); timers.restore();
   }
 });
+
+it("answers no live output for a pane with no Claude session, and needs a pane", async () => {
+  panes["w:p1"] = { agent: "codex", process: [] };
+  const read = async (query: string) => {
+    const url = new URL(`http://localhost/api/pane/live-output?${query}`);
+    return (await handlePaneRequest(new Request(url), url, "/api/pane/live-output", {}))!;
+  };
+  expect(await (await read("pane_id=w%3Ap1&since=2026-10-28T11%3A42%3A49.305Z")).json()).toEqual({ outputs: null });
+  const missing = await read("since=x");
+  expect(missing.status).toBe(400);
+  expect(((await missing.json()) as { error: { code: string } }).error.code).toBe("missing_pane_id");
+});
