@@ -444,6 +444,7 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
   // what the header says at rest, in the +'s cell that a hover or the focus gives its actions: how many agents
   // the Agents list holds for this PC, whatever they are doing (G-018: a resting agent is not "running")
   const agentCount = useMemo(() => sidebarAgents(machine.snapshot).length, [machine.snapshot]);
+  const boardTasks = <MachineContext.Provider value={machine.id}><BoardTasksButton machineName={machine.name} enabled={online && !props.watching} /></MachineContext.Provider>;
   const current = props.selectedMachineId === machine.id;
   // a watching device is refused a new workspace (G-040): the + stays where it is, disabled, and says why
   const canCreate = online && !props.watching;
@@ -491,7 +492,7 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
           and a screen reader's way, since the title is the one fold control (G-036) */}
       <button className="sidebar-row-action machine-toggle" tabIndex={-1} aria-hidden="true" aria-expanded={!folded} aria-label={foldLabel} title={foldLabel} onClick={toggle}>{folded ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}</button>
       {/* the herdr-projects board's tasks on this PC, also those whose space has closed */}
-      <MachineContext.Provider value={machine.id}><BoardTasksButton machineName={machine.name} enabled={online && !props.watching} /></MachineContext.Provider>
+      {boardTasks}
       <button className="sidebar-row-action machine-new" disabled={!canCreate} aria-label={t("New workspace on {name}", { name: machine.name })} title={createTitle} onClick={() => props.onNew(machine.id)}><Plus aria-hidden="true" /></button>
     </header>}
     {/* connected is the norm and says nothing new; every other state is spelled out. A failure is an alert, a
@@ -525,7 +526,10 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
     </div>}
     {/* the header's +, as the list's last row, also while the roster loads: an empty roster has its own New
         workspace, and a filtered list shows only what was looked for */}
-    {headerless && online && machine.snapshot?.workspaces.length !== 0 && !filter.active && <button type="button" className="machine-new-row" onClick={() => props.onNew(machine.id)}><span className="sidebar-mark" aria-hidden="true"><Plus /></span><span className="machine-new-row-label">{t("New workspace")}</span></button>}
+    {headerless && <div className="machine-host-actions">
+      {online && machine.snapshot?.workspaces.length !== 0 && !filter.active && <button type="button" className="machine-new-row" onClick={() => props.onNew(machine.id)}><span className="sidebar-mark" aria-hidden="true"><Plus /></span><span className="machine-new-row-label">{t("New workspace")}</span></button>}
+      {boardTasks}
+    </div>}
   </section>;
 }
 
