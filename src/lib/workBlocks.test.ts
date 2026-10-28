@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { foldedRequestsMatch, formatWorkDuration, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workBlockStartsOpen, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
+import { commandExitCode, elapsedSince, liveOutputTail, foldedRequestsMatch, formatWorkDuration, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workBlockStartsOpen, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
 import type { ConversationPart, ConversationTurn } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -66,10 +66,12 @@ describe("turnSegments", () => {
     expect(runs(after)).toEqual([0, 2, 4]);
   });
 
-  it("keeps commentary inside its run of work and a tools-then-answer turn as one run", () => {
+  it("keeps commentary visible between action runs while preserving grouped prose", () => {
     const narration = { ...text("looking\u2026"), phase: "commentary" as const };
     expect(turnSegments([tool("read"), narration, tool("edit"), text("done")])).toEqual([
-      { kind: "work", start: 0, parts: [tool("read"), narration, tool("edit")] },
+      { kind: "work", start: 0, parts: [tool("read")] },
+      { kind: "answer", start: 1, parts: [narration] },
+      { kind: "work", start: 2, parts: [tool("edit")] },
       { kind: "answer", start: 3, parts: [text("done")] },
     ]);
     expect(turnSegments([])).toEqual([]);
@@ -98,6 +100,64 @@ describe("foldedRequestsMatch", () => {
     expect(foldedRequestsMatch({ ...turn, parts: [text("An unauthorized call."), failed("401 unauthorized")] }, "unauthorized")).toBeNull();
     // a user's words are never a failed request
     expect(foldedRequestsMatch({ role: "user", ts: null, parts: [failed("401 unauthorized")] }, "unauthorized")).toBeNull();
+  });
+});
+
+describe("commandExitCode", () => {
+  const run = (over: Partial<ToolPart>): ToolPart => ({ ...tool("Bash"), ...over });
+  it("reads the code each agent records for a finished command", () => {
+    // Claude flags a failed Bash call and starts its result with the code
+    expect(commandExitCode(run({ state: "error", error: true, output: "Exit code 128\nfatal: not a git repository" }))).toBe(128);
+    expect(commandExitCode(run({ state: "ok", output: "clean" }))).toBe(0);
+    // Codex writes it into the output, flag or no flag
+    expect(commandExitCode({ ...tool("exec_command"), output: "Process exited with code 2\nboom" })).toBe(2);
+    expect(commandExitCode({ ...tool("exec_command"), output: "Chunk ID: 1\nExit code: 0\nOutput:\nok" })).toBe(0);
+  });
+
+  it("says nothing it does not know", () => {
+    // a failure with no code (a hook refused it, a timeout) is a failure, not an exit status
+    expect(commandExitCode(run({ state: "error", error: true, output: "Hook PreToolUse denied this call" }))).toBeNull();
+    expect(commandExitCode(run({ state: "pending" }))).toBeNull();
+    expect(commandExitCode({ ...tool("Read"), state: "ok", output: "Exit code 1" })).toBeNull();
+    expect(commandExitCode({ ...tool("exec_command"), output: "" })).toBeNull();
+  });
+});
+
+describe("elapsedSince", () => {
+  it("counts from the turn's start, and says nothing for a time it cannot read", () => {
+    expect(elapsedSince("2026-10-26T17:00:00Z", Date.parse("2026-10-26T17:00:12Z"))).toBe("12s");
+    expect(elapsedSince(null, Date.now())).toBeNull();
+    expect(elapsedSince("garbage", Date.now())).toBeNull();
+  });
+});
+
+describe("liveOutputTail", () => {
+  // a Claude Code pane while a command runs (its shape as herdr pane read gives it): the output
+  // above, the input box and the status lines under the rule
+  const claudeScreen = [
+    "⏺ Re-running the PR update from the repo.",
+    "",
+    "⏺ Bash(bun test --watch)",
+    "  ⎿  3 pass",
+    "     1 fail",
+    "     Running…",
+    "",
+    "✻ Cogitating… (12s · ↓ 1.2k tokens)",
+    "",
+    "─".repeat(120),
+    "❯ merged, finish up",
+    "─".repeat(120),
+    "  /work/app Opus 5.5 [medium] ctx:71%",
+    "  ⏵⏵ bypass permissions on · 1 shell",
+  ].join("\n");
+
+  it("drops the agent's input box and status lines under the rule", () => {
+    expect(liveOutputTail(claudeScreen)).toBe(claudeScreen.split("\n").slice(0, 8).join("\n"));
+  });
+
+  it("keeps the last lines of a screen with no input box, without trailing blank lines", () => {
+    const lines = Array.from({ length: 30 }, (_, index) => `line ${index}`);
+    expect(liveOutputTail(`${lines.join("\n")}\n\n`, 12)).toBe(lines.slice(-12).join("\n"));
   });
 });
 
