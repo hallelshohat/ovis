@@ -22,7 +22,8 @@ export function useFlip(container: RefObject<HTMLElement | null>, attr: string):
   const tops = useRef(new Map<string, number>());
   useLayoutEffect(() => {
     const root = container.current;
-    if (!root) return;
+    // a renderer with no layout (a test's) has nothing to move
+    if (!root || typeof root.querySelectorAll !== "function") return;
     const rows = new Map<string, HTMLElement>();
     const after = new Map<string, number>();
     for (const row of root.querySelectorAll<HTMLElement>(`[${attr}]`)) {

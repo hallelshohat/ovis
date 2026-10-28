@@ -4,9 +4,10 @@
  * PR_POLL_MS while the page is seen and online, and fresh once a chat has been quiet for
  * TURN_SETTLE_MS after its transcript changed (a turn ended, a push went out).
  */
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { PanePullRequests } from "../../shared/pull-requests.ts";
 import { fetchPullRequests } from "./api.ts";
+import { useMediaQuery } from "./useMediaQuery.ts";
 
 export const PR_POLL_MS = 60_000;
 export const TURN_SETTLE_MS = 10_000;
@@ -108,4 +109,18 @@ export function usePanePullRequests(machineId: string | null, paneId: string | n
     () => (key === null ? null : entries.get(key)?.data ?? null),
     () => null,
   );
+}
+
+/**
+ * The selected pane's pull requests and where they show: an inspector column beside the pane from
+ * 1200px, which the person can hide, or a sheet the header opens below that.
+ */
+export function usePullRequestInspector(machineId: string, paneId: string | null) {
+  const pullRequests = usePanePullRequests(machineId, paneId);
+  const docked = useMediaQuery("(min-width: 1200px)");
+  const [panelOpen, setPanelOpen] = useState(true);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const shown = (pullRequests?.pull_requests.length ?? 0) > 0;
+  const toggle = (): void => { if (docked) setPanelOpen((open) => !open); else setSheetOpen(true); };
+  return { pullRequests, docked, shown, panelOpen, setPanelOpen, sheetOpen, setSheetOpen, toggle, expanded: docked ? panelOpen && shown : sheetOpen };
 }
