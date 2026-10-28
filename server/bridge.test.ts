@@ -267,9 +267,10 @@ describe("loopback relay", () => {
 
   /** a client sending `total` bytes through the relay to a server that reads nothing */
   async function stuckUpstream(total: number): Promise<{ client: Socket; relay: { stop(): void }; written: Promise<void>; clientClosed: Promise<void>; upstreamClosed: Promise<void> }> {
+    const upstreamConnected = Promise.withResolvers<void>();
     const upstreamClosed = Promise.withResolvers<void>();
     const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: {
-      open(socket) { socket.pause(); },
+      open(socket) { socket.pause(); upstreamConnected.resolve(); },
       data() {},
       close() { upstreamClosed.resolve(); },
     } });
@@ -291,11 +292,20 @@ describe("loopback relay", () => {
       written.resolve();
     };
     const client = await Bun.connect({ hostname: "127.0.0.1", port: relay.port, socket: { open: push, drain: push, data() {}, close() { clientClosed.resolve(); } } });
+    await upstreamConnected.promise;
     return { client, relay, written: written.promise, clientClosed: clientClosed.promise, upstreamClosed: upstreamClosed.promise };
   }
 
   it("lets go of a server that reads nothing once its client leaves", async () => {
     const { client, written, upstreamClosed } = await stuckUpstream(16 * 1024 * 1024);
+    await written;
+    // Bun's forced reset after a large write is not reliably delivered on macOS; send a FIN here.
+    client.end();
+    await upstreamClosed;
+  });
+
+  it("lets go of a stalled server when its connected client resets the connection", async () => {
+    const { client, written, upstreamClosed } = await stuckUpstream(1);
     await written;
     client.terminate();
     await upstreamClosed;
