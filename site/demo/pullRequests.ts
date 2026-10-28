@@ -21,7 +21,17 @@ const failing88: PullRequest = {
   check_runs: [{ name: "Fast checks", state: "passing", url: null }, { name: "Integration and browser", state: "failing", url: null }],
 };
 
-export function demoPullRequests(key: string | undefined): PanePullRequests {
+export function demoPullRequests(key: string | undefined, shiftMs = 0): PanePullRequests {
+  const moved = (at: string): string => new Date(Date.parse(at) + shiftMs).toISOString();
+  const answer = fixtureAnswer(key);
+  return {
+    ...answer,
+    pull_requests: answer.pull_requests.map((pr) => ({ ...pr, created_at: moved(pr.created_at), updated_at: moved(pr.updated_at), merged_at: pr.merged_at && moved(pr.merged_at), closed_at: pr.closed_at && moved(pr.closed_at) })),
+    events: answer.events.map((event) => ({ ...event, at: moved(event.at) })),
+  };
+}
+
+function fixtureAnswer(key: string | undefined): PanePullRequests {
   if (key === "api") {
     const prs = [merged1925, open1931, failing88].sort(byAttention);
     return {
@@ -49,7 +59,8 @@ export function demoPullRequests(key: string | undefined): PanePullRequests {
 /** The demo's merge: a listed open PR with no failing check turns merged. */
 export function demoMerge(url: string): { ok: true } | { error: { code: string; message: string } } {
   if (url === open1931.url && open1931.state === "open") {
-    open1931 = { ...open1931, state: "merged", merged_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    // in the fixtures' own clock, which demoPullRequests moves to now with the rest
+    open1931 = { ...open1931, state: "merged", merged_at: t(6, 50), updated_at: t(6, 50) };
     return { ok: true };
   }
   return { error: { code: "pr_not_mergeable", message: "Its checks are failing now" } };

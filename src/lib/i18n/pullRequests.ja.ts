@@ -37,4 +37,6 @@ export const PULL_REQUESTS_JA: Record<string, string> = {
   "Squash and merge {title} into {base}.": "{title} を {base} にスカッシュしてマージします。",
   "This folder's repository is not on GitHub.": "このフォルダーのリポジトリは GitHub にありません。",
   "passed": "成功",
+  "Opened": "オープン",
+  "Branch {from} → {to}": "ブランチ {from} → {to}",
 };

@@ -37,4 +37,6 @@ export const PULL_REQUESTS_ZH: Record<string, string> = {
   "Squash and merge {title} into {base}.": "将 {title} 压缩并合并到 {base}。",
   "This folder's repository is not on GitHub.": "此文件夹的仓库不在 GitHub 上。",
   "passed": "通过",
+  "Opened": "已打开",
+  "Branch {from} → {to}": "分支 {from} → {to}",
 };

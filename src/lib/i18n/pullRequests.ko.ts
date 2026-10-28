@@ -37,4 +37,6 @@ export const PULL_REQUESTS_KO: Record<string, string> = {
   "Squash and merge {title} into {base}.": "{title}을(를) {base}에 스쿼시 후 병합합니다.",
   "This folder's repository is not on GitHub.": "이 폴더의 저장소는 GitHub에 없습니다.",
   "passed": "통과",
+  "Opened": "열림",
+  "Branch {from} → {to}": "브랜치 {from} → {to}",
 };
