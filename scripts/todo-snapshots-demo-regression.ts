@@ -131,9 +131,9 @@ async function feed(page: Page, scenario: Scenario, expectGroups: number, unchan
     await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
   }
   await page.locator(".chat-turn", { hasText: `Scenario ${scenario.name}` }).waitFor({ timeout: 10_000 });
-  // the work block of the scenario's turn, opened if the turn settled folded
-  const head = page.locator(".chat-turn-agent .work-block-head").last();
-  if (await head.getAttribute("aria-expanded") === "false") await head.click();
+  // the work blocks of the scenario's turn (one per run between its words), opened if they settled folded
+  const folded = page.locator(".chat-turn-agent").last().locator('.work-block-head[aria-expanded="false"]');
+  while (await folded.count() > 0) await folded.first().click();
   await page.waitForFunction((count) => document.querySelectorAll("[data-todo-group]").length === count, expectGroups, { timeout: 10_000 });
 }
 
@@ -413,7 +413,7 @@ try {
           const rowKey = await page.locator(".chat-virtual-row").filter({ has: page.locator("[data-todo-group]") }).getAttribute("data-chat-row");
           assert.deepEqual(split.map((group) => group.id), [JSON.stringify([rowKey, "toolu_n1"]), JSON.stringify([rowKey, "toolu_n4"])], `${label}: named by the turn row and each run's first call`);
           run = split[1];
-          assert.equal(await page.locator(".work-narration", { hasText: PROSE }).count(), 1, "the narration stays in the open");
+          assert.equal(await page.locator(".chat-turn-agent > .markdown", { hasText: PROSE }).count(), 1, "the narration stays in the open, between the runs");
           assert.equal(await page.locator(".chat-turn-agent .work-block-rows > .work-row:not(.work-row-thinking)").count(), 3, "the first run of two folds, the one alone stays a row, then the last run");
           if (en) assert.deepEqual(split.map((group) => group.head), ["Plan 2 updates · 1/3 done", "Plan 2 updates · 2/3 done 1 failed"]);
           await shoot(page, config, "narration-boundary", true);
@@ -465,7 +465,7 @@ try {
           await feed(page, S.narration, 2);
           await page.evaluate(() => { for (const socket of (window as unknown as { todoSockets: Set<{ send: (text: string) => void; readyState: number }> }).todoSockets) if (socket.readyState === 1) socket.send(JSON.stringify({ type: "role", mode: "observe" })); });
           await expand(page);
-          assert.equal(await page.locator(".work-narration", { hasText: PROSE }).count(), 1);
+          assert.equal(await page.locator(".chat-turn-agent > .markdown", { hasText: PROSE }).count(), 1);
           await shoot(page, config, "observe-readonly", true);
           // the PC goes away: what was drawn stays readable
           await page.evaluate(() => {
@@ -475,7 +475,7 @@ try {
           });
           await page.locator(".conn-live").waitFor({ state: "detached", timeout: 10_000 });
           assert.equal(await page.locator("[data-todo-group]").count(), 2, "an offline chat keeps the runs");
-          assert.equal(await page.locator(".work-narration", { hasText: PROSE }).count(), 1, "and the narration");
+          assert.equal(await page.locator(".chat-turn-agent > .markdown", { hasText: PROSE }).count(), 1, "and the narration");
           await shoot(page, config, "offline", true);
           console.log(`PASS ${label}: observe-only and offline transcripts keep the run and the narration readable`);
           assert.deepEqual(errors, []);
