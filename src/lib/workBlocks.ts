@@ -135,8 +135,9 @@ const squash = (text: string): string => text.replace(/\s+/g, "");
 
 /**
  * A running command's output as the agent's screen shows it, when its own records do not hold it:
- * only the lines under that command's own echo. The echo must be the whole command, or its start
- * cut with "…" where the agent shortens it: a command that only starts the same is another one.
+ * only the lines under that command's own echo. The echo must be the whole command: one the agent
+ * cut with "…" may be any command that starts the same, so it shows nothing rather than maybe
+ * another command's output.
  * The agent's thinking and elapsed counters, its narration, the echo itself, key hints, tips and
  * the input box are left out, and a screen that does not show the command answers nothing rather
  * than something else.
@@ -160,20 +161,18 @@ const echoed = (line: string): string => squash(line.replace(RUN_HEADER, "").rep
 /**
  * Where the output under a header starts, once the echo's own rows are passed (the echo wraps over
  * rows of its own: they are the command's text, not its output); null when the echo is not this
- * command, whole or cut with "…".
+ * whole command.
  */
 function echoedBody(lines: readonly string[], header: number, whole: string): number | null {
   let echo = echoed(lines[header]!);
   let at = header + 1;
-  while (at < lines.length && echo.length < whole.length && !echo.endsWith("…") && lines[at]!.trim().length > 0) {
+  while (at < lines.length && echo.length < whole.length && lines[at]!.trim().length > 0) {
     const next = echo + echoed(lines[at]!);
-    if (!whole.startsWith(next.replace(/…$/, ""))) break;
+    if (!whole.startsWith(next)) break;
     echo = next;
     at++;
   }
-  if (echo === whole) return at;
-  const cut = echo.replace(/…$/, "");
-  return cut !== echo && cut.length > 0 && whole.startsWith(cut) ? at : null;
+  return echo === whole ? at : null;
 }
 
 /** The call's own rows from `at`: up to a blank row, the input box's rule or a row back at the left edge, chrome left out. */

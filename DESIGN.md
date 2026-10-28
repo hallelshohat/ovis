@@ -2138,7 +2138,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   it ends). Codex's polls of the command hold its chunks; Claude Code streams it to a
   `tasks/<id>.output` file in its session temp folder (`GET /api/pane/live-output`, once a second);
   any other agent's is the region under the command's own echo on its screen (`pane.read`, read
-  only). Nothing printed yet draws no box: the row's spinner says it runs. When the result
+  only), only when that echo is the whole command: one the agent cut with "…" could be another's. Nothing printed yet draws no box: the row's spinner says it runs. When the result
   arrives the row folds and the output is the call's own. A finished command says its exit status
   as the terminal does, `exit 0` in mono, a nonzero code in `--status-blocked`, only when the
   transcript records it (Claude's `Exit code N` result or ok flag, Codex's output line).
