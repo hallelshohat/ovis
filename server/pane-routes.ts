@@ -4,10 +4,12 @@
  * move beside another, resize, clear, focus, paste an image). Each answers from herdr alone, so none needs the
  * server's own state. The dispatcher in index.ts runs the access gate first.
  */
-import type { AgentRenameRequest, PaneDirection, PaneMoved, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
+import type { AgentRenameRequest, PaneDirection, PaneMoved, PaneResized, PaneSplit, PaneSwapped, PaneLiveOutputResponse, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
 import { mergeCatalogSources } from "./catalog-sources.ts";
 import { rememberPaneCommands, scanPaneCommands } from "./commands.ts";
+import { paneClaudeTempFolder } from "./file-routes.ts";
 import { paneDocuments, paneFiles } from "./files.ts";
+import { claudeRunningOutputs } from "./live-output.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, requestIdContext, setRequestRoute } from "./http.ts";
 import { conversationImage, ConversationReadPending, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput, type ConversationPage } from "./conversation.ts";
 import { copilotRecoverable } from "./conversation-shared.ts";
@@ -175,6 +177,16 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     } catch (error) {
       return errorResponse(error);
     }
+  }
+
+  if (pathname === "/api/pane/live-output") {
+    setRequestRoute(pathname);
+    if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+    const paneId = url.searchParams.get("pane_id");
+    if (!paneId) return badRequest("missing_pane_id", "pane_id query parameter is required");
+    const since = Date.parse(url.searchParams.get("since") ?? "");
+    const folder = await paneClaudeTempFolder(paneId);
+    return jsonResponse({ outputs: folder === null ? null : await claudeRunningOutputs(folder, Number.isFinite(since) ? since : 0) } satisfies PaneLiveOutputResponse);
   }
 
   if (pathname === "/api/pane/find") {
