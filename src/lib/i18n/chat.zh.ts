@@ -67,6 +67,8 @@ export const CHAT_ZH: Record<string, string> = {
   "succeeded": "成功",
   "pending": "等待中",
   "outcome not recorded": "未记录结果",
+  "exit {n}": "退出码 {n}",
+  "Live output (terminal)": "实时输出（终端）",
   "{n} updates": "{n} 次更新",
   "{n} pending": "{n} 个等待中",
   "no update completed": "没有已完成的更新",

@@ -25,44 +25,25 @@ export function splitTurn(parts: ConversationPart[]): SplitTurn {
   return { work: parts.filter(isWork), answer: parts.filter(isAnswer) };
 }
 
-/** `start`: the index of the run's first part in the turn, which names the run while it grows */
-export type TurnSegment = { kind: "work"; start: number; parts: ConversationPart[] } | { kind: "answer"; start: number; parts: TextPart[] };
-export type WorkSegment = Extract<TurnSegment, { kind: "work" }>;
-
 /**
- * The turn in the agent's own order, as its terminal shows it: each run of work between two
- * answers is its own block, so words written before a tool call stay above it. Classified as
- * `splitTurn` classifies; whitespace-only text is in neither.
+ * A turn the way the terminal draws it: in the order it was written. Each piece of the agent's
+ * prose stands where it was said, and the actions between two of them (tool calls, reasoning,
+ * skills) are one run, folded as one block. Blank prose splits nothing.
  */
+export type TurnSegment = { kind: "text"; part: TextPart } | { kind: "actions"; parts: ConversationPart[] };
+
 export function turnSegments(parts: ConversationPart[]): TurnSegment[] {
   const segments: TurnSegment[] = [];
-  parts.forEach((part, index) => {
-    const last = segments.at(-1);
-    if (isAnswer(part)) {
-      if (last?.kind === "answer") last.parts.push(part);
-      else segments.push({ kind: "answer", start: index, parts: [part] });
-    } else if (isWork(part)) {
-      if (last?.kind === "work") last.parts.push(part);
-      else segments.push({ kind: "work", start: index, parts: [part] });
+  for (const part of parts) {
+    if (part.kind === "text") {
+      if (part.text.trim().length > 0) segments.push({ kind: "text", part });
+      continue;
     }
-  });
+    const last = segments.at(-1);
+    if (last?.kind === "actions") last.parts.push(part);
+    else segments.push({ kind: "actions", parts: [part] });
+  }
   return segments;
-}
-
-/**
- * A work block is open while its turn runs and folded once the turn settles: the answer stays
- * outside the fold, so a finished turn reads as its answer under one "Worked for" row.
- *
- * A settled turn keeps its block open when explicit commentary comes after the last answer, or
- * when commentary has no answer at all. Folding would hide the newest thing the agent said, or all
- * of it. It takes the turn's parts, not the split: the order decides.
- */
-export function workStartsOpen(live: boolean, parts: ConversationPart[]): boolean {
-  if (live) return true;
-  const lastAnswer = splitTurn(parts).answer.at(-1);
-  const after = lastAnswer === undefined ? 0 : parts.lastIndexOf(lastAnswer) + 1;
-  // everything readable after the last answer part is work: it is inside the fold
-  return parts.slice(after).some((part) => part.kind === "text" && part.text.trim().length > 0);
 }
 
 type WorkCategory = "edit" | "read" | "command" | "other";
@@ -81,6 +62,24 @@ function categorize(name: string): WorkCategory {
   if (/^(read|glob|grep|ls|list|search|find|cat)/.test(lower)) return "read";
   if (/bash|command|shell|exec|eval|run/.test(lower)) return "command";
   return "other";
+}
+
+/** A tool that runs a command in a shell: the terminal shows its output as it comes. */
+export function isCommandTool(name: string): boolean {
+  return categorize(name) === "command";
+}
+
+/**
+ * A finished command's exit status, as the terminal prints it, from what the transcript records:
+ * Claude starts a failed Bash result with `Exit code N` and flags a success `ok`; Codex writes the
+ * code into the output. Null when the call is no command, still runs, or records no code.
+ */
+export function commandExitCode(part: ToolPart): number | null {
+  if (!isCommandTool(part.name) || part.state === "pending") return null;
+  const head = part.output.slice(0, 2000);
+  const code = /^(?:Process exited with code|Exit code:?) (\d+)$/m.exec(head) ?? /"exit_code":\s*(\d+)/.exec(head);
+  if (code !== null) return Number(code[1]);
+  return part.state === "ok" ? 0 : null;
 }
 
 /**
@@ -120,6 +119,26 @@ export function formatWorkDuration(startTs: string | null, endTs: string | null)
   const rest = seconds % 60;
   if (minutes < 60) return rest > 0 ? t("{m}m {s}s", { m: minutes, s: rest }) : t("{m}m", { m: minutes });
   return t("{h}h {m}m", { h: Math.floor(minutes / 60), m: minutes % 60 });
+}
+
+/** "12s" since a turn started, for a head that is still running; null when the time is unreadable. */
+export function elapsedSince(ts: string | null, now: number): string | null {
+  return formatWorkDuration(ts, ts === null ? null : new Date(Math.max(now, Date.parse(ts) || 0)).toISOString());
+}
+
+/**
+ * The end of the pane's screen as a running command's live output: the transcripts record a call's
+ * output only once it ends, so while it runs the terminal is the only place it is. The agent's own
+ * input box under it is not output: Claude Code draws it between two rules, so the screen is cut at
+ * the first rule near the bottom. A screen with no rule keeps its last lines.
+ */
+export function liveOutputTail(screen: string, maxLines = 12): string {
+  const lines = screen.split("\n");
+  const bottom = Math.max(0, lines.length - 15);
+  const rule = lines.findIndex((line, index) => index >= bottom && /^[─━]{20,}/.test(line));
+  const kept = rule === -1 ? lines : lines.slice(0, rule);
+  while (kept.length > 0 && kept.at(-1)!.trim().length === 0) kept.pop();
+  return kept.slice(-maxLines).join("\n");
 }
 
 /**

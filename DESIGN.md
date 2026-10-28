@@ -1962,7 +1962,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   never behind the fold.
 - Space separates exchanges, not a rule: the transcript's gap is `--space-3`, so an answer sits
   close under its prompt, and a user turn that follows an assistant turn takes `--space-5` more.
-  The one rule of an exchange is the hairline under each of its folded work blocks.
+  The one rule of an exchange is the hairline under its turn's "Worked for" line.
 - Meta (time, copy) fades in on hover or focus and takes no click or tap while unseen; with any
   coarse pointer (a phone, or a touch screen beside a mouse) it is always visible. With a mouse and no touch screen (`(hover: hover) and
   (pointer: fine) and (not (any-pointer: coarse))`): from 481px a user turn's time and copy sit
@@ -2119,17 +2119,26 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   an open socket alone does not prove the conversation is current. No code or new controls are borrowed.
 
 ### Work block (`.work-block`, `.work-row`)
-- One per run of work in an assistant turn, in the agent's own order as its terminal shows it:
-  words the agent wrote before a tool call stay above that call's block, and a turn that talks
-  between its tools has a block between each run of words (Claude app's order of tool groups and
-  prose). The turn's last block that draws a row is its head: a `▸ Worked for 7s · 1 edit · 2
-  commands` header (duration = next turn's timestamp minus this one's, the whole turn's even when
-  the agent ran tools after its answer and the head sits under it; the runs before it read
-  `Worked`; "Working…" in `--status-working` behind a breathing dot while the agent runs;
-  "Needs you" in `--text-dim` behind a still `--status-blocked` dot while the
-  agent is blocked, by the pane's status and not by whether a prompt card was parsed) over
+- A turn reads in the order it was written, as Claude Code's terminal draws it: the agent's words
+  (`⏺ …` there) stand where they were said, in answer prose, never inside a fold; each run of tool
+  calls (and reasoning) between two of them is one block at its place. A block is a header over
   one-line rows on the header's own left edge, which is the prose edge too (the hover plate
-  overhangs it by `--space-1`).
+  overhangs it by `--space-1`). A settled block is named by what it did (`▸ 1 edit · 2 commands`,
+  the terminal's "Ran 2 commands"); the running turn's last block reads "Working… · 12s" in
+  `--status-working` behind a breathing dot, the elapsed time counting in `--text-dim` tabular
+  figures, or "Needs you" in `--text-dim` behind a still `--status-blocked` dot while the agent is
+  blocked (by the pane's status, not by whether a prompt card was parsed).
+- A settled turn that did work closes with an always-shown `.chat-turn-duration` line, "Worked for
+  52s" (duration = next turn's timestamp minus this one's; the terminal's "✻ Baked for 52s"), in
+  `--text-dim` `--fs-sm` with the exchange's one hairline under it.
+- A call of the running turn that has not answered runs now: a stepped `LoaderCircle` spins in its
+  caret's place (it stands still under reduced motion) and the word "running" follows the object. A running
+  command opens on its live output, the end of the pane's own screen read once a second
+  (`pane.read`, read only) with the agent's input box under the last rule cut off, under "Live
+  output (terminal)": the transcripts record a call's output only once it ends. When the result
+  arrives the row folds and the output is the call's own. A finished command says its exit status
+  as the terminal does, `exit 0` in mono, a nonzero code in `--status-blocked`, only when the
+  transcript records it (Claude's `Exit code N` result or ok flag, Codex's output line).
 - A row is caret + verb + object: `▸ Read src/metrics.ts`, `▸ Edited src/pages/Reports.tsx`,
   `▸ Ran pnpm test`. The caret is always shown; there is no per-tool icon and no separator. The
   verb (Read, Edited, Wrote, Ran; `lib/toolVerbs.ts`, by exact tool id) is in the interface face,
@@ -2152,19 +2161,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   link grows to `--touch-target` both ways, so the files of a patch never share a hit area.
   Follows T3 Code's workspace-relative paths (`formatWorkspaceRelativePath`), already credited
   for the file browser.
-- Mid-work narration sits between rows. While the turn runs it is the agent's voice: answer prose
-  (`--text`, `--fs-chat` on `--lh-prose`) on the prose edge. Once the turn settles it is a quiet
-  row again: `--text-dim`, `--fs-sm`. A run before the head has the agent's words after it, so it
-  is settled while the turn still runs, and its narration is quiet already.
-- Only the running turn's head block is open (working or blocked); the runs before it fold as a
-  settled turn's do. A settled turn folds to its header
-  with a hairline under it, and the header reads as a footnote: `--text-dim`, regular weight (the
-  live one keeps medium weight and its state color). The answer is outside the fold. A settled
-  turn stays open when its work holds text the answer does not end on: text with no answer at all
-  (an action or Codex commentary came last) or text recorded after the answer, so the agent's
-  words are never behind the fold. A block the reader opened or folded stays as they left it, and
-  so does one they focused or clicked inside: the fold at the end of a turn never takes the rows
-  from under them.
+- Only the running turn's last block is open (working or blocked); a block the agent has left folds
+  to its header. A block the reader opened or folded stays as they left it, and so does one they
+  focused or clicked inside: the fold at the end of a turn never takes the rows from under them.
 - The header is one line: the counts (`.work-block-summary`) take the width the title and the
   failure count leave and end in an ellipsis. `· 1 failed` (`.work-block-failed`) is its own item
   and is never cut, because the fold hides the failed row; at the largest chat type on the

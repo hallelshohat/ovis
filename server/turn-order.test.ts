@@ -6,8 +6,8 @@ import type { ConversationTurn } from "../shared/protocol.ts";
 
 const jsonl = (...records: unknown[]) => records.map((record) => JSON.stringify(record)).join("\n");
 
-const answerWordsAndWorkTools = (turn: ConversationTurn) => turnSegments(turn.parts).map((segment) => segment.kind === "answer"
-  ? segment.parts.map((part) => part.text).join(" ")
+const answerWordsAndWorkTools = (turn: ConversationTurn) => turnSegments(turn.parts).map((segment) => segment.kind === "text"
+  ? segment.part.text
   : `work: ${segment.parts.flatMap((part) => part.kind === "tool" ? [part.name] : []).join(", ")}`);
 
 describe("a turn keeps the agent's order of words and tools", () => {
