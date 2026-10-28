@@ -1719,6 +1719,37 @@ button {
   order: 1;
 }
 
+/* The workbench (Codex app, Conductor): from 641px the chrome (header, sidebar, tab rows) is one
+   surface with no rules between its parts, and each pane is a panel inset from it, its own edge
+   and corners, so the work reads as the thing on the desk. A split shows two panels. A phone keeps
+   the pane edge to edge. */
+@media (min-width: 641px) {
+  .app-header,
+  .tab-strip,
+  .tab-strip-row,
+  .pane-slot-bar {
+    border-bottom-color: transparent;
+  }
+
+  .sidebar {
+    border-right-color: transparent;
+  }
+
+  .pane-column {
+    background: var(--bg-panel);
+  }
+
+  .terminal-host {
+    margin: 0 var(--panel-inset) var(--panel-inset) 0;
+    border: var(--hairline) solid var(--border);
+    border-radius: var(--panel-radius);
+  }
+
+  .pane-slot[data-side="left"] {
+    border-right: 0;
+  }
+}
+
 /* a half's close sits at the end of its tab strip (TabStrip.css); a half with no strip (its pane
    gone, or crashed) keeps it in a bar of its own. The active half's row carries the accent, as
    the pane the header, the palette and the shortcuts act on */
