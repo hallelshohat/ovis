@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
+import { PaneLeadBadge } from "./PullRequestBadge.tsx";
 import { ArrowUp, ClipboardPaste, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
 
 import "./Composer.css";
@@ -1668,6 +1669,7 @@ export function Composer({
             {strip.path !== null && <span className="composer-strip-text composer-strip-path">{strip.path}</span>}
             {worktree && <span className="composer-strip-kind">{t("Worktree")}</span>}
           </span>}
+          <span className="composer-strip-item composer-strip-pr"><PaneLeadBadge machineId={machineId} paneId={paneId} /></span>
           {strip.branch !== null && <span className="composer-strip-item composer-strip-branch" title={strip.branch}>
             <GitBranch aria-hidden="true" />
             <span className="visually-hidden">{t("Branch")}: </span>

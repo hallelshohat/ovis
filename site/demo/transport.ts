@@ -43,6 +43,7 @@ import agentsFixture from "./fixtures/agents.json";
 import commandsFixture from "./fixtures/commands.json";
 import panesFixture from "./fixtures/panes.json";
 import terminalFixture from "./fixtures/terminal.json";
+import { demoMerge, demoPullRequests } from "./pullRequests.ts";
 
 /**
  * The fictional access facts the Phone & devices page shows, picked by `?demo_security=` when the
@@ -122,10 +123,12 @@ const chats = new Map<string, { turns: ConversationTurn[]; metadata: { model: st
 );
 // The fixtures' clocks say September 25th; the demo happens now. Every timestamp moves by the same
 // amount, so "Worked for" stays what it was and the newest turn ended three minutes ago.
+let fixtureShift = 0;
 {
   const stamps = [...chats.values()].flatMap((chat) => chat.turns.flatMap((turn) => [turn.ts, turn.end_ts].filter((v): v is string => typeof v === "string")));
   const newest = Math.max(...stamps.map((v) => Date.parse(v)));
   const shift = Date.now() - 3 * 60_000 - newest;
+  fixtureShift = shift;
   for (const chat of chats.values()) for (const turn of chat.turns) {
     if (turn.ts) turn.ts = new Date(Date.parse(turn.ts) + shift).toISOString();
     if (turn.end_ts) turn.end_ts = new Date(Date.parse(turn.end_ts) + shift).toISOString();
@@ -1696,15 +1699,23 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
     const chat = key ? chats.get(key) : undefined;
     return json({ matches: chat ? searchTurns(chat.turns, pattern) : [], cursor: null } satisfies ConversationSearchResponse);
   }
-  if (path === "/api/pane/conversation") {
-    const key = keyOfPane.get(paneId);
-    const chat = key ? chats.get(key) : undefined;
-    const agent = agentOf(paneId);
-    if (!chat) return json({ source: "scrollback", turns: [] });
-    const source = agent === "claude" ? "claude-transcript" : agent === "codex" ? "codex-transcript" : agent === "gjc" ? "gjc-transcript" : agent === "omo" ? "omo-transcript" : agent === "pi" ? "pi-transcript" : agent === "cmd" ? "cmd-transcript" : agent === "devin" ? "devin-transcript" : agent === "hermes" ? "hermes-transcript" : "omp-transcript";
-    // These demo fixtures have no native Grok/Agy lifecycle: omit optional activity.
-    return json({ source, turns: chat.turns, metadata: chat.metadata, cursor: null });
+  // the pull requests' times move with the turns', so each line keeps its place in the story
+  if (path === "/api/pane/pull-requests") return json(demoPullRequests(keyOfPane.get(paneId), fixtureShift));
+  if (path === "/api/pane/pull-requests/merge") {
+    if (method !== "POST") return error("method_not_allowed", "use POST", 400);
+    const merged = demoMerge(String((await bodyOf(init, input))["url"] ?? ""));
+    return "ok" in merged ? json(merged) : json(merged, 409);
   }
+
+  if (path === "/api/pane/conversation") {
+  const key = keyOfPane.get(paneId);
+  const chat = key ? chats.get(key) : undefined;
+  const agent = agentOf(paneId);
+  if (!chat) return json({ source: "scrollback", turns: [] });
+  const source = agent === "claude" ? "claude-transcript" : agent === "codex" ? "codex-transcript" : agent === "gjc" ? "gjc-transcript" : agent === "omo" ? "omo-transcript" : agent === "pi" ? "pi-transcript" : agent === "cmd" ? "cmd-transcript" : agent === "devin" ? "devin-transcript" : agent === "hermes" ? "hermes-transcript" : "omp-transcript";
+  // These demo fixtures have no native Grok/Agy lifecycle: omit optional activity.
+  return json({ source, turns: chat.turns, metadata: chat.metadata, cursor: null });
+}
   if (path === "/api/pane/plan") {
     if (method !== "GET") return error("method_not_allowed", "use GET", 400);
     if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);

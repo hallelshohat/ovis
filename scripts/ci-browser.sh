@@ -226,6 +226,7 @@ run_script scripts/sidebar-selection-contrast-demo-regression.ts
 run_script scripts/hide-pc-demo-regression.ts
 run_script scripts/pc-load-demo-regression.ts
 run_script scripts/sidebar-branch-line-demo-regression.ts
+run_script scripts/pr-inspector-demo-regression.ts
 run_script scripts/sidebar-tokens-demo-regression.ts
 run_script scripts/sidebar-context-ring-demo-regression.ts
 run_script scripts/sidebar-background-workspaces-demo-regression.ts
