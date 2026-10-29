@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { prStatus, remoteWebUrl } from "./pr-status.ts";
+import { prStatus, prStatusWord, remoteWebUrl } from "./pr-status.ts";
 
 describe("prStatus", () => {
   test("an open PR with its checks, review and diff, as the plugin's compact style writes them", () => {
     expect(prStatus({ pr: "● #8371", pr_checks: "✓ 12/12", pr_review: "approved", pr_diff: "+4 -0", pr_threads: "0 threads" })).toEqual({
-      number: 8371, state: "open", checksTone: "ok", checks: "✓ 12/12", review: { text: "approved", tone: "ok" }, diff: "+4 -0",
+      number: 8371, state: "open", checksTone: "ok", checks: "✓ 12/12", review: { text: "approved", tone: "ok" }, diff: "+4 -0", threads: null,
     });
   });
 
@@ -32,6 +32,33 @@ describe("prStatus", () => {
     expect(prStatus({ pr: "" })).toBeNull();
     expect(prStatus({ pr: 8470 })).toBeNull();
     expect(prStatus({ pr: "no pull request" })).toBeNull();
+  });
+});
+
+describe("prStatusWord", () => {
+  const word = (tokens: Record<string, string>) => prStatusWord(prStatus(tokens)!);
+
+  test("each state the badge can show maps to its one word", () => {
+    expect(word({ pr: "● #1", pr_checks: "✓ 4/4", pr_review: "approved" })).toBe("ready");
+    expect(word({ pr: "● #1" })).toBe("ready");
+    expect(word({ pr: "● #1", pr_checks: "✓ 4/4", pr_review: "review req" })).toBe("review");
+    expect(word({ pr: "● #1", pr_checks: "✓ 4/4", pr_review: "changes req" })).toBe("changes");
+    expect(word({ pr: "◐ #1", pr_checks: "… 3/14" })).toBe("running");
+    expect(word({ pr: "⊗ #1", pr_checks: "✗ 2/14" })).toBe("failed");
+    expect(word({ pr: "◌ #1 DRAFT", pr_checks: "✗ 2/14" })).toBe("draft");
+    expect(word({ pr: "◆ #1 MERGED" })).toBe("merged");
+    expect(word({ pr: "⊘ #1 CLOSED" })).toBe("closed");
+  });
+
+  test("failing checks outrank a review, and a review outranks running checks", () => {
+    expect(word({ pr: "⊗ #1", pr_checks: "✗ 2/14", pr_review: "changes req" })).toBe("failed");
+    expect(word({ pr: "◐ #1", pr_checks: "… 3/14", pr_review: "changes req" })).toBe("changes");
+    expect(word({ pr: "◐ #1", pr_checks: "… 3/14", pr_review: "review req" })).toBe("running");
+  });
+
+  test("open threads are kept, none is nothing to say", () => {
+    expect(prStatus({ pr: "● #1", pr_threads: "2 threads" })?.threads).toBe("2 threads");
+    expect(prStatus({ pr: "● #1", pr_threads: "0 threads" })?.threads).toBeNull();
   });
 });
 

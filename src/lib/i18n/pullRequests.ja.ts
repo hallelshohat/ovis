@@ -5,15 +5,11 @@
  */
 export const PULL_REQUESTS_JA: Record<string, string> = {
   "Checks failing": "チェック失敗",
-  "Checks running": "チェック実行中",
   "Review requested": "レビュー依頼中",
-  "Changes requested": "変更を要求されています",
-  "Ready to merge": "マージ可能",
   "{n} more open": "ほかに {n} 件オープン",
   "A pull request this chat opens shows here.": "このチャットで開いたプルリクエストがここに表示されます。",
   "Approved": "承認済み",
   "Ask {agent} to fix": "{agent} に修正を依頼",
-  "Checks": "チェック",
   "Earlier in this chat": "このチャットの以前のもの",
   "GitHub CLI is signed out": "GitHub CLI がサインアウトしています",
   "GitHub CLI not found": "GitHub CLI が見つかりません",

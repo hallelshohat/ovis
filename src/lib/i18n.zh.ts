@@ -28,6 +28,10 @@ import { PULL_REQUESTS_ZH } from "./i18n/pullRequests.zh.ts";
 const BASE: Record<string, string> = {
   "Draft": "草稿",
   "Merged": "已合并",
+  "Checks running": "检查运行中",
+  "Changes requested": "已请求更改",
+  "Ready to merge": "可以合并",
+  "Checks": "检查",
   "failed": "失败",
   "running": "运行中",
   "Pull requests": "拉取请求",

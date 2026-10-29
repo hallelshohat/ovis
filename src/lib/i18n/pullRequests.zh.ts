@@ -5,15 +5,11 @@
  */
 export const PULL_REQUESTS_ZH: Record<string, string> = {
   "Checks failing": "检查失败",
-  "Checks running": "检查运行中",
   "Review requested": "已请求审查",
-  "Changes requested": "已请求更改",
-  "Ready to merge": "可以合并",
   "{n} more open": "另有 {n} 个未关闭",
   "A pull request this chat opens shows here.": "此聊天打开的拉取请求会显示在这里。",
   "Approved": "已批准",
   "Ask {agent} to fix": "让 {agent} 修复",
-  "Checks": "检查",
   "Earlier in this chat": "此聊天中较早的",
   "GitHub CLI is signed out": "GitHub CLI 未登录",
   "GitHub CLI not found": "未找到 GitHub CLI",
