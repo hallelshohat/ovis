@@ -44,6 +44,22 @@ function checkRun(raw: unknown): PrCheck {
   return { name: text(fields["name"]), url: stamp(fields["detailsUrl"]), state };
 }
 
+/**
+ * One run per check, its newest: a check run again (a cancelled run, then a passing one) counts by
+ * the run GitHub itself goes by. A check is its workflow and name; a status, its context.
+ */
+export function newestRuns(raw: readonly unknown[]): unknown[] {
+  const newest = new Map<string, { run: unknown; at: string }>();
+  raw.forEach((run, index) => {
+    const fields = record(run);
+    const key = fields["__typename"] === "StatusContext" ? `status\0${text(fields["context"])}` : `run\0${text(fields["workflowName"])}\0${text(fields["name"])}`;
+    const at = text(fields["startedAt"]) || text(fields["completedAt"]) || text(fields["createdAt"]) || String(index).padStart(8, "0");
+    const known = newest.get(key);
+    if (!known || at >= known.at) newest.set(key, { run, at });
+  });
+  return [...newest.values()].map((entry) => entry.run);
+}
+
 function rollup(runs: PrCheck[]): PrChecks {
   if (runs.length === 0) return "none";
   if (runs.some((run) => run.state === "failing")) return "failing";
@@ -67,7 +83,7 @@ export function toPullRequest(raw: unknown, ownRepo: string | null): PullRequest
   const pending = Array.isArray(fields["reviewRequests"]) && fields["reviewRequests"].length > 0;
   const review: PrReview = decision === "APPROVED" ? "approved" : decision === "CHANGES_REQUESTED" ? "changes_requested"
     : decision === "REVIEW_REQUIRED" || pending ? "review_required" : "none";
-  const check_runs = Array.isArray(fields["statusCheckRollup"]) ? fields["statusCheckRollup"].map(checkRun) : [];
+  const check_runs = Array.isArray(fields["statusCheckRollup"]) ? newestRuns(fields["statusCheckRollup"]).map(checkRun) : [];
   return {
     url, number: count(fields["number"]), repo, own: ownRepo !== null && repo.toLowerCase() === ownRepo.toLowerCase(),
     title: text(fields["title"]), state, checks: rollup(check_runs), review, check_runs,

@@ -38,4 +38,18 @@ describe("gh pull requests", () => {
     expect([pr.review, pr.checks, attentionRank(pr)]).toEqual(["review_required", "passing", 2]);
     expect(toPullRequest({ ...listed[0], reviewDecision: "", reviewRequests: [] }, "acme/api").review).toBe("none");
   });
+
+  it("counts a check run again by its newest run, as GitHub does", () => {
+    // PR #9005's shape: the title linter cancelled at 09:56:50, then passed at 09:56:56
+    const linter = (conclusion: string, startedAt: string) => ({ __typename: "CheckRun", name: "check-ticket-id", workflowName: "(Check) PR title linter", status: "COMPLETED", conclusion, startedAt, completedAt: startedAt });
+    const rerun = toPullRequest({ ...listed[0], statusCheckRollup: [
+      linter("CANCELLED", "2026-10-29T09:56:50Z"),
+      { __typename: "CheckRun", name: "build", workflowName: "CI", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-29T09:50:00Z" },
+      linter("SUCCESS", "2026-10-29T09:56:56Z"),
+    ] }, "acme/api");
+    expect(rerun.checks).toBe("passing");
+    expect(rerun.check_runs.map((run) => `${run.name} ${run.state}`)).toEqual(["check-ticket-id passing", "build passing"]);
+    // a check whose newest run was cancelled still fails, as GitHub's merge box says
+    expect(toPullRequest({ ...listed[0], statusCheckRollup: [linter("CANCELLED", "2026-10-29T09:56:50Z")] }, "acme/api").checks).toBe("failing");
+  });
 });
