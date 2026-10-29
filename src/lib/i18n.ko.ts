@@ -28,6 +28,8 @@ const BASE: Record<string, string> = {
   "Save": "저장",
   "Draft": "초안",
   "Merged": "병합됨",
+  "Checks failed": "검사 실패함",
+  "Waiting for review": "리뷰 대기 중",
   "Checks running": "검사 실행 중",
   "Changes requested": "변경 요청됨",
   "Ready to merge": "병합 가능",
