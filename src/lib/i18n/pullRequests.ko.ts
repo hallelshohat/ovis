@@ -4,8 +4,7 @@
  * Register and fixed terms follow ../i18n.ko.ts; a key another feature also uses goes there.
  */
 export const PULL_REQUESTS_KO: Record<string, string> = {
-  "Checks failing": "검사 실패",
-  "Review requested": "리뷰 요청됨",
+  "Checks {passed}/{total} passed": "검사 {passed}/{total}개 통과",
   "{n} more open": "열린 PR {n}개 더",
   "A pull request this chat opens shows here.": "이 채팅에서 연 풀 리퀘스트가 여기에 표시됩니다.",
   "Approved": "승인됨",
