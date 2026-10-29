@@ -18,7 +18,8 @@ export interface PrInput { paneId: string; cwd: string; chat: Chat | null; fresh
 
 const prs = new Map<string, { pr: PullRequest; at: number }>();
 const lists = new Map<string, { urls: string[]; at: number }>();
-const repos = new Map<string, { status: GhStatus; repo: string | null; at: number }>();
+type RepoEntry = { status: GhStatus; repo: string | null; at: number; failedAt?: number };
+const repos = new Map<string, RepoEntry>();
 /** the branches seen in a chat while it was open, by pane and chat: a new chat in the pane starts with none */
 const observed = new Map<string, { branch: string; at: string }[]>();
 const inflight = new Map<string, Promise<PanePullRequests>>();
@@ -66,16 +67,23 @@ export function panePullRequests(input: PrInput, deps: PrDeps): Promise<PanePull
 async function read(input: PrInput, deps: PrDeps): Promise<PanePullRequests> {
   const now = deps.now();
   const sources: ChatSources = input.chat ? await input.chat.read().catch(() => ({ urls: [], branches: [], started_at: null })) : { urls: [], branches: [], started_at: null };
-  const timeline = branchTimeline(`${input.paneId}\0${input.chat?.id ?? ""}`, sources, await deps.currentBranch(input.cwd).catch(() => null), now);
+  // a chat's branches are the chat's: resumed in another pane, it keeps them (by pane only with no chat)
+  const timeline = branchTimeline(input.chat ? `chat\0${input.chat.id}` : `pane\0${input.paneId}`, sources, await deps.currentBranch(input.cwd).catch(() => null), now);
   const linked = sources.urls.length;
   const branchEvents = switches(timeline);
 
-  let repo = repos.get(input.cwd);
-  if (!repo || now - repo.at > REPO_TTL_MS) {
-    repo = { ...await ghRepo(deps.run, input.cwd), at: now };
+  let repo: RepoEntry | undefined = repos.get(input.cwd);
+  if (!repo || repoDue(repo, input.fresh, now)) {
+    const asked = { ...await ghRepo(deps.run, input.cwd), at: now };
+    if (failure(asked.status) && repo && !failure(repo.status)) {
+      // a lookup that failed never replaces a good one: the last good answer stands, and is asked again soon
+      repo = { ...repo, failedAt: now };
+    } else {
+      repo = asked;
+    }
     repos.set(input.cwd, repo);
   }
-  if (repo.status === "missing" || repo.status === "unauthenticated" || repo.status === "error") {
+  if (failure(repo.status)) {
     return { gh: repo.status, pull_requests: [], events: inWindow(branchEvents, sources.started_at), linked };
   }
 
@@ -153,6 +161,18 @@ function branchTimeline(chatKey: string, sources: ChatSources, current: string |
   const merged = [...sources.branches, ...seen];
   merged.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""));
   return merged.filter((entry, index) => merged[index - 1]?.branch !== entry.branch);
+}
+
+const failure = (status: GhStatus): boolean => status === "missing" || status === "unauthenticated" || status === "error";
+
+/**
+ * When the repository is asked again: a good answer after REPO_TTL_MS; a failed one (or a good one
+ * whose renewal failed) after OPEN_TTL_MS, or at once when the caller asks for a fresh read.
+ */
+function repoDue(repo: RepoEntry, fresh: boolean, now: number): boolean {
+  const failedAt = failure(repo.status) ? repo.at : repo.failedAt;
+  if (failedAt !== undefined) return fresh || now - failedAt > OPEN_TTL_MS;
+  return now - repo.at > REPO_TTL_MS;
 }
 
 const ended = (pr: PullRequest | undefined): boolean => pr?.state === "merged" || pr?.state === "closed";
