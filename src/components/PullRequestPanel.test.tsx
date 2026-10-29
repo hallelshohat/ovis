@@ -13,7 +13,7 @@ const pr = (number: number, over: Partial<PullRequest>): PullRequest => ({
   created_at: "2026-10-28T13:00:00Z", merged_at: null, closed_at: null, updated_at: "2026-10-28T13:00:00Z", ...over,
 });
 const failing = pr(88, { own: false, repo: "acme/client-sdk", url: "https://github.com/acme/client-sdk/pull/88", title: "Send Idempotency-Key from the SDK", checks: "failing", check_runs: [{ name: "Fast checks", state: "passing", url: null }, { name: "Integration and browser", state: "failing", url: null }] });
-const scenario: PanePullRequests = { gh: "ok", events: [], pull_requests: [pr(1925, { state: "merged", merged_at: "2026-10-28T13:41:00Z" }), pr(1931, { checks: "pending" }), failing].sort(byAttention) };
+const scenario: PanePullRequests = { gh: "ok", linked: 0, events: [], pull_requests: [pr(1925, { state: "merged", merged_at: "2026-10-28T13:41:00Z" }), pr(1931, { checks: "pending" }), failing].sort(byAttention) };
 const render = (data: PanePullRequests) => renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(PullRequestPanel, { data, machineId: "local", paneId: "w1C:p1", agentName: "Claude" }) }));
 
 describe("the pull request panel", () => {
@@ -30,13 +30,13 @@ describe("the pull request panel", () => {
   });
 
   it("offers a merge only on an open lead with green checks", () => {
-    const html = render({ gh: "ok", events: [], pull_requests: [pr(1931, { review: "approved", check_runs: [{ name: "Fast checks", state: "passing", url: null }] })] });
+    const html = render({ gh: "ok", linked: 0, events: [], pull_requests: [pr(1931, { review: "approved", check_runs: [{ name: "Fast checks", state: "passing", url: null }] })] });
     expect(html).toContain(">Squash and merge</button>");
     expect(html).toContain("Approved");
   });
 
   it("says why there are none when gh cannot answer", () => {
-    const html = render({ gh: "missing", events: [], pull_requests: [] });
+    const html = render({ gh: "missing", linked: 1, events: [], pull_requests: [] });
     expect(html).toContain("GitHub CLI not found");
     expect(html).not.toContain("pr-card");
   });

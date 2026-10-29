@@ -42,7 +42,7 @@ function fixtureAnswer(key: string | undefined): PanePullRequests {
   if (key === "api") {
     const prs = [merged1925, open1931, failing88].sort(byAttention);
     return {
-      gh: "ok", pull_requests: prs,
+      gh: "ok", pull_requests: prs, linked: 2,
       events: [
         { at: t(4, 30), kind: "opened", url: merged1925.url },
         { at: t(5, 10), kind: "merged", url: merged1925.url },
@@ -54,8 +54,8 @@ function fixtureAnswer(key: string | undefined): PanePullRequests {
     };
   }
   const only = key ? ONE[key] : undefined;
-  if (!only) return { gh: "ok", pull_requests: [], events: [] };
-  return { gh: "ok", pull_requests: [only], events: [{ at: only.created_at, kind: "opened", url: only.url }, ...(only.merged_at ? [{ at: only.merged_at, kind: "merged" as const, url: only.url }] : [])] };
+  if (!only) return { gh: "ok", pull_requests: [], events: [], linked: 0 };
+  return { gh: "ok", pull_requests: [only], linked: 1, events: [{ at: only.created_at, kind: "opened", url: only.url }, ...(only.merged_at ? [{ at: only.merged_at, kind: "merged" as const, url: only.url }] : [])] };
 }
 
 /** The demo's merge: a listed open PR with no failing check turns merged, in the fixtures' own clock (demoPullRequests moves it to now). */

@@ -74,7 +74,7 @@ try {
     // lines (site/demo/pullRequests.ts) would add rows of their own, so this page has none
     const demoFetch = window.fetch.bind(window);
     window.fetch = (input, init) => new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href).pathname.endsWith("/pane/pull-requests")
-      ? Promise.resolve(new Response(JSON.stringify({ gh: "ok", pull_requests: [], events: [] }), { headers: { "content-type": "application/json" } }))
+      ? Promise.resolve(new Response(JSON.stringify({ gh: "ok", pull_requests: [], events: [], linked: 0 }), { headers: { "content-type": "application/json" } }))
       : demoFetch(input, init);
   })();</script>`;
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>\n${record}\n<script type="module"`));

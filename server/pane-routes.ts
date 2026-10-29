@@ -21,6 +21,7 @@ import { claudeRewindOpen } from "./prompt.ts";
 import { expandedDirectory } from "./workspace-routes.ts";
 import { ghMerge, ghView } from "./pull-requests/gh.ts";
 import { forgetPullRequest, panePullRequests, pullRequestDeps } from "./pull-requests/index.ts";
+import { conversationSources, fileChat, PER_CHAT_FILES, type Chat } from "./pull-requests/sources.ts";
 import type { PanePullRequests } from "../shared/pull-requests.ts";
 
 /** the native stores createServer was given; unset, each reader finds its own */
@@ -268,10 +269,18 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     if (!paneId) return badRequest("missing_pane_id", "pane_id is required");
     try {
       const { cwd } = await paneContext(paneId);
-      const transcript = await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome)
-        .then((found) => ({ path: found.path, source: found.source }), () => null);
+      // the chat the pane shows now: a transcript file is read itself, a shared store through the chat's pages
+      const chat = await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome).then((found): Chat => {
+        if (PER_CHAT_FILES.has(found.source)) return fileChat(found.path);
+        const session = "session" in found ? found.session : "sessionId" in found ? found.sessionId : "";
+        const id = `${found.source}:${found.path}:${session}`;
+        return { id, read: () => conversationSources(id, async (page) => {
+          const conversation = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+          return { turns: conversation.turns, cursor: conversation.cursor };
+        }) };
+      }, () => null);
       const deps = pullRequestDeps();
-      const answer = await panePullRequests({ paneId, cwd, transcript, fresh: !merge && url.searchParams.get("fresh") === "1" }, deps);
+      const answer = await panePullRequests({ paneId, cwd, chat, fresh: !merge && url.searchParams.get("fresh") === "1" }, deps);
       if (!merge) return jsonResponse(answer satisfies PanePullRequests, 200, { "cache-control": "no-store" });
       const listed = answer.pull_requests.find((pr) => pr.url === target);
       if (!listed) return jsonResponse({ error: { code: "pr_not_in_chat", message: "That pull request is not one of this chat's" } }, 404);

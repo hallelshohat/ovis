@@ -38,6 +38,8 @@ export interface PanePullRequests {
   pull_requests: PullRequest[];
   /** time order */
   events: PrEvent[];
+  /** the PR links the chat wrote, counted even when gh cannot read them: why a chat with none says nothing */
+  linked: number;
 }
 
 /** 0 needs the person most: failing checks, then requested changes, a requested review, running checks, green, draft, merged, closed. */
