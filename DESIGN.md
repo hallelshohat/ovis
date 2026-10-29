@@ -1927,8 +1927,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   left out; one the chat links stays. Open PRs are read again after the chat has been quiet `10s`
   past a change and every `60s` while the page is seen; merged and closed ones are read once.
 - One leads: the one that needs the person first (failing checks, requested changes, a requested
-  review, running checks, ready to merge, draft, merged, closed). Its badge is the state's colour
-  (`--pr-*`, aliases of the agent states', so every palette draws it) and a glyph; `+N` counts the
+  review, running checks, ready to merge, draft, merged, closed). Its badge is a glyph in the
+  state's colour (`--pr-*`, aliases of the agent states', so every palette draws it) beside its
+  number and word in `--text`: several palettes keep their state colours under 4.5:1 for small text,
+  so text never takes them (`src/pr-contrast.test.ts`); an ended PR is quieter by its dim title, never faded; `+N` counts the
   chat's other open ones. A sidebar row draws the glyph alone, the composer strip the number, the
   header the number and the state word (the word goes below `768px`, the number below `480px`).
   Another repository's PR is named `repo#N`. A state change fades the colour (`--dur-base`).

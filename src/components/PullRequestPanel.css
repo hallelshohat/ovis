@@ -33,7 +33,7 @@
   border: var(--hairline) solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg);
-  transition: border-color var(--dur-base) var(--ease-out), opacity var(--dur-base) var(--ease-out);
+  transition: border-color var(--dur-base) var(--ease-out);
 }
 
 .pr-card.is-lead.is-failing,
@@ -41,8 +41,9 @@
   border-color: color-mix(in srgb, var(--pr-failing) 45%, var(--border));
 }
 
-.pr-card.is-ended {
-  opacity: 0.75;
+/* an ended PR is quieter by its title, never by fading: faded text falls under small-text contrast */
+.pr-card.is-ended .pr-card-title {
+  color: var(--text-dim);
 }
 
 .pr-card-head {
@@ -102,8 +103,9 @@
   font-family: var(--font-mono);
 }
 
-.pr-plus { color: var(--pr-open); }
-.pr-minus { color: var(--pr-failing); }
+/* the lines changed, in text colour: their signs say which way; the state colours are for glyphs */
+.pr-plus,
+.pr-minus { color: var(--text-dim); }
 
 .pr-checks {
   display: flex;

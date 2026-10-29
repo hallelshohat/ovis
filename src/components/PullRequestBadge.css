@@ -1,17 +1,18 @@
-/* A pull request's number in its state's colour (--pr-* tokens, styles.css); the colour fades when
-   the state changes, so a check going red or a merge reads as a change, not a jump. */
+/* A pull request's glyph in its state's colour (--pr-* tokens, styles.css), its number and word in
+   text colour: the state colours of several palettes are under 4.5:1 for small text, and the word
+   (or its screen-reader copy) says the state as well. The glyph's colour fades when the state
+   changes, so a check going red or a merge reads as a change, not a jump. */
 .pr-badge {
   --pr-tone: var(--pr-open);
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-  color: var(--pr-tone);
+  color: var(--text);
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
   line-height: var(--lh-tight);
   white-space: nowrap;
-  transition: color var(--dur-base) var(--ease-out);
 }
 
 .pr-badge.is-failing,
@@ -24,6 +25,8 @@
 
 .pr-badge-icon {
   flex: none;
+  color: var(--pr-tone);
+  transition: color var(--dur-base) var(--ease-out);
   width: calc(var(--icon-size) * 0.75);
   height: calc(var(--icon-size) * 0.75);
 }
@@ -47,5 +50,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pr-badge { transition: none; }
+  .pr-badge-icon { transition: none; }
 }
