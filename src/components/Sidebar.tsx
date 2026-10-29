@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type AnimationEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
 import { PaneLeadBadge } from "./PullRequestBadge.tsx";
+import { StatusTip } from "./StatusTip.tsx";
 
 import "./Sidebar.css";
 
@@ -175,14 +176,12 @@ function useRepoPage(workspace: WorkspaceInfo | undefined, wanted: boolean): str
  * mark and the number, for an agent row; else the checks, the review and the diff follow. `nested`
  * is for a row that is itself a control (a command palette option), which can hold no link: a
  * `<span>` that opens the page itself and keeps the click from the row.
- * Hover or keyboard focus shows the status in words in a tooltip in the top layer (a popover), so
- * the sidebar's clipping and the palette above it never hide it; a native title never shows on focus.
+ * Hover or keyboard focus shows the status in words (StatusTip); a native title never shows on focus.
  */
 export function PrBadge({ workspace, compact = false, nested = false }: { workspace: WorkspaceInfo | undefined; compact?: boolean; nested?: boolean }) {
   const t = useT();
   const pr = prStatus(workspace?.tokens);
   const repo = useRepoPage(workspace, pr !== null);
-  const tip = useRef<HTMLSpanElement>(null);
   if (pr === null) return null;
   const Icon = PR_ICONS[pr.state];
   const number = { number: pr.number };
@@ -197,18 +196,6 @@ export function PrBadge({ workspace, compact = false, nested = false }: { worksp
   const status = words[prStatusWord(pr)];
   const detail = [pr.checks === null ? null : `${t("Checks")} ${pr.checks}`, pr.review?.text, pr.threads].filter(Boolean).join(" · ");
   const spoken = `${label}: ${[status, detail].filter(Boolean).join(" · ")}`;
-  const show = (event: { currentTarget: HTMLElement }): void => {
-    const popover = tip.current;
-    if (!popover?.showPopover) return;
-    const box = event.currentTarget.getBoundingClientRect();
-    popover.style.top = `${box.bottom + 4}px`;
-    popover.style.left = `${box.left}px`;
-    if (!popover.matches(":popover-open")) popover.showPopover();
-    // kept 16px inside the window's right edge once its width is known
-    popover.style.left = `${Math.max(16, Math.min(box.left, window.innerWidth - 16 - popover.offsetWidth))}px`;
-  };
-  const hide = (): void => { if (tip.current?.matches(":popover-open")) tip.current.hidePopover(); };
-  const events = { onPointerEnter: show, onPointerLeave: hide, onFocus: show, onBlur: hide, onKeyDown: (event: KeyboardEvent) => { if (event.key === "Escape") hide(); } };
   const parts = <>
     <span className="pr-badge-mark"><Icon aria-hidden="true" />#{pr.number}</span>
     {!compact && <>
@@ -217,10 +204,7 @@ export function PrBadge({ workspace, compact = false, nested = false }: { worksp
       {pr.review !== null && <span className="pr-badge-part" data-tone={pr.review.tone}>{pr.review.text}</span>}
       {pr.diff !== null && <span className="pr-badge-part">{pr.diff}</span>}
     </>}
-    <span ref={tip} className="pr-badge-tip" popover="manual" aria-hidden="true">
-      <strong>{status}</strong>
-      {detail !== "" && <span>{detail}</span>}
-    </span>
+    <StatusTip word={status} detail={[detail]} />
   </>;
   const className = `pr-badge${compact ? " is-compact" : ""}`;
   const href = repo === null ? undefined : `${repo}/pull/${pr.number}`;
@@ -230,11 +214,11 @@ export function PrBadge({ workspace, compact = false, nested = false }: { worksp
       event.stopPropagation();
       window.open(href, "_blank", "noopener,noreferrer");
     };
-    return <span className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge" data-href={href} onClick={open} {...events}>{parts}<span className="visually-hidden">{spoken}</span></span>;
+    return <span className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge" data-href={href} onClick={open}>{parts}<span className="visually-hidden">{spoken}</span></span>;
   }
   return (
     <a className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge"
-      href={href} target="_blank" rel="noreferrer" aria-label={spoken} tabIndex={href === undefined ? 0 : undefined} {...events}>
+      href={href} target="_blank" rel="noreferrer" aria-label={spoken} tabIndex={href === undefined ? 0 : undefined}>
       {parts}
     </a>
   );

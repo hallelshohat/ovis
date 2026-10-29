@@ -57,8 +57,6 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Pull request #{number}, draft": "プルリクエスト #{number}、下書き",
   "Pull request #{number}, merged": "プルリクエスト #{number}、マージ済み",
   "Pull request #{number}, closed": "プルリクエスト #{number}、クローズ済み",
-  "Checks failed": "チェック失敗",
-  "Waiting for review": "レビュー待ち",
   "Archive task": "タスクをアーカイブ",
   "Approve plan": "プランを承認",
   "Approve and merge…": "承認してマージ…",

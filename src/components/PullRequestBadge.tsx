@@ -4,6 +4,7 @@ import { GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft } f
 import { openCount, prLabel, type PullRequest } from "../../shared/pull-requests.ts";
 import { useT } from "../lib/i18n.ts";
 import { usePanePullRequests } from "../lib/usePanePullRequests.ts";
+import { StatusTip } from "./StatusTip.tsx";
 
 export type PrTone = "open" | "failing" | "pending" | "review" | "changes" | "draft" | "merged" | "closed";
 
@@ -21,9 +22,9 @@ export function usePrWord(): (pr: PullRequest) => string {
   const t = useT();
   return (pr) => {
     switch (prTone(pr)) {
-      case "failing": return t("Checks failing");
+      case "failing": return t("Checks failed");
       case "pending": return t("Checks running");
-      case "review": return t("Review requested");
+      case "review": return t("Waiting for review");
       case "changes": return t("Changes requested");
       case "draft": return t("Draft");
       case "merged": return t("Merged");
@@ -41,19 +42,23 @@ export interface PullRequestBadgeProps {
   size?: "row" | "full";
 }
 
-/** A pull request's number in its state's colour (DESIGN.md: Pull requests), with +N for the chat's others. */
+/** A pull request's number in its state's colour (DESIGN.md: Pull requests), with +N for the chat's others; hover or keyboard focus on its row says the state, title and checks in words (StatusTip). */
 export function PullRequestBadge({ pr, more = 0, size = "row" }: PullRequestBadgeProps) {
   const t = useT();
   const word = usePrWord()(pr);
   const tone = prTone(pr);
   const Icon = pr.state === "merged" ? GitMerge : pr.state === "closed" ? GitPullRequestClosed : pr.state === "draft" ? GitPullRequestDraft : GitPullRequest;
   const label = prLabel(pr);
+  const passed = pr.check_runs.filter((run) => run.state === "passing").length;
+  const checks = pr.check_runs.length === 0 ? null : t("Checks {passed}/{total} passed", { passed, total: pr.check_runs.length });
+  // an empty title keeps the row's own native tooltip from stacking on this one
   return (
-    <span className={`pull-badge is-${tone}`} title={`${label} · ${word} · ${pr.title}`}>
+    <span className={`pull-badge is-${tone}`} title="">
       <Icon className="pull-badge-icon" aria-hidden="true" />
       <span className="pull-badge-number">{label}</span>
       {size === "full" ? <span className="pull-badge-word">{word}</span> : <span className="visually-hidden">{word}</span>}
       {more > 0 && <span className="pull-badge-more" aria-label={t("{n} more open", { n: more })}>+{more}</span>}
+      <StatusTip word={word} detail={[`${label} ${pr.title}`, checks]} />
     </span>
   );
 }

@@ -19,7 +19,7 @@ describe("a pull request badge", () => {
     const html = render({ pr: pr({ checks: "failing" }) });
     expect(html).toContain('class="pull-badge is-failing"');
     expect(html).toContain('<span class="pull-badge-number">#1936</span>');
-    expect(html).toContain('<span class="visually-hidden">Checks failing</span>');
+    expect(html).toContain('<span class="visually-hidden">Checks failed</span>');
   });
 
   it("says the state word in full, names another repository, and counts the others", () => {
@@ -32,6 +32,29 @@ describe("a pull request badge", () => {
 
   it("calls an open PR with nothing waiting ready to merge", () => {
     expect(render({ pr: pr({}), size: "full" })).toContain(">Ready to merge</span>");
-    expect(render({ pr: pr({ review: "review_required" }), size: "full" })).toContain(">Review requested</span>");
+    expect(render({ pr: pr({ review: "review_required" }), size: "full" })).toContain(">Waiting for review</span>");
+  });
+
+  it("says each state in words in its tooltip", () => {
+    const cases: [Partial<PullRequest>, string][] = [
+      [{ checks: "failing" }, "Checks failed"],
+      [{ review: "changes_requested" }, "Changes requested"],
+      [{ review: "review_required" }, "Waiting for review"],
+      [{ checks: "pending" }, "Checks running"],
+      [{}, "Ready to merge"],
+      [{ state: "draft" }, "Draft"],
+      [{ state: "merged" }, "Merged"],
+      [{ state: "closed" }, "Closed"],
+    ];
+    for (const [over, word] of cases) expect(render({ pr: pr(over) })).toContain(`<strong>${word}</strong>`);
+  });
+
+  it("adds the title and how many checks passed under the word, and drops the native title", () => {
+    const run = (state: "passing" | "failing") => ({ name: "ci", state, url: null });
+    const html = render({ pr: pr({ checks: "failing", check_runs: [run("passing"), run("passing"), run("passing"), run("passing"), run("failing")] }) });
+    expect(html).toContain("<span>#1936 Fix the flaky retry test</span>");
+    expect(html).toContain("<span>Checks 4/5 passed</span>");
+    expect(html).not.toContain("title=\"#");
+    expect(render({ pr: pr({}) })).not.toContain("passed</span>");
   });
 });
