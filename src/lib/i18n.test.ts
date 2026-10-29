@@ -134,6 +134,7 @@ const PART_FILES: Record<string, string[]> = {
   setup: ["components/AgentSetupCard.tsx", "components/AddAgentPanel.tsx", "components/AgentTile.tsx", "components/AgentsSettings.tsx"],
   guide: ["components/SetupGuide.tsx"],
   relay: ["components/RelayShell.tsx"],
+  pullRequests: ["components/PullRequestBadge.tsx", "components/PullRequestPanel.tsx", "components/PrEventRow.tsx"],
 };
 
 /** Parts in src/lib/i18n/ hold the keys only one feature uses; the base dictionary holds the rest. */

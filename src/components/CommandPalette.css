@@ -404,3 +404,8 @@
   margin-left: var(--space-2);
   color: var(--text-dim);
 }
+
+/* an empty list is the app's one empty state (EmptyState.tsx), which brings its own room */
+.palette-empty.empty-state {
+  margin: 0;
+}
