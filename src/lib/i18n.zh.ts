@@ -22,6 +22,7 @@ import { DASHBOARD_ZH } from "./i18n/dashboard.zh.ts";
 import { RUNTIME_MOVE_ZH } from "./i18n/runtime-move.zh.ts";
 import { LIST_MOVE_ZH } from "./i18n/list-move.zh.ts";
 import { MEMORY_ZH } from "./i18n/memory.zh.ts";
+import { PULL_REQUESTS_ZH } from "./i18n/pullRequests.zh.ts";
 
 /**
  * Simplified Chinese for every `t("…")` in src/ that no part in lib/i18n/ holds: keys more than
@@ -177,6 +178,11 @@ const BASE: Record<string, string> = {
   "Sign in to use this PC from your phone and your other PCs.|account group": "登录后，可以从手机和其他 PC 使用这台 PC。",
   "Remove {name}": "移除 {name}",
   "Save": "保存",
+  "Draft": "草稿",
+  "Merged": "已合并",
+  "failed": "失败",
+  "running": "运行中",
+  "Pull requests": "拉取请求",
   "Closed": "已关闭",
   "Goal": "目标",
   "Waiting for your answer": "等待你的回答",
@@ -191,7 +197,6 @@ const BASE: Record<string, string> = {
   "{current} of {total}": "第 {current} 个，共 {total} 个",
   "Recent folders": "最近的文件夹",
   "Stop agent": "停止 Agent",
-  "Remove": "移除",
   "Stopping…": "正在停止…",
   "Dismiss": "关闭",
   "Input line": "输入框",
@@ -863,6 +868,7 @@ export const ZH_PARTS: Record<string, Record<string, string>> = {
   "runtime-move": RUNTIME_MOVE_ZH,
   "list-move": LIST_MOVE_ZH,
   memory: MEMORY_ZH,
+  pullRequests: PULL_REQUESTS_ZH,
 };
 
 export const ZH: Record<string, string> = Object.assign({}, ...Object.values(ZH_PARTS));

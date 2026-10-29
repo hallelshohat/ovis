@@ -1,6 +1,7 @@
 import { tally, usageCounters } from "../lib/usageCounters.ts";
 import { Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type AnimationEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { Bot, ChevronDown, ChevronRight, Ellipsis, Folder, FolderOpen, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, History, Layers, ListChecks, Pencil, Pin, PinOff, Plus, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
+import { PaneLeadBadge } from "./PullRequestBadge.tsx";
 
 import "./Sidebar.css";
 
@@ -915,105 +916,106 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     // a task's space the board is working on (an archive, a remove): greyed and inert until it answers
     const boardPending = workspace.worktree?.is_linked_worktree ? [...board.pendingAll.entries()].find(([key, entry]) => key.startsWith(`${machineId}\n`) && entry.worktree === workspace.worktree!.checkout_path)?.[1] : undefined;
     return <li
-    aria-busy={boardPending ? true : undefined}
-    className={`workspace workspace-group pane-item${boardPending ? " is-board-pending" : ""}${selected ? " is-selected" : ""}${workerSelected ? " has-selected-agent" : ""}${collapsed ? " is-collapsed" : ""}${context ? " is-filter-context" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}${tabDrop ? " is-tab-drop" : ""}`}
-    key={workspace.workspace_id}
-    data-workspace={workspace.workspace_id}
-    data-branch={branchTitle ?? undefined}
-    data-drop={drop}
-    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-    onDrop={(event) => onDrop(event, workspace.workspace_id)}
-  >
-    <div className="workspace-header" inert={boardPending !== undefined}
-      onMouseDownCapture={(event) => { if ((event.button === 2 || (event.button === 0 && event.ctrlKey)) && !(event.target as HTMLElement).closest("input")) event.preventDefault(); }}
-      onContextMenu={(event) => onRowContextMenu(event, toggleMenu)}>
-      {/* a workspace leads with its own face, the project's icon or else a folder; when linked
-          worktrees sit under it, that face is also the fold, and turns to an open or closed folder under a pointer */}
-      {nested ? null : children.length > 0 && repoKey !== undefined ? <button
-        type="button"
-        className="sidebar-row-action workspace-toggle"
-        aria-label={collapsed ? t("Expand worktrees of {name}", { name: workspace.label }) : t("Collapse worktrees of {name}", { name: workspace.label })}
-        title={collapsed ? t("Expand worktrees of {name}", { name: workspace.label }) : t("Collapse worktrees of {name}", { name: workspace.label })}
-        aria-expanded={!collapsed}
-        aria-controls={contentsId}
-        onClick={() => toggleWorktrees(repoKey, collapsed)}
-      >{face}<span className="workspace-toggle-fold" aria-hidden="true">{collapsed ? <Folder /> : <FolderOpen />}</span></button> : face}
-      <div
-        className="pane-select workspace-select"
-        role="button"
-        tabIndex={0}
-        draggable={!coarsePointer && !editingWorkspace && !placed}
-        onDragStart={(event) => { if (!editingWorkspace) onDragStart(event, workspace.workspace_id, pane.pane_id); }}
-        onDragEnd={() => setDragWorkspaceId(null)}
-        aria-keyshortcuts={fixed ? undefined : "Alt+ArrowUp Alt+ArrowDown"}
-        aria-description={fixed ? undefined : `${t("Reorder workspace {name}", { name: workspace.label })} · ${t("Drag to reorder · Alt+↑/↓")}`}
-        data-pane={pane.pane_id}
-        aria-current={selected ? "true" : undefined}
-        aria-expanded={foldable ? !rowFolded : undefined}
-        title={[`${pane.pane_id} — ${rowTitle}`, branchNote, ...paths, paneTitle(pane), agentsTitle(workspace)].filter(Boolean).join(" — ")}
-        onPointerDown={(event) => { if (event.button === 0 && !event.ctrlKey && !selected && pane.agent != null) pressPane?.(machineId, pane.pane_id); }}
-        onClick={() => { if (foldable) toggleFold(); else actions.selectPane(pane.pane_id); }}
-        onKeyDown={(event) => {
-          onRowKeyDown(event, workspace.workspace_id);
-          if (event.defaultPrevented) return;
-          if (foldable && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-            event.preventDefault();
-            if ((event.key === "ArrowLeft") !== rowFolded) toggleFold();
-            return;
-          }
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          if (foldable) toggleFold(); else actions.selectPane(pane.pane_id);
-        }}
-      >
-        {/* a compact top-level row keeps its face alone; a worktree, which has none, keeps its mark */}
-        {(!compact || nested) && rowMark(pane, workspace.worktree?.is_linked_worktree === true)}
-        {editingWorkspace ? <input
-          className="input workspace-rename-input"
-          aria-label={t("Workspace name")}
-          autoFocus
-          maxLength={MAX_LABEL_CHARS}
-          value={workspaceLabel}
-          onClick={(event) => event.stopPropagation()}
-          onChange={(event) => setWorkspaceLabel(event.target.value)}
-          onBlur={() => setEditingWorkspaceId(null)}
+      aria-busy={boardPending ? true : undefined}
+      className={`workspace workspace-group pane-item${boardPending ? " is-board-pending" : ""}${selected ? " is-selected" : ""}${workerSelected ? " has-selected-agent" : ""}${collapsed ? " is-collapsed" : ""}${context ? " is-filter-context" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}${tabDrop ? " is-tab-drop" : ""}`}
+      key={workspace.workspace_id}
+      data-workspace={workspace.workspace_id}
+      data-branch={branchTitle ?? undefined}
+      data-drop={drop}
+      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+      onDrop={(event) => onDrop(event, workspace.workspace_id)}
+    >
+      <div className="workspace-header" inert={boardPending !== undefined}
+        onMouseDownCapture={(event) => { if ((event.button === 2 || (event.button === 0 && event.ctrlKey)) && !(event.target as HTMLElement).closest("input")) event.preventDefault(); }}
+        onContextMenu={(event) => onRowContextMenu(event, toggleMenu)}>
+        {/* a workspace leads with its own face, the project's icon or else a folder; when linked
+            worktrees sit under it, that face is also the fold, and turns to an open or closed folder under a pointer */}
+        {nested ? null : children.length > 0 && repoKey !== undefined ? <button
+          type="button"
+          className="sidebar-row-action workspace-toggle"
+          aria-label={collapsed ? t("Expand worktrees of {name}", { name: workspace.label }) : t("Collapse worktrees of {name}", { name: workspace.label })}
+          title={collapsed ? t("Expand worktrees of {name}", { name: workspace.label }) : t("Collapse worktrees of {name}", { name: workspace.label })}
+          aria-expanded={!collapsed}
+          aria-controls={contentsId}
+          onClick={() => toggleWorktrees(repoKey, collapsed)}
+        >{face}<span className="workspace-toggle-fold" aria-hidden="true">{collapsed ? <Folder /> : <FolderOpen />}</span></button> : face}
+        <div
+          className="pane-select workspace-select"
+          role="button"
+          tabIndex={0}
+          draggable={!coarsePointer && !editingWorkspace && !placed}
+          onDragStart={(event) => { if (!editingWorkspace) onDragStart(event, workspace.workspace_id, pane.pane_id); }}
+          onDragEnd={() => setDragWorkspaceId(null)}
+          aria-keyshortcuts={fixed ? undefined : "Alt+ArrowUp Alt+ArrowDown"}
+          aria-description={fixed ? undefined : `${t("Reorder workspace {name}", { name: workspace.label })} · ${t("Drag to reorder · Alt+↑/↓")}`}
+          data-pane={pane.pane_id}
+          aria-current={selected ? "true" : undefined}
+          aria-expanded={foldable ? !rowFolded : undefined}
+          title={[`${pane.pane_id} — ${rowTitle}`, branchNote, ...paths, paneTitle(pane), agentsTitle(workspace)].filter(Boolean).join(" — ")}
+          onPointerDown={(event) => { if (event.button === 0 && !event.ctrlKey && !selected && pane.agent != null) pressPane?.(machineId, pane.pane_id); }}
+          onClick={() => { if (foldable) toggleFold(); else actions.selectPane(pane.pane_id); }}
           onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-            if (event.key === "Enter") saveWorkspaceRename(workspace.workspace_id);
-            if (event.key === "Escape") setEditingWorkspaceId(null);
+            onRowKeyDown(event, workspace.workspace_id);
+            if (event.defaultPrevented) return;
+            if (foldable && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+              event.preventDefault();
+              if ((event.key === "ArrowLeft") !== rowFolded) toggleFold();
+              return;
+            }
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            if (foldable) toggleFold(); else actions.selectPane(pane.pane_id);
           }}
-        /> : place !== null ? <span className="workspace-copy is-two-line">
-          <span className="workspace-line">
-            <span className="workspace-name">{rowTitle}</span>
+        >
+          {/* a compact top-level row keeps its face alone; a worktree, which has none, keeps its mark */}
+          {(!compact || nested) && rowMark(pane, workspace.worktree?.is_linked_worktree === true)}
+          {editingWorkspace ? <input
+            className="input workspace-rename-input"
+            aria-label={t("Workspace name")}
+            autoFocus
+            maxLength={MAX_LABEL_CHARS}
+            value={workspaceLabel}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => setWorkspaceLabel(event.target.value)}
+            onBlur={() => setEditingWorkspaceId(null)}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+              if (event.key === "Enter") saveWorkspaceRename(workspace.workspace_id);
+              if (event.key === "Escape") setEditingWorkspaceId(null);
+            }}
+          /> : place !== null ? <span className="workspace-copy is-two-line">
+            <span className="workspace-line">
+              <span className="workspace-name">{rowTitle}</span>
+              {foldedCount > 0 && <span className="workspace-fold-count" aria-hidden="true">+{foldedCount}</span>}
+              {filterNote}
+            </span>
+            {place && <span className="workspace-place">{place}</span>}
+          </span> : <span className="workspace-copy">
+            <span className="workspace-name">{shownTitle}</span>
+            {!compact && secondaryBranch && <span className="worktree-workspace-label">{secondaryBranch}</span>}
+            {branchTail && <span className="workspace-branch-tail">{branchTail}</span>}
             {foldedCount > 0 && <span className="workspace-fold-count" aria-hidden="true">+{foldedCount}</span>}
             {filterNote}
+          </span>}
+          {online && <span className="sidebar-pr"><PaneLeadBadge machineId={machineId} paneId={pane.pane_id} /></span>}
+          <span className="sidebar-pane-meta">
+            <span className="visually-hidden">{markName(pane)}</span>
+            {online && pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge compact status={status} />}
           </span>
-          {place && <span className="workspace-place">{place}</span>}
-        </span> : <span className="workspace-copy">
-          <span className="workspace-name">{shownTitle}</span>
-          {!compact && secondaryBranch && <span className="worktree-workspace-label">{secondaryBranch}</span>}
-          {branchTail && <span className="workspace-branch-tail">{branchTail}</span>}
-          {foldedCount > 0 && <span className="workspace-fold-count" aria-hidden="true">+{foldedCount}</span>}
-          {filterNote}
-        </span>}
-        <span className="sidebar-pane-meta">
-          <span className="visually-hidden">{markName(pane)}</span>
-          {online && pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge compact status={status} />}
-        </span>
+        </div>
+        <div className="workspace-actions">
+          <button type="button" className="sidebar-row-action row-menu-toggle" aria-label={t("More for {title}", { title: rowTitle })} aria-haspopup={sheet ? "dialog" : "menu"} aria-expanded={menuOpen} onClick={(event) => toggleMenu(event.currentTarget)}>
+            <Ellipsis aria-hidden="true" />
+          </button>
+        </div>
       </div>
-      <div className="workspace-actions">
-        <button type="button" className="sidebar-row-action row-menu-toggle" aria-label={t("More for {title}", { title: rowTitle })} aria-haspopup={sheet ? "dialog" : "menu"} aria-expanded={menuOpen} onClick={(event) => toggleMenu(event.currentTarget)}>
-          <Ellipsis aria-hidden="true" />
-        </button>
-      </div>
-    </div>
-    <PrBadge workspace={workspace} />
-    {boardPending && <p className="workspace-board-pending" role="status">{boardPending.word}</p>}
-    {inlineError?.workspaceId === workspace.workspace_id && <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>}
-    {/* the worktrees drawn under it go on from the same branch: the last agent is a tee, not an elbow */}
-    {workers.length > 0 && <ul className="workspace-agents" aria-label={t("Agents in {name}", { name: rowTitle })} data-more={children.some((child) => !collapsed || roster.some((candidate) => candidate.workspace_id === child.workspace_id && candidate.pane_id === selectedPaneId)) ? "" : undefined}>{workers.map(renderAgentRow)}</ul>}
-  </li>;
+      <PrBadge workspace={workspace} />
+      {boardPending && <p className="workspace-board-pending" role="status">{boardPending.word}</p>}
+      {inlineError?.workspaceId === workspace.workspace_id && <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>}
+      {/* the worktrees drawn under it go on from the same branch: the last agent is a tee, not an elbow */}
+      {workers.length > 0 && <ul className="workspace-agents" aria-label={t("Agents in {name}", { name: rowTitle })} data-more={children.some((child) => !collapsed || roster.some((candidate) => candidate.workspace_id === child.workspace_id && candidate.pane_id === selectedPaneId)) ? "" : undefined}>{workers.map(renderAgentRow)}</ul>}
+    </li>;
   };
 
   const renderGroup = ({ workspace, children }: WorkspaceGroup<WorkspaceInfo>) => {

@@ -22,6 +22,7 @@ import { DASHBOARD_JA } from "./i18n/dashboard.ja.ts";
 import { RUNTIME_MOVE_JA } from "./i18n/runtime-move.ja.ts";
 import { LIST_MOVE_JA } from "./i18n/list-move.ja.ts";
 import { MEMORY_JA } from "./i18n/memory.ja.ts";
+import { PULL_REQUESTS_JA } from "./i18n/pullRequests.ja.ts";
 
 /**
  * Japanese for every `t("…")` in src/ that no part in lib/i18n/ holds: keys more than one feature
@@ -175,6 +176,11 @@ const BASE: Record<string, string> = {
   "Sign in to use this PC from your phone and your other PCs.|account group": "サインインすると、スマートフォンやほかの PC からもこの PC を使えます。",
   "Remove {name}": "{name} を削除",
   "Save": "保存",
+  "Draft": "下書き",
+  "Merged": "マージ済み",
+  "failed": "失敗",
+  "running": "実行中",
+  "Pull requests": "プルリクエスト",
   "Closed": "閉じています",
   "Goal": "目標",
   "Waiting for your answer": "回答待ち",
@@ -189,7 +195,6 @@ const BASE: Record<string, string> = {
   "{current} of {total}": "{total}件中{current}件目",
   "Recent folders": "最近のフォルダー",
   "Stop agent": "エージェントを停止",
-  "Remove": "削除",
   "Stopping…": "停止しています…",
   "Dismiss": "閉じる",
   "Input line": "入力欄",
@@ -858,6 +863,7 @@ export const JA_PARTS: Record<string, Record<string, string>> = {
   "runtime-move": RUNTIME_MOVE_JA,
   "list-move": LIST_MOVE_JA,
   memory: MEMORY_JA,
+  pullRequests: PULL_REQUESTS_JA,
 };
 
 export const JA: Record<string, string> = Object.assign({}, ...Object.values(JA_PARTS));
