@@ -768,32 +768,6 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   margin: 0 var(--space-2) 0 0;
 }
 
-/* the badge's status in words (PrBadge), a popover placed under it from script; it lets the
-   pointer through so the badge underneath keeps its hover and its click */
-.pr-badge-tip {
-  position: fixed;
-  inset: auto;
-  margin: 0;
-  display: none;
-  flex-direction: column;
-  gap: 2px;
-  max-width: min(20rem, calc(100vw - 32px));
-  padding: var(--space-1) var(--space-2);
-  color: var(--text-dim);
-  background: var(--bg-elevated);
-  border: 0;
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-pop);
-  font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
-  line-height: 1.4;
-  white-space: normal;
-  pointer-events: none;
-}
-
-.pr-badge-tip:popover-open { display: flex; }
-.pr-badge-tip strong { color: var(--text-strong); font-weight: 600; }
-
 /* a finger gets a taller line to land on; the agent row's badge already has the row's height */
 @media (pointer: coarse) {
   .pr-badge:not(.is-compact) { min-height: calc(var(--chip-h) * 1.5); }
