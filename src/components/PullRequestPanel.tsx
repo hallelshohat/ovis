@@ -158,7 +158,8 @@ export function PrSheet(props: PullRequestPanelProps & { onClose(): void }) {
   }, [onClose, surface]);
   return (
     <div className="modal-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
-      <section ref={surface} className="modal pr-sheet" role="dialog" aria-modal="true" aria-label={t("Pull requests")} tabIndex={-1}>
+      {/* the header button's aria-controls: only one of this sheet and the inspector column is ever drawn */}
+      <section ref={surface} id="pull-requests" className="modal pr-sheet" role="dialog" aria-modal="true" aria-label={t("Pull requests")} tabIndex={-1}>
         <header className="modal-header"><h2 className="modal-title">{t("Pull requests")}</h2>
           <button type="button" className="icon-button" aria-label={t("Close")} onClick={props.onClose}><X aria-hidden="true" /></button></header>
         <div className="modal-body"><PullRequestPanel {...props} /></div>
