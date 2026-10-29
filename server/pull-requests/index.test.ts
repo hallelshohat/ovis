@@ -240,4 +240,21 @@ describe("a chat's own pull requests, as review found them", () => {
     repoDown = false;
     expect((await ask(true)).gh).toBe("ok");
   });
+
+  it("keeps every PR of a branch with more than one page of them, and their events", async () => {
+    const many = Array.from({ length: 61 }, (_, i) => raw(i + 1, "acme/api", { state: "MERGED", headRefName: "release", createdAt: `2026-10-28T10:${String(i % 60).padStart(2, "0")}:30Z`, mergedAt: "2026-10-28T11:30:00Z" }));
+    const limits: number[] = [];
+    // gh honours --limit: newest first, as many as asked
+    const run: Run = async (argv) => {
+      if (argv[0] === "git") return { code: 0, stdout: "release\n", stderr: "" };
+      if (argv[1] === "repo") return { code: 0, stdout: '{"nameWithOwner":"acme/api"}', stderr: "" };
+      if (argv[2] === "list") { const limit = Number(argv[argv.indexOf("--limit") + 1]); limits.push(limit); return { code: 0, stdout: JSON.stringify([...many].reverse().slice(0, limit)), stderr: "" }; }
+      return { code: 1, stdout: "", stderr: "" };
+    };
+    const chat: Chat = { id: "release-chat", read: async () => ({ urls: [], branches: [{ branch: "release", at: "2026-10-28T10:00:00Z" }], started_at: "2026-10-28T10:00:00Z" }) };
+    const answer = await panePullRequests({ paneId: "rel", cwd: "/rel", chat, fresh: true }, { run, now: () => at("2026-10-28T12:00:00Z"), currentBranch: async () => "release" });
+    expect(answer.pull_requests).toHaveLength(61);
+    expect(answer.events.filter((event) => event.kind === "opened")).toHaveLength(61);
+    expect(limits).toEqual([50, 200]);
+  });
 });

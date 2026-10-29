@@ -114,12 +114,22 @@ export async function ghView(run: Run, cwd: string, url: string, ownRepo: string
   return raw === null ? null : toPullRequest(raw, ownRepo);
 }
 
-/** The branch's PRs; null when gh could not say (an empty list means it has none). */
+export const LIST_LIMIT = 50;
+export const LIST_LIMIT_MAX = 1000;
+
+/**
+ * The branch's PRs, all of them: when gh answers as many as asked there may be more, so it is asked
+ * again for four times as many, up to LIST_LIMIT_MAX. null when gh could not say (an empty list
+ * means it has none).
+ */
 export async function ghListHead(run: Run, cwd: string, branch: string, ownRepo: string | null): Promise<PullRequest[] | null> {
-  const result = await run(["gh", "pr", "list", "--head", branch, "--state", "all", "--limit", "20", "--json", GH_FIELDS], cwd, GH_TIMEOUT_MS);
-  if (result === null || result.code !== 0) return null;
-  const raw = safeJson(result.stdout);
-  return Array.isArray(raw) ? raw.map((item) => toPullRequest(item, ownRepo)) : null;
+  for (let limit = LIST_LIMIT; ; limit = Math.min(limit * 4, LIST_LIMIT_MAX)) {
+    const result = await run(["gh", "pr", "list", "--head", branch, "--state", "all", "--limit", String(limit), "--json", GH_FIELDS], cwd, GH_TIMEOUT_MS);
+    if (result === null || result.code !== 0) return null;
+    const raw = safeJson(result.stdout);
+    if (!Array.isArray(raw)) return null;
+    if (raw.length < limit || limit >= LIST_LIMIT_MAX) return raw.map((item) => toPullRequest(item, ownRepo));
+  }
 }
 
 export async function ghMerge(run: Run, cwd: string, url: string): Promise<{ ok: true } | { ok: false; reason: string }> {
