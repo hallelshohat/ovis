@@ -122,10 +122,14 @@ function usePullRequestData(machineId: string | null, paneId: string | null, ena
  * The selected pane's pull requests and where they show: an inspector column beside the pane from
  * 1200px, which the person can hide, or a sheet the header opens below that.
  */
-export function usePullRequestInspector(machineId: string, paneId: string | null) {
+/**
+ * `columnTaken`: a file or a page is docked beside the pane, in the column the inspector would use;
+ * then the PRs open as a sheet, as on a narrow window, and the file stays where it is.
+ */
+export function usePullRequestInspector(machineId: string, paneId: string | null, columnTaken: boolean) {
   // App holds the provider it would ask, so it asks for itself
   const pullRequests = usePullRequestData(machineId, paneId, true);
-  const docked = useMediaQuery("(min-width: 1200px)");
+  const docked = useMediaQuery("(min-width: 1200px)") && !columnTaken;
   const [panelOpen, setPanelOpen] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
   // PRs to show, or links the chat wrote that gh cannot read: then the inspector says why
