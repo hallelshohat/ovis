@@ -24,6 +24,10 @@ import { PULL_REQUESTS_KO } from "./i18n/pullRequests.ko.ts";
 const BASE: Record<string, string> = {
   "Draft": "초안",
   "Merged": "병합됨",
+  "Checks running": "검사 실행 중",
+  "Changes requested": "변경 요청됨",
+  "Ready to merge": "병합 가능",
+  "Checks": "검사",
   "failed": "실패",
   "running": "실행 중",
   "Pull requests": "풀 리퀘스트",

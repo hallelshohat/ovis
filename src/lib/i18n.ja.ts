@@ -26,6 +26,10 @@ import { PULL_REQUESTS_JA } from "./i18n/pullRequests.ja.ts";
 const BASE: Record<string, string> = {
   "Draft": "下書き",
   "Merged": "マージ済み",
+  "Checks running": "チェック実行中",
+  "Changes requested": "変更を要求されています",
+  "Ready to merge": "マージ可能",
+  "Checks": "チェック",
   "failed": "失敗",
   "running": "実行中",
   "Pull requests": "プルリクエスト",
