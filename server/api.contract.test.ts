@@ -1130,12 +1130,14 @@ describe("tab rename and close", () => {
 describe("pull requests", () => {
   const pr = (number: number, state: string) => ({ number, url: `https://github.com/acme/api/pull/${number}`, title: `PR ${number}`, state, isDraft: false, reviewDecision: "APPROVED", headRefName: "feat/replay-metric", baseRefName: "main", additions: 4, deletions: 1, createdAt: "2026-10-28T14:09:00Z", mergedAt: state === "MERGED" ? "2026-10-28T15:00:00Z" : null, closedAt: null, updatedAt: "2026-10-28T14:10:00Z", statusCheckRollup: [] });
   let viewState = "OPEN";
+  let viewChecks: unknown[] = [];
+  let viewReview = "APPROVED";
   const merges: string[] = [];
   const restore = setPullRequestRunner(async (argv) => {
     if (argv[0] === "git") return { code: 0, stdout: "feat/replay-metric\n", stderr: "" };
     if (argv[1] === "repo") return { code: 0, stdout: '{"nameWithOwner":"acme/api"}', stderr: "" };
     if (argv[2] === "list") return { code: 0, stdout: JSON.stringify([pr(1931, "OPEN")]), stderr: "" };
-    if (argv[2] === "view") return { code: 0, stdout: JSON.stringify(pr(1931, viewState)), stderr: "" };
+    if (argv[2] === "view") return { code: 0, stdout: JSON.stringify({ ...pr(1931, viewState), statusCheckRollup: viewChecks, reviewDecision: viewReview }), stderr: "" };
     if (argv[2] === "merge") { merges.push(argv[3]!); return { code: 0, stdout: "", stderr: "" }; }
     return { code: 1, stdout: "", stderr: "" };
   });
@@ -1164,7 +1166,15 @@ describe("pull requests", () => {
       const late = await merge({ pane_id: paneId, url: "https://github.com/acme/api/pull/1931" });
       expect([late.status, ((await late.json()) as ApiError).error.code]).toEqual([409, "pr_not_mergeable"]);
       expect(merges).toEqual([]);
-      viewState = "OPEN";
+      // the button's own rule, on what GitHub says now: running checks or requested changes refuse too
+      viewState = "OPEN"; viewChecks = [{ __typename: "CheckRun", name: "Fast", status: "IN_PROGRESS", conclusion: "" }];
+      const running = await merge({ pane_id: paneId, url: "https://github.com/acme/api/pull/1931" });
+      expect([running.status, ((await running.json()) as ApiError).error.code]).toEqual([409, "pr_not_mergeable"]);
+      viewChecks = []; viewReview = "CHANGES_REQUESTED";
+      const changes = await merge({ pane_id: paneId, url: "https://github.com/acme/api/pull/1931" });
+      expect([changes.status, ((await changes.json()) as ApiError).error.code]).toEqual([409, "pr_not_mergeable"]);
+      expect(merges).toEqual([]);
+      viewReview = "APPROVED";
       const done = await merge({ pane_id: paneId, url: "https://github.com/acme/api/pull/1931" });
       expect(done.status).toBe(200);
       expect(merges).toEqual(["https://github.com/acme/api/pull/1931"]);

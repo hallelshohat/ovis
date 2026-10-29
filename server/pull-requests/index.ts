@@ -86,6 +86,8 @@ async function read(input: PrInput, deps: PrDeps): Promise<PanePullRequests> {
     return input.fresh || now - hit.at > OPEN_TTL_MS ? null : hit.pr;
   };
   const found = new Map<string, { pr: PullRequest; linked: boolean }>();
+  // a lookup gh could not answer keeps what was known (stale, but true); with nothing known the answer says so
+  let failed = false;
 
   // branch lists only make sense in the pane's own repository
   if (repo.repo !== null) {
@@ -95,10 +97,15 @@ async function read(input: PrInput, deps: PrDeps): Promise<PanePullRequests> {
       let urls = listed && !input.fresh && now - listed.at <= OPEN_TTL_MS ? listed.urls : null;
       if (urls === null) {
         const pulled = await ghListHead(deps.run, input.cwd, branch, repo.repo);
-        // a merged or closed PR keeps what it was first read as: it is never read again
-        for (const pr of pulled) if (!ended(prs.get(pr.url)?.pr)) prs.set(pr.url, { pr, at: now });
-        urls = pulled.map((pr) => pr.url);
-        lists.set(listKey, { urls, at: now });
+        if (pulled === null) {
+          failed = true;
+          urls = listed?.urls ?? [];
+        } else {
+          // a merged or closed PR keeps what it was first read as: it is never read again
+          for (const pr of pulled) if (!ended(prs.get(pr.url)?.pr)) prs.set(pr.url, { pr, at: now });
+          urls = pulled.map((pr) => pr.url);
+          lists.set(listKey, { urls, at: now });
+        }
       }
       for (const url of urls) {
         const pr = fresh(url) ?? prs.get(url)?.pr;
@@ -111,6 +118,10 @@ async function read(input: PrInput, deps: PrDeps): Promise<PanePullRequests> {
     if (pr === null) {
       pr = await ghView(deps.run, input.cwd, url, repo.repo);
       if (pr) prs.set(url, { pr, at: now });
+      else {
+        failed = true;
+        pr = prs.get(url)?.pr ?? null;
+      }
     }
     if (pr) found.set(url, { pr, linked: true });
   }
@@ -128,7 +139,7 @@ async function read(input: PrInput, deps: PrDeps): Promise<PanePullRequests> {
     if (pr.merged_at) events.push({ at: pr.merged_at, kind: "merged", url: pr.url });
     else if (pr.state === "closed" && pr.closed_at) events.push({ at: pr.closed_at, kind: "closed", url: pr.url });
   }
-  return { gh: "ok", pull_requests, events: inWindow(events, started).sort((a, b) => a.at.localeCompare(b.at)), linked };
+  return { gh: failed && pull_requests.length === 0 ? "error" : "ok", pull_requests, events: inWindow(events, started).sort((a, b) => a.at.localeCompare(b.at)), linked };
 }
 
 /** The branches this chat ran on, in time order: its transcript's and every one seen here, a return to a branch included. */

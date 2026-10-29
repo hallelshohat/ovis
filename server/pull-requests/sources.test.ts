@@ -94,4 +94,24 @@ describe("a chat's pull request sources", () => {
     await conversationSources("opencode:db:s1", read);
     expect(asked).toEqual(["newest", "c2", "c1", "newest"]);
   });
+
+  it("reads every page that arrived between two reads of a shared store's chat, and stops at what it read", async () => {
+    const turn = (ts: string, text: string): ConversationTurn => ({ role: "assistant", ts, parts: [{ kind: "text", text }] } as ConversationTurn);
+    let book: Record<string, { turns: ConversationTurn[]; cursor: string | null }> = {
+      newest: { turns: [turn("2026-10-28T10:00:00Z", "start")], cursor: null },
+    };
+    const asked: string[] = [];
+    const read = async (page: { before?: string }) => { asked.push(page.before ?? "newest"); return book[page.before ?? "newest"]!; };
+    await conversationSources("hermes:db:s2", read);
+    // two pages arrive while nobody reads: the middle one opened PR #1
+    book = {
+      newest: { turns: [turn("2026-10-28T12:00:00Z", "later")], cursor: "p2" },
+      p2: { turns: [turn("2026-10-28T11:00:00Z", "opened https://github.com/acme/api/pull/1")], cursor: "p1" },
+      p1: { turns: [turn("2026-10-28T10:00:00Z", "start")], cursor: null },
+    };
+    asked.length = 0;
+    const found = await conversationSources("hermes:db:s2", read);
+    expect(found.urls.map((u) => u.url)).toEqual(["https://github.com/acme/api/pull/1"]);
+    expect(asked).toEqual(["newest", "p2", "p1"]);
+  });
 });

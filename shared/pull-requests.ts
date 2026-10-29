@@ -69,3 +69,12 @@ export function prLabel(pr: Pick<PullRequest, "own" | "repo" | "number">): strin
 export function openCount(prs: readonly PullRequest[]): number {
   return prs.filter((pr) => pr.state === "open" || pr.state === "draft").length;
 }
+
+/**
+ * Whether Ovis offers to merge it, and whether the server still will: open, its checks green or
+ * none, and no changes requested. One rule for the button and the route, so neither merges what the
+ * other would not.
+ */
+export function canMerge(pr: Pick<PullRequest, "state" | "checks" | "review">): boolean {
+  return pr.state === "open" && (pr.checks === "passing" || pr.checks === "none") && pr.review !== "changes_requested";
+}

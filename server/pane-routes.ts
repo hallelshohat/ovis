@@ -24,7 +24,7 @@ import { expandedDirectory } from "./workspace-routes.ts";
 import { ghMerge, ghView } from "./pull-requests/gh.ts";
 import { forgetPullRequest, panePullRequests, pullRequestDeps } from "./pull-requests/index.ts";
 import { conversationSources, fileChat, PER_CHAT_FILES, type Chat } from "./pull-requests/sources.ts";
-import type { PanePullRequests } from "../shared/pull-requests.ts";
+import { canMerge, type PanePullRequests } from "../shared/pull-requests.ts";
 
 /** the native stores createServer was given; unset, each reader finds its own */
 export type PaneStores = { codexHome?: string; grokHome?: string; museData?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string; openCodeStateDir?: string };
@@ -299,8 +299,14 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       if (!listed) return jsonResponse({ error: { code: "pr_not_in_chat", message: "That pull request is not one of this chat's" } }, 404);
       // what GitHub says now, not what was shown: it may have merged or failed since
       const now = await ghView(deps.run, cwd, target, listed.own ? listed.repo : null);
-      if (now === null || now.state !== "open" || now.checks === "failing") {
-        return jsonResponse({ error: { code: "pr_not_mergeable", message: now === null ? "GitHub did not answer for this pull request" : now.state !== "open" ? `It is ${now.state} now` : "Its checks are failing now" }, state: now }, 409);
+      // the button's own rule (shared/pull-requests.ts canMerge), on what GitHub says now
+      if (now === null || !canMerge(now)) {
+        const reason = now === null ? "GitHub did not answer for this pull request"
+          : now.state !== "open" ? `It is ${now.state} now`
+          : now.review === "changes_requested" ? "Changes were requested since"
+          : now.checks === "pending" ? "Its checks are running again"
+          : "Its checks are failing now";
+        return jsonResponse({ error: { code: "pr_not_mergeable", message: reason }, state: now }, 409);
       }
       const merged = await ghMerge(deps.run, cwd, target);
       forgetPullRequest(target);

@@ -30,7 +30,7 @@ const empty = (): ChatSources => ({ urls: [], branches: [], started_at: null });
 export let fileBytesRead = 0;
 
 const files = new Map<string, { ino: number; offset: number; carry: string; sources: ChatSources }>();
-const pages = new Map<string, ChatSources>();
+const pages = new Map<string, { sources: ChatSources; seen: Set<string> }>();
 
 export function resetSourceCache(): void {
   files.clear();
@@ -70,24 +70,32 @@ export async function fileSources(path: string): Promise<ChatSources> {
 
 export type PageReader = (page: { before?: string }) => Promise<{ turns: ConversationTurn[]; cursor: string | null }>;
 
-/** A chat in a shared store, by its pages: all of them the first time, its newest page after that. */
+/**
+ * A chat in a shared store, by its pages: back to its beginning the first time; after that back from
+ * its newest page until a page holds a turn already read, so pages that arrived between two reads
+ * are all read, however many.
+ */
 export async function conversationSources(id: string, read: PageReader): Promise<ChatSources> {
-  let sources = pages.get(id);
-  const newest = await read({});
-  if (!sources) {
-    sources = empty();
-    scanTurns(newest.turns, sources);
-    let cursor = newest.cursor;
-    for (let count = 1; cursor !== null && count < MAX_PAGES; count++) {
-      const older = await read({ before: cursor });
-      scanTurns(older.turns, sources);
-      cursor = older.cursor;
-    }
-    pages.set(id, sources);
-  } else {
-    scanTurns(newest.turns, sources);
+  let known = pages.get(id);
+  const first = !known;
+  if (!known) {
+    known = { sources: empty(), seen: new Set() };
+    pages.set(id, known);
   }
-  return structuredClone(sources);
+  let page = await read({});
+  for (let count = 1; ; count++) {
+    const met = page.turns.some((turn) => known.seen.has(turnKey(turn)));
+    scanTurns(page.turns, known.sources);
+    for (const turn of page.turns) known.seen.add(turnKey(turn));
+    if ((met && !first) || page.cursor === null || count >= MAX_PAGES) break;
+    page = await read({ before: page.cursor });
+  }
+  return structuredClone(known.sources);
+}
+
+/** A turn's identity across reads: its time and what it says. */
+function turnKey(turn: ConversationTurn): string {
+  return `${turn.ts ?? ""}\0${Bun.hash(JSON.stringify(turn.parts)).toString(36)}`;
 }
 
 function scanTurns(turns: readonly ConversationTurn[], into: ChatSources): void {

@@ -3,7 +3,7 @@ import "./PullRequestPanel.css";
 import { Check, Circle, ExternalLink, GitBranch, GitPullRequest, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { paneStorageId } from "../../shared/machines.ts";
-import { prLabel, type GhStatus, type PanePullRequests, type PullRequest } from "../../shared/pull-requests.ts";
+import { canMerge, prLabel, type GhStatus, type PanePullRequests, type PullRequest } from "../../shared/pull-requests.ts";
 import { mergePullRequest } from "../lib/api.ts";
 import { composerDrafts } from "../lib/composerDraft.ts";
 import { useT } from "../lib/i18n.ts";
@@ -88,7 +88,7 @@ export function PullRequestPanel({ data, machineId, paneId, agentName }: PullReq
 function LeadCard({ pr, agentName, onAskFix, onMerge }: { pr: PullRequest; agentName: string; onAskFix(): void; onMerge(): void }) {
   const t = useT();
   const tone = prTone(pr);
-  const mergeable = pr.state === "open" && pr.checks !== "failing" && pr.checks !== "pending" && pr.review !== "changes_requested";
+  const mergeable = canMerge(pr);
   return (
     <article className={`pr-card is-lead is-${tone}`}>
       <div className="pr-card-head"><PullRequestBadge pr={pr} size="full" /><GitHubLink pr={pr} /></div>

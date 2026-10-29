@@ -45,9 +45,11 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
 
     const row = page.locator('.workspace-group[data-workspace="w1C"] > .workspace-header .sidebar-pr');
     await row.locator(".pull-badge.is-failing").waitFor();
-    assert.equal(await row.locator(".visually-hidden").filter({ hasText: "1 more open" }).count(), 1, `${theme}: the row says the chat's other open PR`);
-    assert.equal(await row.locator(".pull-badge-more").count(), 0, `${theme}: a sidebar row keeps its room for the title`);
-    assert.equal(await row.locator(".pull-badge-number").count(), 0, `${theme}: a sidebar row draws the glyph, not the number`);
+    // both row types draw the leading PR's number and the chat's other open PRs as +N
+    for (const where of [row, page.locator(".agent-item.is-selected .agent-row-status")]) {
+      assert.equal(await where.locator(".pull-badge-number").innerText(), "client-sdk#88", `${theme}: a sidebar row names the leading PR`);
+      assert.equal(await where.locator(".pull-badge-more").innerText(), "+1", `${theme}: a sidebar row counts the other open PR`);
+    }
 
     const button = page.locator(".pr-header-button");
     assert.match(await button.innerText(), /client-sdk#88\s*Checks failing/, `${theme}: the header leads with the failing PR`);
@@ -89,7 +91,7 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     assert.equal(await inspector.getByText("Earlier in this chat", { exact: true }).count(), 1, `${theme}: a merged PR moves under Earlier in this chat`);
     await shot(page, `merged-${theme}`);
     assert.deepEqual(errors, []);
-    console.log(`PASS desktop ${theme}: sidebar glyph (+1 said), header button and inspector, the thread's story, Ask to fix fills the box, merge after a confirmation`);
+    console.log(`PASS desktop ${theme}: sidebar number and +1, header button and inspector, the thread's story, Ask to fix fills the box, merge after a confirmation`);
   } finally { await context.close(); }
 }
 

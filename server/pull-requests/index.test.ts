@@ -176,4 +176,19 @@ describe("a chat's own pull requests, as review found them", () => {
     const answer = await panePullRequests({ paneId: "count", cwd: "/w", chat: chat(), fresh: false }, deps(run));
     expect([answer.gh, answer.linked]).toEqual(["missing", 2]);
   });
+
+  it("keeps a known open PR when gh fails on a fresh read, and says error when nothing is known", async () => {
+    let down = false;
+    const up = listing({ "feature-a": [raw(7, "acme/api", { headRefName: "feature-a", createdAt: "2026-10-28T10:05:00Z" })] });
+    const run: Run = async (argv, cwd, timeout) => (down && argv[1] === "pr" ? { code: 1, stdout: "", stderr: "HTTP 503" } : up(argv, cwd, timeout));
+    const chat = transcript("down.jsonl", [{ timestamp: "2026-10-28T10:00:00Z", gitBranch: "feature-a" }]);
+    const ask = (paneId: string, c: Chat) => panePullRequests({ paneId, cwd: "/w", chat: c, fresh: true }, { run, now: () => at("2026-10-28T10:30:00Z"), currentBranch: async () => "feature-a" });
+    expect((await ask("down", chat)).pull_requests.map((pr) => pr.number)).toEqual([7]);
+    down = true;
+    const kept = await ask("down", chat);
+    expect([kept.gh, kept.pull_requests.map((pr) => pr.number)]).toEqual(["ok", [7]]);
+    resetPullRequestCache();
+    const none = await ask("fresh-down", transcript("down2.jsonl", [{ timestamp: "2026-10-28T10:00:00Z", gitBranch: "feature-a" }]));
+    expect([none.gh, none.pull_requests]).toEqual(["error", []]);
+  });
 });

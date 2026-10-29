@@ -2172,7 +2172,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   state's colour (`--pr-*`, aliases of the agent states', so every palette draws it) beside its
   number and word in `--text`: several palettes keep their state colours under 4.5:1 for small text,
   so text never takes them (`src/pr-contrast.test.ts`); an ended PR is quieter by its dim title, never faded; `+N` counts the
-  chat's other open ones (said, not drawn, on a sidebar row). A sidebar row draws the glyph alone, the composer strip the number, the
+  chat's other open ones. A sidebar row and the composer strip draw the glyph and number, the
   header the number and the state word (the word goes below `768px`, the number below `480px`).
   Another repository's PR is named `repo#N`. A state change fades the colour (`--dur-base`).
 - The inspector lists the open ones first, the lead drawn whole (title, `head → base`, lines, every

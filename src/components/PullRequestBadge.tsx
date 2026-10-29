@@ -37,9 +37,8 @@ export interface PullRequestBadgeProps {
   pr: PullRequest;
   /** the chat's other open PRs, drawn as +N */
   more?: number;
-  /** "icon": the glyph in its state's colour (a sidebar row, where the title needs the room);
-      "row": the number (the composer strip); "full": the number and its state word */
-  size?: "icon" | "row" | "full";
+  /** "row": the glyph and number (a sidebar row, the composer strip); "full": with its state word too */
+  size?: "row" | "full";
 }
 
 /** A pull request's number in its state's colour (DESIGN.md: Pull requests), with +N for the chat's others. */
@@ -52,16 +51,15 @@ export function PullRequestBadge({ pr, more = 0, size = "row" }: PullRequestBadg
   return (
     <span className={`pull-badge is-${tone}`} title={`${label} · ${word} · ${pr.title}`}>
       <Icon className="pull-badge-icon" aria-hidden="true" />
-      <span className={size === "icon" ? "visually-hidden" : "pull-badge-number"}>{label}</span>
+      <span className="pull-badge-number">{label}</span>
       {size === "full" ? <span className="pull-badge-word">{word}</span> : <span className="visually-hidden">{word}</span>}
-      {/* a sidebar row keeps its room for the title: there the count is said, not drawn */}
-      {more > 0 && (size === "icon" ? <span className="visually-hidden">{t("{n} more open", { n: more })}</span> : <span className="pull-badge-more" aria-label={t("{n} more open", { n: more })}>+{more}</span>)}
+      {more > 0 && <span className="pull-badge-more" aria-label={t("{n} more open", { n: more })}>+{more}</span>}
     </span>
   );
 }
 
 /** A pane's leading pull request, with +N for its other open ones; nothing when its chat has none. */
-export function PaneLeadBadge({ machineId, paneId, size = "row" }: { machineId: string; paneId: string; size?: "icon" | "row" | "full" }) {
+export function PaneLeadBadge({ machineId, paneId, size = "row" }: { machineId: string; paneId: string; size?: "row" | "full" }) {
   const data = usePanePullRequests(machineId, paneId);
   const lead = data?.pull_requests[0];
   if (!lead) return null;

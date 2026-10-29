@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { attentionRank, byAttention, openCount, prLabel, type PullRequest } from "./pull-requests.ts";
+import { attentionRank, byAttention, canMerge, openCount, prLabel, type PullRequest } from "./pull-requests.ts";
 
 const pr = (over: Partial<PullRequest>): PullRequest => ({
   url: "https://github.com/acme/api/pull/1", number: 1, repo: "acme/api", own: true, title: "t",
@@ -40,5 +40,13 @@ describe("pull request attention order", () => {
 
   it("counts open and draft pull requests as open", () => {
     expect(openCount([pr({}), pr({ state: "draft" }), pr({ state: "merged" }), pr({ state: "closed" })])).toBe(2);
+  });
+
+  it("merges only an open PR whose checks are green or absent and with no changes requested", () => {
+    expect(canMerge(pr({}))).toBe(true);
+    expect(canMerge(pr({ checks: "none", review: "approved" }))).toBe(true);
+    for (const over of [{ checks: "pending" as const }, { checks: "failing" as const }, { review: "changes_requested" as const }, { state: "draft" as const }, { state: "merged" as const }]) {
+      expect(canMerge(pr(over))).toBe(false);
+    }
   });
 });
