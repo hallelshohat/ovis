@@ -4,6 +4,7 @@ import { claudeCommandEcho } from "./skill-invocations/claude.ts";
 import { agentTaskResult, claudePeerId, claudePeerNotice, isContextClear, MAX_TURNS, toolSummary, type TranscriptParser } from "./transcript-records.ts";
 import { taskNotification, type SubagentDetail } from "./claude-subagents.ts";
 import { trimOutput } from "./tool-output.ts";
+import { base64Size, inlineImageType, MAX_IMAGE_BYTES } from "./codex-images.ts";
 
 /** Slash-command and bookkeeping entries Claude logs as user turns — not conversations. */
 export function isCommandEntry(text: string): boolean {
@@ -157,8 +158,92 @@ export function claudeResultText(output: unknown): string {
       : "";
 }
 
-/** The image types a chat shows; anything else stays out of the page. */
-export const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+/** A length-delimited field of a protobuf message (the last one, as Claude Code reads it); undefined when malformed. */
+function protoField(bytes: Uint8Array, field: number): Uint8Array | undefined {
+  const varint = (at: number): { value: number; next: number } | undefined => {
+    let value = 0;
+    for (let shift = 1, i = at; i < bytes.length && i < at + 10; i++, shift *= 128) {
+      value += (bytes[i]! & 0x7f) * shift;
+      if (bytes[i]! < 0x80) return { value, next: i + 1 };
+    }
+    return undefined;
+  };
+  let found: Uint8Array | undefined;
+  for (let at = 0; at < bytes.length;) {
+    const key = varint(at);
+    if (key === undefined) return undefined;
+    at = key.next;
+    const wire = key.value % 8;
+    if (wire === 0) { const skip = varint(at); if (skip === undefined) return undefined; at = skip.next; }
+    else if (wire === 1) at += 8;
+    else if (wire === 5) at += 4;
+    else if (wire === 2) {
+      const length = varint(at);
+      if (length === undefined || length.value > bytes.length - length.next) return undefined;
+      at = length.next + length.value;
+      if (Math.floor(key.value / 8) === field) found = bytes.subarray(length.next, at);
+    } else return undefined;
+    if (at > bytes.length) return undefined;
+  }
+  return found;
+}
+
+/**
+ * A thinking block the terminal prints as a line of narration between the tools: the server
+ * tags its signature (field 2 → 1 → 8) with the block kind, and Claude Code reads it there.
+ */
+function isNarration(signature: unknown): boolean {
+  if (typeof signature !== "string" || signature.length === 0) return false;
+  const inner = protoField(Buffer.from(signature, "base64"), 2);
+  const meta = inner && protoField(inner, 1);
+  const kind = meta && protoField(meta, 8);
+  return kind !== undefined && Buffer.from(kind).toString("utf8") === "narration";
+}
+
+/**
+ * A Claude image's ref: the entry, the block, and for a picture a tool returned its place in the
+ * result. The parser names only what transcriptImage can read back by it.
+ */
+export const CLAUDE_IMAGE_REF = /^([0-9a-f-]{8,64}):(\d{1,3})(?::(\d{1,3}))?$/i;
+
+/**
+ * The type of a picture Claude Code holds inline (pasted into a prompt, or a Read of an image
+ * file), by its leading bytes: a raster the chat shows, within the size the image endpoint serves.
+ * Null for anything else, so the page and the endpoint agree on what is a picture.
+ */
+export function claudeImageType(block: unknown): string | null {
+  const image = block as { type?: unknown; source?: { type?: unknown; media_type?: unknown; data?: unknown } } | null | undefined;
+  if (image?.type !== "image" || image.source?.type !== "base64") return null;
+  return inlineImageType(image.source.media_type, image.source.data);
+}
+
+/**
+ * A record with its inline pictures cut to what claudeImageType reads of them: their first bytes,
+ * or none past the size the endpoint serves. A screenshot can make a prompt megabytes long, and its
+ * bytes say nothing of where the record hangs in the session.
+ */
+export function withoutPictureBytes(text: string): string {
+  return text.replace(/("(?:data|base64)"\s*:\s*")([A-Za-z0-9+/]*={0,2})"/g,
+    (_whole: string, key: string, data: string) => `${key}${base64Size(data) > MAX_IMAGE_BYTES ? "" : data.slice(0, 16)}"`);
+}
+
+function claudeImageRef(uuid: unknown, ...at: number[]): string | null {
+  if (typeof uuid !== "string") return null;
+  const ref = [uuid, ...at].join(":");
+  return CLAUDE_IMAGE_REF.test(ref) ? ref : null;
+}
+
+/**
+ * The pictures among blocks, each named by the entry, the places that lead to the blocks (none for a
+ * prompt's own, the result's for a tool's) and its own: named here, fetched only when shown.
+ */
+export function claudeImages(uuid: unknown, blocks: readonly unknown[], ...at: number[]): { media_type: string; ref: string }[] {
+  return blocks.flatMap((block, index) => {
+    const mediaType = claudeImageType(block);
+    const ref = mediaType === null ? null : claudeImageRef(uuid, ...at, index);
+    return mediaType === null || ref === null ? [] : [{ media_type: mediaType, ref }];
+  });
+}
 
 interface ClaudeTranscriptOptions {
   subagents?: ReadonlyMap<string, SubagentDetail>;
@@ -327,7 +412,7 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
         }
         return part.type === "text" && typeof part.text === "string" && !isCommandEntry(part.text.trim()) ? [part.text] : [];
       }).join("\n");
-      for (const block of content) {
+      for (const [index, block] of content.entries()) {
         if (typeof block !== "object" || block === null) continue;
         const result = block as { type?: string; tool_use_id?: string; content?: unknown; is_error?: unknown };
         if (result.type !== "tool_result" || typeof result.tool_use_id !== "string") continue;
@@ -339,13 +424,11 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
         // the result's flag, and only it, says how the call went: an empty result is still a success
         if (tool.call_id !== undefined) tool.state = result.is_error === true ? "error" : "ok";
         if (tool.skill) tool.skill.status = result.is_error === true ? "failed" : "loaded";
+        // a picture the tool returned (a Read of an image file) sits inside its result
+        const pictures = Array.isArray(result.content) ? claudeImages(entry.uuid, result.content, index) : [];
+        if (pictures.length > 0) tool.images = pictures;
       }
-      // an image pasted into the prompt: named here, fetched only when shown
-      const images: ConversationPart[] = typeof entry.uuid !== "string" ? [] : content.flatMap((block: unknown, index: number) => {
-        const image = block as { type?: unknown; source?: { type?: unknown; media_type?: unknown } } | null;
-        if (image?.type !== "image" || image.source?.type !== "base64" || typeof image.source.media_type !== "string" || !IMAGE_TYPES.has(image.source.media_type)) return [];
-        return [{ kind: "image" as const, media_type: image.source.media_type, ref: `${entry.uuid}:${index}` }];
-      });
+      const images = claudeImages(entry.uuid, content).map((image) => ({ kind: "image" as const, ...image }));
       if (prompt.trim() || images.length > 0) pushPrompt({ role: "user", ts: entry.timestamp ?? null, parts: [...images, ...(prompt.trim() ? [{ kind: "text" as const, text: unwrapPastes(prompt) }] : []), ...invocations] }, entry);
       return;
     }
@@ -360,14 +443,15 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
       if (entry.timestamp) turn.end_ts = entry.timestamp;
       for (const block of content) {
         if (typeof block !== "object" || block === null) continue;
-        const b = block as { type?: string; text?: unknown; thinking?: unknown; name?: unknown; input?: unknown };
+        const b = block as { type?: string; text?: unknown; thinking?: unknown; signature?: unknown; name?: unknown; input?: unknown };
         if (b.type === "text" && typeof b.text === "string" && b.text.length > 0) {
           turn.parts.push({ kind: "text", text: b.text, ...(state.completed ? { phase: "final_answer" as const } : {}) });
         } else if (b.type === "thinking") {
           const thinking = typeof b.thinking === "string" ? b.thinking : typeof b.text === "string" ? b.text : "";
           // the terminal prints an "updates" entry's thinking as narration between the tools, so it
-          // is read as that: commentary keeps it in the work block, never taken for the answer
-          if (thinking.trim().length > 0 && entry.thinkingDisplay === "updates") turn.parts.push({ kind: "text", text: thinking, phase: "commentary" });
+          // is read as that: commentary keeps it in the work block, never taken for the answer.
+          // A block whose signature names it a narration is printed the same way.
+          if (thinking.trim().length > 0 && (entry.thinkingDisplay === "updates" || isNarration(b.signature))) turn.parts.push({ kind: "text", text: thinking, phase: "commentary" });
           else if (thinking.length > 0) turn.parts.push({ kind: "thinking", text: thinking });
         } else if (b.type === "tool_use" && typeof b.name === "string") {
           const input = (typeof b.input === "object" && b.input !== null ? b.input : {}) as Record<string, unknown>;

@@ -74,6 +74,43 @@ describe("saved theme migration", () => {
     expect(loadSettings().terminalFontSize).toBe(18);
   });
 
+  it("keeps the interface font in its own key, out of an old tab's whole-record save", () => {
+    saveSettings(sanitizeSettings({ uiFontFamily: "system-ui" }));
+    expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("uiFontFamily");
+    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
+    expect(loadSettings().uiFontFamily).toBe("system-ui");
+    expect(loadSettings().terminalFontSize).toBe(18);
+    saveSettings(sanitizeSettings({ uiFontFamily: "" }));
+    expect(loadSettings().uiFontFamily).toBe("");
+  });
+
+  it("keeps Wrap to screen / Original width in its own key, out of an old tab's whole-record save", () => {
+    saveSettings(sanitizeSettings({ terminalMirrorWrap: false }));
+    expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("terminalMirrorWrap");
+    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
+    expect(loadSettings().terminalMirrorWrap).toBe(false);
+    expect(loadSettings().terminalFontSize).toBe(18);
+    saveSettings({ ...loadSettings(), terminalMirrorWrap: true });
+    expect(loadSettings().terminalMirrorWrap).toBe(true);
+    saveSettings({ ...loadSettings(), terminalMirrorWrap: null });
+    expect(loadSettings().terminalMirrorWrap).toBeNull();
+    expect(sanitizeSettings({ terminalMirrorWrap: "yes" }).terminalMirrorWrap).toBeNull();
+  });
+
+  it("shows the sidebar filter until it is turned off, kept in its own key, out of an old tab's whole-record save", () => {
+    expect(loadSettings().sidebarFilter).toBe(true);
+    saveSettings(sanitizeSettings({ sidebarFilter: false }));
+    expect(JSON.parse(records.get(main) ?? "{}")).not.toHaveProperty("sidebarFilter");
+    oldSaveSettings({ ...readOld(), terminalFontSize: 18 });
+    expect(loadSettings().sidebarFilter).toBe(false);
+    expect(loadSettings().terminalFontSize).toBe(18);
+    saveSettings({ ...loadSettings(), sidebarFilter: true });
+    expect(loadSettings().sidebarFilter).toBe(true);
+    expect(sanitizeSettings({ sidebarFilter: "off" }).sidebarFilter).toBe(true);
+    records.set("ovis:sidebar-filter", "not json");
+    expect(loadSettings().sidebarFilter).toBe(true);
+  });
+
   it("survives repeated stale saves from an already-open old tab (f1)", () => {
     putOld({ theme: "dark", palette: "charcoal" });
     const stale = readOld();
@@ -293,6 +330,7 @@ describe("telemetry settings snapshot", () => {
     const settings = sanitizeSettings({
       terminalFontFamily: "private-terminal-font",
       chatFontFamily: "private-chat-font",
+      uiFontFamily: "private-ui-font",
       shortcutOverrides: { palette: "x" },
       keyBarItems: [{ type: "key", key: "x" }],
       keyBarExtras: ["alt", "shift-tab"],
@@ -313,10 +351,10 @@ describe("telemetry settings snapshot", () => {
       usageHiddenCount: 1,
       usageOrderCustom: true,
     });
-    for (const key of ["keyBarExtras", "keyBarItems", "shortcutOverrides", "terminalFontFamily", "chatFontFamily", "quickReplies", "usageOrder", "usageHidden"]) {
+    for (const key of ["keyBarExtras", "keyBarItems", "shortcutOverrides", "terminalFontFamily", "chatFontFamily", "uiFontFamily", "quickReplies", "usageOrder", "usageHidden"]) {
       expect(snapshot).not.toHaveProperty(key);
     }
-    for (const raw of ["private-terminal-font", "private-chat-font", "private quick reply", "private-order-account-id", "private-hidden-account-id"]) {
+    for (const raw of ["private-terminal-font", "private-chat-font", "private-ui-font", "private quick reply", "private-order-account-id", "private-hidden-account-id"]) {
       expect(serialized).not.toContain(raw);
     }
   });

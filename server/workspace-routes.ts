@@ -9,14 +9,15 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { MAX_LABEL_CHARS } from "../shared/labels.ts";
 import { firstMessageFault } from "../shared/launch-rules.ts";
-import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved, WorkspaceMoved } from "../shared/protocol.ts";
+import type { DirectoryCreated, PendingMessage, ServerMessage, TabMoved, TabMovedToWorkspace, WorkspaceMoved, WorktreeRemote } from "../shared/protocol.ts";
+import { remoteWebUrl } from "../shared/pr-status.ts";
 import type { MoveReceipt } from "./order-sequence.ts";
 import { agentFault, agentLaunch, type AgentPayload } from "./agent-launch.ts";
 import { createDirectory, listDirectories } from "./directories.ts";
-import { HerdrError, tabClose, tabCreate, tabMove, tabRename, workspaceClose, workspaceCreate, workspaceMove, workspaceRename, worktreeCreate, worktreeList, worktreeOpen, worktreeRemove } from "./herdr/client.ts";
+import { HerdrError, paneMoveToNewTab, sessionSnapshot, tabClose, tabCreate, tabMove, tabRename, workspaceClose, workspaceCreate, workspaceMove, workspaceRename, worktreeCreate, worktreeList, worktreeOpen, worktreeRemove } from "./herdr/client.ts";
 import { badRequest, conflictResponse, errorResponse, isJsonObject, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
 import { paneContext } from "./pane-context.ts";
-import { repoDiffResponse } from "./repo-diff.ts";
+import { gitEnvironment, repoDiffResponse } from "./repo-diff.ts";
 import type { ShellAgentLocator } from "./shell-agent.ts";
 
 /** `value` as an absolute path (`~` expanded) when it is a directory this user can read; null otherwise. */
@@ -24,6 +25,17 @@ export function expandedDirectory(value: string): string | null {
   const expanded = value === "~" ? homedir() : value.startsWith("~/") ? resolve(homedir(), value.slice(2)) : resolve(value);
   try {
     return statSync(expanded).isDirectory() ? expanded : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `git remote get-url origin` in `cwd`; null when git has none or cannot answer */
+async function originRemote(cwd: string): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["git", "-C", cwd, "remote", "get-url", "origin"], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: gitEnvironment(), timeout: 5_000 });
+    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    return code === 0 ? out.trim() : null;
   } catch {
     return null;
   }
@@ -71,7 +83,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     return listing === null ? badRequest("invalid_cwd", "path must be a directory this user can read") : jsonResponse(listing);
   }
 
-  if (pathname === "/api/workspace/diff/files" || pathname === "/api/workspace/diff/file" || pathname === "/api/workspace/diff/refs") {
+  if (pathname === "/api/workspace/diff/files" || pathname === "/api/workspace/diff/file" || pathname === "/api/workspace/diff/contents" || pathname === "/api/workspace/diff/refs") {
     setRequestRoute(pathname);
     if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
     // file contents, like /api/fs/file: this app reads them, another site's page does not
@@ -93,7 +105,7 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
       cwd = expandedDirectory(relative ? resolve(base!, directory) : directory) ?? undefined;
     }
     if (cwd === undefined) return badRequest("invalid_cwd", "directory must be a directory this user can read");
-    return repoDiffResponse(pathname.endsWith("/files") ? "files" : pathname.endsWith("/refs") ? "refs" : "file", cwd, url.searchParams);
+    return repoDiffResponse(pathname.endsWith("/files") ? "files" : pathname.endsWith("/refs") ? "refs" : pathname.endsWith("/contents") ? "contents" : "file", cwd, url.searchParams);
   }
 
   // A tab is made the way a workspace is: herdr opens it with a shell in its root pane, and
@@ -175,6 +187,22 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
     try {
       const listing = await worktreeList(workspaceId);
       return jsonResponse({ source: listing.source, worktrees: listing.worktrees });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  // the web page of the workspace's repository, from its `origin`, for a link to the pull request
+  // the PR plugin names in the workspace's tokens (shared/pr-status.ts)
+  if (pathname === "/api/worktree/remote") {
+    setRequestRoute(pathname);
+    if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+    const workspaceId = url.searchParams.get("workspace_id") ?? "";
+    if (workspaceId === "") return badRequest("missing_workspace_id", "workspace_id is required");
+    try {
+      const listing = await worktreeList(workspaceId);
+      const remote = await originRemote(listing.source.source_checkout_path);
+      return jsonResponse({ url: remote === null ? null : remoteWebUrl(remote) } satisfies WorktreeRemote);
     } catch (error) {
       return errorResponse(error);
     }
@@ -303,6 +331,34 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
       // the collector's structure debounce, and the closed workspace stays on screen meanwhile
       if (pathname === "/api/workspace/close") broadcastAll({ type: "session-changed" });
       return jsonResponse({ ok: true });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  // herdr moves tabs only within their workspace: a one-pane tab goes as its pane, into a new tab there
+  if (pathname === "/api/tab/move-to-workspace") {
+    setRequestRoute(pathname);
+    if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+    const payload = await readJsonObject<{ tab_id?: unknown; workspace_id?: unknown }>(request);
+    if (payload instanceof Response) return payload;
+    if (typeof payload.tab_id !== "string" || payload.tab_id.length === 0) return badRequest("missing_tab_id", "tab_id is required");
+    if (typeof payload.workspace_id !== "string" || payload.workspace_id.length === 0) return badRequest("missing_workspace_id", "workspace_id is required");
+    try {
+      const snapshot = await sessionSnapshot();
+      const tab = snapshot.tabs.find((candidate) => candidate.tab_id === payload.tab_id);
+      if (!tab) return jsonResponse({ error: { code: "tab_not_found", message: "no tab has that ID" } }, 404);
+      if (tab.workspace_id === payload.workspace_id) return conflictResponse("same_workspace", "the tab is already in that workspace");
+      const panes = snapshot.panes.filter((pane) => pane.tab_id === tab.tab_id);
+      if (panes.length !== 1 || !panes[0]) return conflictResponse("multi_pane_tab", "only a tab with one pane can move to another workspace");
+      // herdr names an unnamed tab by its place in the row, which it moves up when a tab before it
+      // closes while the tab keeps its number (src/lib/tabName.ts): that name is not carried over
+      const place = snapshot.tabs.filter((candidate) => candidate.workspace_id === tab.workspace_id).indexOf(tab) + 1;
+      const named = tab.label.trim();
+      const label = named === "" || named === String(place) ? null : named;
+      const moved = await paneMoveToNewTab(panes[0].pane_id, payload.workspace_id, label);
+      broadcastAll({ type: "session-changed" });
+      return jsonResponse({ ok: true, pane_id: moved.pane.pane_id, tab_id: moved.pane.tab_id } satisfies TabMovedToWorkspace);
     } catch (error) {
       return errorResponse(error);
     }

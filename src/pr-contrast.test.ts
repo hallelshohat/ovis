@@ -23,8 +23,8 @@ const ratio = (a: number[], b: number[]) => { const [x, y] = [luminance(a), lumi
 
 describe("pull request text contrast", () => {
   it("draws the number and word in text colour and only the glyph in the state's", () => {
-    expect(pr).toMatch(/\.pr-badge \{[^}]*color: var\(--text\);/);
-    expect(pr).toMatch(/\.pr-badge-icon \{[^}]*color: var\(--pr-tone\);/);
+    expect(pr).toMatch(/\.pull-badge \{[^}]*color: var\(--text\);/);
+    expect(pr).toMatch(/\.pull-badge-icon \{[^}]*color: var\(--pr-tone\);/);
     expect(panel).not.toMatch(/\.pr-card[^{]*\{[^}]*opacity:/);
   });
 

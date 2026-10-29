@@ -8,7 +8,11 @@ import { build as viteBuild } from "vite";
 import { CONTENT_SECURITY_POLICY } from "../server/static.ts";
 import { chromePath } from "./chrome-path.ts";
 import { parseClaudeTranscript } from "../server/conversation.ts";
-import type { ConversationTurn } from "../shared/protocol.ts";
+import type { ConversationTurn, InteractivePrompt } from "../shared/protocol.ts";
+import type {} from "./chat-fallback-fixture.tsx";
+import { parseInteractivePrompt } from "../server/prompt.ts";
+import { parseOmpTranscript } from "../server/transcript-records.ts";
+import piNavigation from "../server/fixtures/pi-ask-navigation.json";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-chat-fallback-")));
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -22,12 +26,13 @@ try {
   let structured = false, resolveAgent!: () => void, agentReadArrived!: () => void;
   let lookupTimeout = false;
   let source = "codex-transcript";
+  let prompt: InteractivePrompt | null = null;
   let turns: ConversationTurn[] = [{ role: "assistant", ts: null, parts: [{ kind: "text", text: "Structured conversation arrived" }] }];
   // resolved by the server's handler: a browser-side waitForRequest can win the race against it
   const agentRead = new Promise<void>((resolve) => { agentReadArrived = resolve; });
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     const url = new URL(request.url), pane = url.searchParams.get("pane_id");
-    if (url.pathname === "/api/pane/prompt") return Response.json({ prompt: null });
+    if (url.pathname === "/api/pane/prompt") return Response.json({ prompt, outcomes: [] });
     // the chat's skill matcher asks for the pane's commands
     if (url.pathname === "/api/pane/commands") return Response.json({ commands: [] });
     if (url.pathname === "/api/pane/conversation") {
@@ -109,7 +114,7 @@ try {
   await page.getByText("No conversation yet — say something below", { exact: true }).waitFor();
   assert.equal(await page.locator(".chat-terminal-fallback").count(), 0, "an empty structured conversation keeps its ordinary prompt");
   // Native parser output crosses HTTP into the real ChatView. Later activity must not
-  // move a final reply into the fold or duplicate it; narration and tools stay there.
+  // move a final reply into the fold or duplicate it. Only explicit commentary joins the tools there.
   const jsonl = (...records: unknown[]) => records.map((record) => JSON.stringify(record)).join("\n");
   source = "claude-transcript";
   turns = parseClaudeTranscript(jsonl(
@@ -149,7 +154,8 @@ try {
     ));
     await page.evaluate(() => { window.chatFallbackQA.agent("claude"); window.chatFallbackQA.pane("agent"); window.chatFallbackQA.refresh(); });
     await page.getByText(answer, { exact: true }).waitFor();
-    const work = page.locator(".work-block");
+    const continuation = page.locator(".chat-turn-agent").nth(1);
+    const work = continuation.locator(".work-block");
     const head = work.locator(".work-block-head");
     await head.waitFor();
     if (await head.getAttribute("aria-expanded") === "true") await head.click();
@@ -157,17 +163,158 @@ try {
     assert.equal(await work.getByText(answer, { exact: true }).count(), 0, "the reply is outside work");
     assert.equal(await page.getByText(answer, { exact: true }).count(), 1, "the reply appears once");
     assert.equal(await page.getByText(answer, { exact: true }).isVisible(), true, "folding work keeps the reply visible");
+    assert.equal(await continuation.getByText(narration, { exact: true }).isVisible(), true, "unphased narration stays visible outside folded work");
+    assert.equal(await work.getByText(narration, { exact: true }).count(), 0, "unphased narration is not part of work");
+    assert.equal(await page.getByText(narration, { exact: true }).count(), 1, "unphased narration appears once");
     assert.equal(await page.getByText("Catalog verification complete.", { exact: true }).isVisible(), true, "the hook continuation's short reply is also visible");
     assert.equal(await page.locator(".chat-turn-agent").count(), 2, "hook continuation answers have separate bubbles");
     assert.equal(await page.getByText(/Stop hook feedback:/).count(), 0, "injected hook context is not a user message");
     await head.click();
-    await work.getByText(narration, { exact: true }).waitFor();
     assert.equal(await work.locator(".work-row-head").count(), 1, "the tool stays inside work");
     await head.click();
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "claude-hook-separate-replies.png") });
-    console.log("PASS Claude hook replies stay separately visible outside folded work; narration and tool remain grouped");
+    console.log("PASS Claude hook narration and replies stay visible outside folded work; the tool remains inside");
   }
+  {
+    // A turn reads in the agent's own order, as its terminal does: words written before a tool call
+    // stay above it, and each run of work sits between the words around it.
+    const rows = () => page.locator(".chat-turn-agent").last().evaluate((turn) => [...turn.children].flatMap((child) => {
+      if (child.classList.contains("chat-turn-meta")) return [];
+      if (child.classList.contains("work-block")) return [["work", ...[".work-block-title", ".work-block-summary"].map((part) => child.querySelector(part)?.textContent ?? "")].join(" ")];
+      const words = (child as HTMLElement).innerText.trim();
+      return words ? [words] : [];
+    }));
+    const message = (role: string, extra: Record<string, unknown>) => ({ type: "message", message: { role, ...extra } });
+    source = "pi-transcript";
+    turns = parseOmpTranscript(jsonl(
+      message("user", { content: [{ type: "text", text: "Update the test server." }] }),
+      message("assistant", { stopReason: "toolUse", content: [
+        { type: "thinking", thinking: "Check what it runs first." },
+        { type: "text", text: "I read this as: bring the test server up to date." },
+        { type: "toolCall", id: "one", name: "eval", arguments: { summary: "Checking the revision" } },
+      ] }),
+      message("toolResult", { toolCallId: "one", content: [{ type: "text", text: "rev a" }] }),
+      message("assistant", { stopReason: "toolUse", content: [{ type: "toolCall", id: "two", name: "eval", arguments: { summary: "Checking the service" } }] }),
+      message("toolResult", { toolCallId: "two", content: [{ type: "text", text: "active" }] }),
+      message("assistant", { stopReason: "toolUse", content: [{ type: "thinking", thinking: "Restart it." }, { type: "toolCall", id: "three", name: "eval", arguments: { summary: "Restarting" } }] }),
+      message("toolResult", { toolCallId: "three", content: [{ type: "text", text: "restarted" }] }),
+      message("assistant", { stopReason: "stop", content: [{ type: "text", text: "The test server runs the latest main." }] }),
+    ));
+    await page.evaluate(() => { window.chatFallbackQA.agent("pi"); window.chatFallbackQA.pane("agent"); window.chatFallbackQA.refresh(); });
+    await page.getByText("The test server runs the latest main.", { exact: true }).waitFor();
+    const piRows = await rows();
+    console.log("OmO/pi turn order:", JSON.stringify(piRows));
+    assert.deepEqual(piRows, ["I read this as: bring the test server up to date.", "work Worked \u00b7 3 commands", "The test server runs the latest main."], "words before the tool calls stay above their one work block");
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "pi-words-before-tools.png") });
+    source = "claude-transcript";
+    turns = parseClaudeTranscript(jsonl(
+      { type: "user", message: { content: "Check the catalog." } },
+      { type: "assistant", message: { content: [{ type: "text", text: "Checking the catalog first." }, { type: "tool_use", id: "a", name: "Bash", input: { command: "ls" } }], stop_reason: "tool_use" } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "a", content: "books" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "Three books. Now the loans." }, { type: "tool_use", id: "b", name: "Bash", input: { command: "cat loans" } }], stop_reason: "tool_use" } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "b", content: "none" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "No book is on loan." }], stop_reason: "end_turn" } },
+    ));
+    await page.evaluate(() => { window.chatFallbackQA.agent("claude"); window.chatFallbackQA.refresh(); });
+    await page.getByText("No book is on loan.", { exact: true }).waitFor();
+    assert.deepEqual(await rows(), ["Checking the catalog first.", "work Worked \u00b7 1 command", "Three books. Now the loans.", "work Worked \u00b7 1 command", "No book is on loan."], "each run of work stays between the words around it");
+    await page.evaluate(() => window.chatFallbackQA.status("working"));
+    const live = page.locator(".chat-turn-agent").last().locator(".work-block.is-live");
+    await live.waitFor();
+    assert.deepEqual(await rows(), ["Checking the catalog first.", "work Worked \u00b7 1 command", "Three books. Now the loans.", "work Working\u2026 \u00b7 1 command", "No book is on loan."], "while the turn runs, only its last run of work reads Working");
+    assert.equal(await live.count(), 1, "one Working at a time");
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "claude-runs-live.png") });
+    // An earlier run splits when its blank text gets words: every block keeps the fold it had.
+    const bash = (command: string) => ({ kind: "tool" as const, name: "Bash", summary: command, input: JSON.stringify({ command }), output: "" });
+    const said = (value: string) => ({ kind: "text" as const, text: value });
+    const shelves = (first: string): ConversationTurn[] => [
+      { role: "user", ts: null, parts: [said("List the shelves.")] },
+      { role: "assistant", ts: null, parts: [said("Three shelves.")] },
+      { role: "user", ts: null, parts: [said("Check each shelf.")] },
+      { role: "assistant", ts: null, parts: [bash("ls a"), said(first), bash("ls b"), said("Shelf b next."), bash("ls c")] },
+    ];
+    const heads = page.locator(".chat-turn-agent").last().locator(".work-block-head");
+    const opened = async () => Promise.all((await heads.all()).map(async (head) => await head.getAttribute("aria-expanded") === "true"));
+    turns = shelves("");
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await page.getByText("Shelf b next.", { exact: true }).waitFor();
+    assert.deepEqual(await opened(), [false, true], "while the turn runs only its working run is open");
+    const headRows = page.locator(".chat-turn-agent").last().locator(".work-block").last().locator(".work-block-rows");
+    await heads.last().click();
+    await headRows.waitFor({ state: "hidden" });
+    assert.deepEqual(await opened(), [false, false], "the reader folds the working run");
+    turns = shelves("Shelf a is empty.");
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await page.getByText("Shelf a is empty.", { exact: true }).waitFor();
+    assert.deepEqual(await opened(), [false, false, false], "a run that splits moves no fold to another block: the folded run stays folded");
+    await headRows.waitFor({ state: "hidden" });
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "claude-run-split.png") });
+    await page.evaluate(() => window.chatFallbackQA.status(undefined));
+    await live.waitFor({ state: "detached" });
+    console.log("PASS words and runs of work keep the agent's order, settled and live");
+  }
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    prompt = parseInteractivePrompt("pi", piNavigation["custom-empty"])!;
+    const originalId = prompt.id;
+    await page.evaluate(() => { window.chatFallbackQA.agent("pi"); window.chatFallbackQA.refresh(); });
+    const card = page.locator(".prompt-card");
+    await card.waitFor();
+    const back = card.getByRole("button", { name: "Back", exact: true });
+    const question = card.getByRole("button", { name: "单元格内容", exact: true });
+    assert.equal(await back.count(), 0, "native custom editor owns navigation");
+    assert.equal(await question.count(), 0);
+    const input = card.locator("input.input");
+    await input.fill("unsent browser draft");
+    const mountedCard = await card.elementHandle();
+    prompt = parseInteractivePrompt("pi", piNavigation["second-answered"])!;
+    assert.equal(prompt.id, originalId, "leaving the editor does not change question identity");
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await back.waitFor();
+    await question.waitFor();
+    assert.equal(await input.inputValue(), "unsent browser draft", "metadata refresh preserves web edits");
+    assert.equal(await mountedCard!.evaluate(node => node.isConnected), true, "the card stays mounted");
+    await input.fill("");
+    assert.equal(await back.isEnabled(), true);
+    assert.equal(await question.isEnabled(), true);
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `pi-navigation-${width}.png`) });
+    // Start the next width with a new occurrence so its initial navigation state is observed.
+    prompt = null;
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await card.waitFor({ state: "detached" });
+  }
+  console.log("PASS same-id Pi navigation refresh restores Back/question buttons without losing web drafts at desktop and mobile widths");
   assert.deepEqual(errors, []);
+  structured = false;
+  const polling = await browser.newPage();
+  let pollingReads = 0;
+  polling.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/pane/conversation") pollingReads += 1;
+  });
+  await polling.clock.install();
+  await polling.clock.pauseAt(new Date());
+  await polling.addInitScript(() => {
+    localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+  });
+  await polling.goto(`http://127.0.0.1:${server.port}/?pushes`);
+  await polling.locator(".chat-terminal-fallback summary").waitFor();
+  const codexReads = pollingReads;
+  await polling.clock.runFor(2000);
+  assert.equal(pollingReads, codexReads, "non-Copilot terminal fallback keeps its 10s backstop");
+  const codexBackstop = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  await polling.clock.runFor(8000);
+  await codexBackstop;
+  assert.equal(pollingReads, codexReads + 1);
+  const changedAgent = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  await polling.evaluate(() => window.chatFallbackQA.agent("copilot"));
+  await changedAgent;
+  const copilotReads = pollingReads;
+  const copilotPoll = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  await polling.clock.runFor(2000);
+  await copilotPoll;
+  assert.equal(pollingReads, copilotReads + 1, "only Copilot terminal fallback uses the 2s recovery poll");
+  await polling.close();
+  console.log("PASS fallback polling keeps 10s for other agents and 2s for Copilot under a controlled clock");
   console.log("chat fallback: browser OK (no hidden terminal reads, opened stalled output cannot block structured refresh, late cleanup, non-agent inline output, fallback error announcement and accurate empty state)");
 
 } finally {

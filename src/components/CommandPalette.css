@@ -170,6 +170,20 @@
   min-height: var(--row-h);
 }
 
+/* a workspace's pull request (Sidebar.tsx PrBadge): the whole status on a line of its own under a
+   section's heading, wrapping on a narrow phone, and the mark and number beside a pane's state */
+.palette-section > .pr-badge {
+  margin: 0 var(--space-2) var(--space-1);
+}
+
+.palette-pane .pr-badge[data-href] {
+  cursor: pointer;
+}
+
+.palette-pane .pr-badge[data-href]:hover .pr-badge-mark {
+  text-decoration: underline;
+}
+
 /* a folder row (a path typed in the search): its glyph quieter than the name, the path under a jump */
 .palette-folder > svg {
   flex: 0 0 auto;

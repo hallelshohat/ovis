@@ -1,6 +1,6 @@
 /**
  * Simplified Chinese for the keys only the sidebar files use:
- * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx.
+ * components/Sidebar.tsx, components/AgentSidebar.tsx, components/SidebarResizer.tsx, components/BoardTasks.tsx.
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const SIDEBAR_ZH: Record<string, string> = {
@@ -53,4 +53,29 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Collapse": "折叠",
   "Expand": "展开",
   "Shell": "Shell",
+  "Pull request #{number}, open": "拉取请求 #{number}，开放中",
+  "Pull request #{number}, draft": "拉取请求 #{number}，草稿",
+  "Pull request #{number}, merged": "拉取请求 #{number}，已合并",
+  "Pull request #{number}, closed": "拉取请求 #{number}，已关闭",
+  "Archive task": "归档任务",
+  "Approve plan": "批准计划",
+  "Approve and merge…": "批准并合并…",
+  "Merge {task}?": "合并 {task}？",
+  "The board merges the task's finished work into its main branch, and closes its space.": "看板会把任务完成的工作合并到主分支，并关闭它的空间。",
+  "Merge": "合并",
+  "Remove task…": "移除任务…",
+  "Remove task {task}?": "移除任务 {task}？",
+  "The task leaves the board with its description and reviews, and its worktree is removed. Work in it that is not saved or not merged is kept.": "任务连同描述和评审一起离开看板，其工作树也会被移除。其中未保存或未合并的工作会保留。",
+  "Archive done tasks in every repo ({n})": "归档所有仓库中已完成的任务 ({n})",
+  "Undo": "撤销",
+  "Allow request": "允许请求",
+  "Archive done tasks in {repo} ({n})": "归档 {repo} 中已完成的任务 ({n})",
+  "Board tasks": "看板任务",
+  "Board tasks on {name}": "{name} 上的看板任务",
+  "No tasks on the board": "看板上没有任务",
+  "Approving…": "批准中…",
+  "Archiving…": "归档中…",
+  "Merging…": "合并中…",
+  "Removing…": "移除中…",
+  "Restoring…": "恢复中…",
 };

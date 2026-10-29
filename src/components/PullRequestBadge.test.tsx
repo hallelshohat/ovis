@@ -17,8 +17,8 @@ const render = (props: Parameters<typeof PullRequestBadge>[0]) => renderToStatic
 describe("a pull request badge", () => {
   it("draws a failing own PR by number, its word kept for assistive tech", () => {
     const html = render({ pr: pr({ checks: "failing" }) });
-    expect(html).toContain('class="pr-badge is-failing"');
-    expect(html).toContain('<span class="pr-badge-number">#1936</span>');
+    expect(html).toContain('class="pull-badge is-failing"');
+    expect(html).toContain('<span class="pull-badge-number">#1936</span>');
     expect(html).toContain('<span class="visually-hidden">Checks failing</span>');
   });
 
@@ -26,7 +26,7 @@ describe("a pull request badge", () => {
     const html = render({ pr: pr({ own: false, repo: "acme/client-sdk", number: 88, url: "https://github.com/acme/client-sdk/pull/88", state: "merged" }), size: "full", more: 1 });
     expect(html).toContain("is-merged");
     expect(html).toContain(">client-sdk#88</span>");
-    expect(html).toContain('<span class="pr-badge-word">Merged</span>');
+    expect(html).toContain('<span class="pull-badge-word">Merged</span>');
     expect(html).toContain('aria-label="1 more open">+1</span>');
   });
 

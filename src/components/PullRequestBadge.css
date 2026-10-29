@@ -2,7 +2,7 @@
    text colour: the state colours of several palettes are under 4.5:1 for small text, and the word
    (or its screen-reader copy) says the state as well. The glyph's colour fades when the state
    changes, so a check going red or a merge reads as a change, not a jump. */
-.pr-badge {
+.pull-badge {
   --pr-tone: var(--pr-open);
   display: inline-flex;
   align-items: center;
@@ -15,15 +15,15 @@
   white-space: nowrap;
 }
 
-.pr-badge.is-failing,
-.pr-badge.is-changes { --pr-tone: var(--pr-failing); }
-.pr-badge.is-review { --pr-tone: var(--pr-review); }
-.pr-badge.is-pending,
-.pr-badge.is-draft,
-.pr-badge.is-closed { --pr-tone: var(--pr-draft); }
-.pr-badge.is-merged { --pr-tone: var(--pr-merged); }
+.pull-badge.is-failing,
+.pull-badge.is-changes { --pr-tone: var(--pr-failing); }
+.pull-badge.is-review { --pr-tone: var(--pr-review); }
+.pull-badge.is-pending,
+.pull-badge.is-draft,
+.pull-badge.is-closed { --pr-tone: var(--pr-draft); }
+.pull-badge.is-merged { --pr-tone: var(--pr-merged); }
 
-.pr-badge-icon {
+.pull-badge-icon {
   flex: none;
   color: var(--pr-tone);
   transition: color var(--dur-base) var(--ease-out);
@@ -31,16 +31,16 @@
   height: calc(var(--icon-size) * 0.75);
 }
 
-.pr-badge-number {
+.pull-badge-number {
   font-variant-numeric: tabular-nums;
 }
 
-.pr-badge-word {
+.pull-badge-word {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.pr-badge-more {
+.pull-badge-more {
   padding: 0 var(--space-1);
   border-radius: var(--radius-pill);
   background: var(--bg-hover);
@@ -50,5 +50,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pr-badge-icon { transition: none; }
+  .pull-badge-icon { transition: none; }
 }

@@ -103,29 +103,23 @@ try {
   const work = log.locator(".work-block-head");
   const report = (state: "working" | "idle") => herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state });
   const head = (expanded: boolean, title: string) => log.locator(`.work-block-head[aria-expanded="${expanded}"]`).filter({ hasText: title });
-  await head(false, "Worked for 7s").waitFor();
+  // the turn in the terminal's order: the words, the run of two commands folded where it ran, the answer
+  await head(false, "2 commands").waitFor();
+  const narration = log.getByText("I am checking the transcript.", { exact: true });
+  assert.equal(await narration.isVisible(), true, "the words before the tools are never inside the fold");
+  assert.equal(await narration.evaluate((node) => node.closest(".work-block") === null), true);
+  const order = await log.locator(".chat-turn-agent").first().evaluate((turn) => [...turn.querySelectorAll(".markdown, .work-block")].map((node) => node.classList.contains("work-block") ? "work" : node.textContent!.trim()));
+  assert.deepEqual(order, ["I am checking the transcript.", "work", answer], "words and tool calls in the order they happened");
+  assert.match(await log.locator(".chat-turn-duration").innerText(), /Worked for 7s/);
+  // a running turn whose newest part is its answer keeps that run folded: the activity is a line under it
   await report("working");
-  await head(true, "Working…").waitFor();
-  assert.equal(await log.locator(".work-block.is-folded").count(), 0, "the running turn's work is open");
+  await log.locator(".chat-activity.chat-activity-line", { hasText: "Working…" }).waitFor();
+  assert.equal(await work.getAttribute("aria-expanded"), "false");
+  assert.equal(await log.locator(".chat-turn-duration").count(), 0, "a running turn has no duration line yet");
   await report("idle");
-  await head(false, "Worked for 7s").waitFor();
-  // working inside the block is a choice to keep it: the fold must not take a focused row away
-  await report("working");
-  await head(true, "Working…").waitFor();
-  // the row reads as verb + object (#457); its tool id is the title
-  const toolRow = log.getByRole("button", { name: "Ran git status", exact: true });
-  await toolRow.click();
-  await log.getByText("git status", { exact: true }).last().waitFor();
-  await report("idle");
-  await head(true, "Worked for 7s").waitFor();
-  assert.equal(await toolRow.evaluate((node) => node === document.activeElement), true, "the row the reader opened keeps focus when the turn settles");
-  await log.getByText("git status", { exact: true }).last().waitFor();
-  await work.click();
-  await head(false, "Worked for 7s").waitFor();
-  console.log("PASS the running turn's work is open, folds when it settles, and stays open under a reader working inside it");
-  assert.equal(await work.getAttribute("aria-expanded"), "false", "a settled turn folds its work: only a running turn is open");
+  await log.locator(".chat-turn-duration").waitFor();
+  console.log("PASS a turn reads in the terminal's order: words outside the fold, each run of tools folded where it ran, the duration closing it");
   assert.equal(await log.locator(".work-block.is-folded").count(), 1);
-  assert.match(await work.innerText(), /Worked for 7s/);
   await work.click();
   assert.equal(await work.getAttribute("aria-expanded"), "true");
   // a tool the verb table knows reads as verb + object; its id is the title and the detail's first line
@@ -134,11 +128,9 @@ try {
   assert.equal(await row.locator(".work-row-caret").isVisible(), true);
   assert.equal(await row.locator(".work-row-icon, .work-row-sep").count(), 0);
   // a failed call says so after its object, never between the verb and what it ran
-  const failedRow = log.getByRole("button", { name: "Ran bun test failed", exact: true });
-  assert.equal(await failedRow.evaluate((node) => node.lastElementChild?.className), "work-row-failed");
+  const failedRow = log.getByRole("button", { name: /^Ran bun test failed/ });
   assert.equal(await failedRow.getAttribute("title"), "exec_command · bun test");
-  // the row opened while the turn ran stays open through fold and unfold: a click would close it
-  if (await row.getAttribute("aria-expanded") !== "true") await row.click();
+  await row.click();
   assert.equal(await log.locator(".work-row-detail > :first-child").innerText(), "exec_command");
   await log.getByText("git status", { exact: true }).last().waitFor();
   assert.equal(await log.locator(".chat-agent-meta").count(), 1);
@@ -150,12 +142,12 @@ try {
   await work.click();
   assert.equal(await work.getAttribute("aria-expanded"), "false", "and so is folding it again");
   add(message("assistant", "Checking the second request.", "commentary"), 21); persist();
-  // the pane is idle: this turn is settled and has no answer, so folding it would hide its only text
+  // words with no tools are no work: they stand as they were said
   await log.getByText("Checking the second request.", { exact: true }).waitFor();
+  assert.equal(await work.count(), 1, "a turn of words alone draws no work block");
   assert.equal(await work.first().getAttribute("aria-expanded"), "false", "manual folding is preserved");
-  assert.equal(await work.nth(1).getAttribute("aria-expanded"), "true", "a settled turn that ends in commentary keeps its text in view");
   assert.equal(await log.locator(".chat-agent-meta").count(), 1, "commentary is not a final answer");
-  console.log("PASS manual state persists, commentary stays inside work and stays visible when the turn has no answer");
+  console.log("PASS manual state persists, commentary stands in the open");
 
   records.push({ type: "turn_context", payload: { model: "codex-updated-model", effort: "low" } }); persist();
   await modelInfo.getByText("codex-updated-model", { exact: true }).waitFor();
@@ -189,7 +181,7 @@ try {
   await placeholder.waitFor({ state: "detached" });
   assert.ok(Math.abs((await liveTitle.boundingBox())!.x - placeholderX) < 1, "the block's title starts where the activity line's did");
   await report("idle");
-  await log.locator(".work-block-title", { hasText: "Worked" }).last().waitFor();
+  await log.locator(".work-block-title", { hasText: "1 command" }).last().waitFor();
   // a running turn with only words so far: the activity is a line under them, not a head over
   // them, so the words stay put when the turn ends and the line goes
   add(message("user", "A third request."), 24);

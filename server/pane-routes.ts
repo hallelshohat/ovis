@@ -4,10 +4,12 @@
  * resize, clear, focus, paste an image). Each answers from herdr alone, so none needs the
  * server's own state. The dispatcher in index.ts runs the access gate first.
  */
-import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
+import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneLiveOutputResponse, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
 import { mergeCatalogSources } from "./catalog-sources.ts";
 import { paneCommands, rememberPaneCommands } from "./commands.ts";
+import { paneClaudeTempFolder } from "./file-routes.ts";
 import { paneFiles } from "./files.ts";
+import { claudeRunningOutputs } from "./live-output.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
 import { conversationImage, ConversationUnavailable, forgetPaneTranscriptState, HistoryChanged, paneConversation, paneProcessRoots, paneTranscript, toolOutput } from "./conversation.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
@@ -25,7 +27,7 @@ import { conversationSources, fileChat, PER_CHAT_FILES, type Chat } from "./pull
 import type { PanePullRequests } from "../shared/pull-requests.ts";
 
 /** the native stores createServer was given; unset, each reader finds its own */
-export type PaneStores = { codexHome?: string; grokHome?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string; openCodeStateDir?: string };
+export type PaneStores = { codexHome?: string; grokHome?: string; museData?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string; openCodeStateDir?: string };
 
 /** the sides herdr's pane.swap and pane.resize take; anything else is refused before the RPC, which would answer invalid_request */
 const isPaneDirection = (value: unknown): value is PaneDirection => value === "left" || value === "right" || value === "up" || value === "down";
@@ -102,7 +104,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         const { agent } = resolveAgent(context.pane, roots);
         // the version comes from the store this pane's own transcript names; none resolved leaves it unverified
         const store = agent === "claude" || agent === "codex" || agent === "opencode"
-          ? await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome).then(versionSourceOf, () => null)
+          ? await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData).then(versionSourceOf, () => null)
           : null;
         const { version: stored } = resolveAgent(context.pane, roots, store);
         // a pane with no session yet has no stored version: OpenCode's service file still says how it types its skills
@@ -148,6 +150,16 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     } catch (error) {
       return errorResponse(error);
     }
+  }
+
+  if (pathname === "/api/pane/live-output") {
+    setRequestRoute(pathname);
+    if (request.method !== "GET") return badRequest("method_not_allowed", "use GET");
+    const paneId = url.searchParams.get("pane_id");
+    if (!paneId) return badRequest("missing_pane_id", "pane_id query parameter is required");
+    const since = Date.parse(url.searchParams.get("since") ?? "");
+    const folder = await paneClaudeTempFolder(paneId);
+    return jsonResponse({ outputs: folder === null ? null : await claudeRunningOutputs(folder, Number.isFinite(since) ? since : 0) } satisfies PaneLiveOutputResponse);
   }
 
   if (pathname === "/api/pane/find") {
@@ -225,7 +237,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     const ref = url.searchParams.get("ref");
     if (!paneId || !ref) return badRequest("missing_parameter", "pane_id and ref query parameters are required");
     try {
-      const output = await toolOutput(paneId, ref, options.codexHome, options.opencodeDb, options.hermesHome, options.grokHome);
+      const output = await toolOutput(paneId, ref, options.codexHome, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
       if (output === null) return jsonResponse({ error: { code: "output_not_found", message: "no such tool call in this pane's conversation" } }, 404);
       // a tool call's id names its output for good; OpenCode's ref names a place in a row it rewrites in place
       const cacheControl = (OPENCODE_TOOL_REF.test(ref) || /^grok:/.test(ref)) ? "private, no-store" : "private, max-age=86400, immutable";
@@ -243,7 +255,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     try {
       const image = await conversationImage(paneId, ref, options.codexHome, options.opencodeDb);
       if (image === null) return jsonResponse({ error: { code: "image_not_found", message: "no such image in this pane's conversation" } }, 404);
-      // Claude embeds immutable bytes; Codex files and OpenCode tool-image ordinals can change.
+      // Claude and pi embed immutable bytes and omp names a blob by its digest; Codex files and
+      // OpenCode tool-image ordinals can change, and a Codex tool's picture (`codex-tool:`) loads with its row.
       const cacheControl = ref.startsWith("codex-") || ref.startsWith("opencode:") ? "private, no-store" : "private, max-age=86400, immutable";
       return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
     } catch (error) {
@@ -308,7 +321,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       from: url.searchParams.get("from") ?? undefined,
     };
     try {
-      const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+      const { version, ...conversation } = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome, options.museData);
       // no-store keeps the browser's own cache out of it, so the chat sees the 304.
       // weak: the same answer goes out gzipped or plain (compress.ts), which are not the same bytes
       const etag = `W/"${version}"`;
@@ -384,7 +397,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
   }
 
   // herdr's own layout operations, as its TUI has them: prefix+v and prefix+- (split), prefix+z
-  // (zoom), prefix+shift+hjkl (swap), its resize mode, and pane clear. Each is one herdr RPC. No
+  // (zoom), prefix+shift+hjkl (swap), its resize mode, and pane clear. Explicit swaps also restore
+  // herdr's prior focus; the browser's rearrangement must not select another workspace there. No
   // answer carries the layout: a new pane reaches every client through the collector's
   // pane.created subscription and a moved border, zoom or swap through its layout.updated one,
   // both as session-changed, the same way the TUI's own changes do.

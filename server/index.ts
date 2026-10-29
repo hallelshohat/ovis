@@ -1,5 +1,6 @@
 import "./adopt-legacy-env.ts";
 import { handleWorkspaceRequest } from "./workspace-routes.ts";
+import { handleBoardRequest } from "./board-routes.ts";
 import { connectionData, createCore, type SocketData } from "./core/index.ts";
 import { ClientConnectionLog } from "./client-connection-log.ts";
 import { RequestLog } from "./request-log.ts";
@@ -11,11 +12,11 @@ import { readHerdrProfiles, type HerdrMachineProfile } from "./herdr-profiles.ts
 import { accessSync, constants, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { HealthAuth, PendingMessage } from "../shared/protocol.ts";
+import type { DevicePairedEvent, HealthAuth, PendingMessage, SecuritySummary } from "../shared/protocol.ts";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
-import { authClient, deviceCookieValue, bearerMatches, handleAuthRequest, isAuthenticated, parseCookies, presentedToken, presentedTokenHeld, recordPresentedTokenFailure, requiresAuth, unauthorizedJson } from "./auth.ts";
-import { cameThroughProxy, decideAccess, isLoopbackAddress, isLoopbackBind, isServeOwnerRequest, lanExposed } from "./access.ts";
-import { DeviceStore, handleDeviceRequest, type DeviceMatch } from "./devices.ts";
+import { authClient, deviceCookieValue, bearerMatches, handleAuthRequest, isAuthenticated, isSecureRequest, parseCookies, presentedToken, presentedTokenHeld, recordPresentedTokenFailure, requiresAuth, unauthorizedJson } from "./auth.ts";
+import { bindScope, cameThroughProxy, decideAccess, forwardingHeaders, isLoopbackAddress, isLoopbackBind, isServeOwnerRequest, lanExposed, observedIngress } from "./access.ts";
+import { DeviceStore, handleDeviceRequest, newStreamKey, sameBrowser, streamCookie, streamKeys, type DeviceMatch } from "./devices.ts";
 import { handlePreferencesRequest, PreferenceStore } from "./preferences.ts";
 import { handleSeenRequest, SeenStore } from "./seen.ts";
 import { remoteAccess, TailnetIdentitySource } from "./tailscale.ts";
@@ -50,7 +51,7 @@ import { UsageLoginService } from "./usage-login.ts";
 import { handleVoiceRequest, VoiceService } from "./voice.ts";
 
 import { BRIDGE_PROTOCOL } from "../shared/machines.ts";
-import { bridgeIdentity, registerBridge } from "./bridge.ts";
+import { bridgeIdentity, loopbackRelay, registerBridge, relayTarget } from "./bridge.ts";
 import { handleMachineRequest, nonCanonicalPath, slowMachinePath } from "./machine-api.ts";
 import { handleSessionHistoryRequest, handleSessionResumeRequest, SESSION_HISTORY_PATH, SESSION_RESUME_PATH } from "./session-history-routes.ts";
 import { HerdrSidebarConfig, herdrConfigPath } from "./herdr-sidebar.ts";
@@ -100,6 +101,7 @@ export interface ServerInstance {
   port: number;
   hostname: string;
   statusReady: Promise<void>;
+  focusReady: Promise<void>;
   alertsSettled: () => Promise<void>;
   /**
    * queues a create request's first message for a pane's agent, as POST /api/workspace/create and /api/tab/create do with
@@ -131,6 +133,8 @@ export function createServer(
     /** Native Codex store; defaults to CODEX_HOME. Tests use an isolated store. */
     codexHome?: string;
     grokHome?: string;
+    /** Muse Code's data directory; defaults to XDG_DATA_HOME/muse or ~/.local/share/muse. Tests use an isolated store. */
+    museData?: string;
     /** OpenCode's database; defaults to where OpenCode finds it (OPENCODE_DB, XDG_DATA_HOME). Tests use an isolated store. */
     opencodeDb?: string;
     /** OpenCode state dir where service.json lives; tests use an isolated directory. */
@@ -160,6 +164,8 @@ export function createServer(
     /** herdr's config.toml, for its sidebar rows (server/herdr-sidebar.ts) and its copy_on_select (server/herdr-ui.ts); unset, where herdr itself reads it. Tests pass a temp file. */
     herdrConfigPath?: string;
     registerBridge?: boolean;
+    /** the token a connection server presents as this PC's bridge; random unless a test names it */
+    bridgeToken?: string;
     /** PLUGIN_ACTION_WAIT_MS in server/plugin-routes.ts; a test shortens it to see a run that outlasts the wait */
     pluginActionWaitMs?: number;
     /** SUBMIT_DEADLINE_MS; tests shorten it */
@@ -168,6 +174,8 @@ export function createServer(
     submitDelayMs?: number;
     /** How long a queued send waits for a confirmed new turn to start; tests shorten it. */
     pendingStartTimeoutMs?: number;
+    /** Active Pi transcript receipts allowed per connection. Tests lower it to exercise the pre-send boundary. */
+    piReceiptLimit?: number;
     /** how long a push alert waits for the pane to change first (server/push.ts); tests send at once */
     alertTiming?: Partial<AlertTiming>;
     /** accept plain-http loopback push endpoints (server/push.ts); only tests delivering to push.fake.ts set it */
@@ -176,6 +184,8 @@ export function createServer(
     backgroundWait?: { grace: number; limit: number };
     /** Clock for background holds and alert turn durations; tests advance it explicitly. */
     statusNow?: () => number;
+    /** herdr's identity behind `herdr_lifetime`; unset, its socket's (server/finishes.ts). Tests swap one in. */
+    herdrIdentity?: () => string | null;
     /** ATTACH_RETRY_FOR_MS; tests shorten it */
     attachRetryForMs?: number;
     /** ATTACH_HELD_RETRY_MS; tests shorten it */
@@ -238,11 +248,11 @@ export function createServer(
   const draftTimer = setInterval(() => openCodeState.prune(), 60_000);
   draftTimer.unref();
   const core = createCore({ options: { ...options, stateDir, openCodeState, orderSequence }, devices, preferences, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
-  const { sidecar, serialize, push, logPushError, omo, claudeAgents, plans, clientSnapshot, machines, broadcastAll, collector, queueFirstMessage } = core;
+  const { sidecar, serialize, push, logPushError, omo, claudeAgents, opencodeAgents, plans, clientSnapshot, machines, broadcastAll, collector, queueFirstMessage } = core;
   // started after createCore's Node probe (server/pty/sidecar.ts), which can hold the thread up to 3 s: that wait
   // would count against the read's own 2.5 s limit, and a read cut short leaves the owner unknown for 5 minutes
   identityOf(false, null);
-  const bridgeToken = randomBytes(32).toString("hex");
+  const bridgeToken = options.bridgeToken ?? randomBytes(32).toString("hex");
 
   type PortalStartup = { ok: true } | { ok: false; error: unknown };
   let settlePortalStartup!: (result: PortalStartup) => void;
@@ -274,7 +284,12 @@ export function createServer(
       const url = new URL(request.url);
       let { pathname } = url;
       const bridgeAuthorized = isAuthenticated(request, bridgeToken);
-      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === SESSION_HISTORY_PATH || pathname === SESSION_RESUME_PATH || pathname === "/api/agents" || pathname === "/api/agent/rename" || pathname === "/api/agent/commands" || pathname === "/api/integrations" || pathname === "/api/plugins/actions" || pathname === "/api/plugin/action" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname === "/api/layout/ratio" || pathname.startsWith("/api/fs/") || pathname === "/ws";
+      // the connection server that reaches this one as its PC reads its update status and asks for the
+      // update on offer: an Ovis run on this PC by itself is updated through its own updater, never
+      // replaced (server/machines.ts ownOffer). An install still names the offered revision and the
+      // custom header (update-api.ts), and whoever holds the token already drives every pane here
+      const bridgeUpdatePath = pathname === "/api/updates" || pathname === "/api/updates/install";
+      const bridgePath = pathname === "/api/bridge" || pathname === "/api/session" || pathname === SESSION_HISTORY_PATH || pathname === SESSION_RESUME_PATH || pathname === "/api/agents" || pathname === "/api/agent/rename" || pathname === "/api/agent/commands" || pathname === "/api/integrations" || pathname === "/api/plugins/actions" || pathname === "/api/plugin/action" || pathname.startsWith("/api/pane/") || pathname.startsWith("/api/workspace/") || pathname.startsWith("/api/worktree/") || pathname.startsWith("/api/tab/") || pathname === "/api/layout/ratio" || pathname.startsWith("/api/fs/") || pathname === "/ws" || bridgeUpdatePath;
       const ip = bunServer.requestIP(request);
       const loopback = ip !== null && isLoopbackAddress(ip.address);
       const forwarded = cameThroughProxy(request.headers);
@@ -337,9 +352,10 @@ export function createServer(
       // Signing a device's own alerts in is a preference of that device, so `watch` keeps
       // it. The endpoint it registers is https-only (server/push.ts), and that is the
       // protection: a watch device's subscription is delivered every status change anyway.
-      // /api/push/test stays with a session that can drive only because it is a mutation.
+      // /api/push/test stays with a session that can drive only because it is a mutation; /api/push/status
+      // is a POST only to keep the subscription out of the address, and answers the device about its own.
       // A watch device may report its own connection metadata, never terminal input or file data.
-      const ownPreferences = pathname === "/api/auth" || pathname === "/api/push/subscribe" || pathname === "/api/connection-diagnostics";
+      const ownPreferences = pathname === "/api/auth" || pathname === "/api/push/subscribe" || pathname === "/api/push/status" || pathname === "/api/connection-diagnostics";
       // a repository's changes are file contents too: the patch of a credential file is that file
       const repositoryDiff = /^\/api\/(?:machines\/[^/]+\/)?workspace\/diff\//.test(pathname);
       // earlier sessions carry their first prompts
@@ -377,8 +393,21 @@ export function createServer(
           // resume on agent.start and then its store check (machine-api.ts slowMachinePath)
           bunServer.timeout(request, pathname === "/api/machines/events" ? 0 : slowMachinePath(pathname.split("/").slice(4).join("/")) ? 180 : 80);
           const deviceId = access.level === "full" ? access.device?.id : undefined;
-          const response = await handleMachineRequest(request, machines, deviceId ? (close) => devices.onRevoke(deviceId, close) : undefined, preferences, readOnly, herdrSidebar, seen);
+          // a device's enrollment is news to every stream but the new device's own: one the stream's
+          // device cookie names, or one this browser asked for itself (its stream key, server/devices.ts),
+          // which a stream opened before that device existed cannot know by its cookie. A browser
+          // without a key gets one with this stream; a key is a cookie of its own name, so tabs that
+          // open at once each add theirs and the pairing later carries all of them
+          const presentedKeys = streamKeys(request);
+          const issuedKey = presentedKeys.length === 0 && pathname === "/api/machines/events" ? newStreamKey() : null;
+          const keys = issuedKey === null ? presentedKeys : [issuedKey];
+          // a stream that came in through the open LAN is told nothing: every enrollment follows the write
+          // that closed the gate, so whoever holds it has no access left by the time there is news
+          const openAccess = access.level === "full" && access.via === "open";
+          const pairings = { subscribe: (listener: (event: DevicePairedEvent) => void) => devices.onPaired((event, origin) => { if (!openAccess && event.device_id !== deviceId && !sameBrowser(origin, keys)) listener(event); }) };
+          const response = await handleMachineRequest(request, machines, deviceId ? (close) => devices.onRevoke(deviceId, close) : undefined, preferences, readOnly, herdrSidebar, seen, pairings);
           response.headers.set("cache-control", "no-store");
+          if (issuedKey !== null && response.ok) response.headers.append("set-cookie", streamCookie(issuedKey, isSecureRequest(request)));
           return response;
         }
       }
@@ -418,14 +447,15 @@ export function createServer(
       }
       if (pathname === "/api/devices" || pathname.startsWith("/api/devices/")) {
         try {
-          const response = await handleDeviceRequest(request, pathname, devices, access);
-          if (request.method === "DELETE" && response.status === 204) {
-            // The device registry is the delivery authority even if cleaning the push file fails.
-            try { push.revokeDevice(pathname.slice("/api/devices/".length)); } catch (error) { logPushError(error); }
-            // and every page media address its renders were given
-            forgetPageMedia({ device: pathname.slice("/api/devices/".length) });
-          }
-          return response;
+          // one device, or all of them: the registry names what was revoked, and the cleanup follows its ids
+          return await handleDeviceRequest(request, pathname, devices, access, (revoked) => {
+            for (const id of revoked) {
+              // The device registry is the delivery authority even if cleaning the push file fails.
+              try { push.revokeDevice(id); } catch (error) { logPushError(error); }
+              // and every page media address its renders were given
+              forgetPageMedia({ device: id });
+            }
+          });
         } catch (error) { return errorResponse(error); }
       }
 
@@ -455,7 +485,12 @@ export function createServer(
           // it stays open, like a subscription from before owners (undefined); a local/token/
           // Tailscale sign-in is the owner (null)
           const owner = access.level !== "full" ? null : access.device?.id ?? (access.via === "open" ? undefined : null);
-          const answered = await handlePushRequest(request, pathname, push, owner);
+          // the subscription remembers its browser's stream keys, so that browser's own pairing is not
+          // pushed to it whoever owns the subscription; a browser without one gets one here
+          const presentedKeys = streamKeys(request);
+          const issuedKey = presentedKeys.length === 0 && request.method === "POST" && pathname === "/api/push/subscribe" ? newStreamKey() : null;
+          const answered = await handlePushRequest(request, pathname, push, owner, issuedKey === null ? presentedKeys : [issuedKey]);
+          if (answered && issuedKey !== null && answered.ok) answered.headers.append("set-cookie", streamCookie(issuedKey, isSecureRequest(request)));
           if (answered) return answered;
         } catch (error) {
           return errorResponse(error);
@@ -472,13 +507,24 @@ export function createServer(
         // reconnaissance, not help. Nothing here changes who is let in (server/access.ts).
         const lan_exposure = access.level === "full" && lanExposed({ hostname, tokenConfigured: token !== "", gated: devices.gated })
           ? { host: hostname } : undefined;
-        if (url.searchParams.get("scope") === "bridge") return jsonResponse({ ok: true, auth, bridge_protocol: BRIDGE_PROTOCOL });
+        // what protects this server, for a client that got in (a watching one too) and nobody else;
+        // per request, so never stored. The ingress is this request's, proven or `unknown`.
+        const ingress = observedIngress({ ...requestShape, ...identity, peerKnown: ip !== null, forwardingHeaders: forwardingHeaders(request.headers) });
+        const security: SecuritySummary | undefined = access.level === "full" ? {
+          token_configured: token !== "",
+          pairing_gate: devices.error !== null ? "unavailable" : devices.gated ? "closed" : "open",
+          bind_scope: bindScope(hostname),
+          observed_ingress: ingress,
+          public_exposure: ingress === "funnel" ? "observed" : "unknown",
+        } : undefined;
+        const securityHeaders: Record<string, string> = security ? { "cache-control": "no-store" } : {};
+        if (url.searchParams.get("scope") === "bridge") return jsonResponse({ ok: true, auth, bridge_protocol: BRIDGE_PROTOCOL, ...(security ? { security } : {}) }, 200, securityHeaders);
         try {
           const info = await ping();
           // a forced answer (tests) and a runtime without the PTY sidecar are told the way a Windows herdr's own would be
           const herdr = attachableIdentity(info, sidecar);
-          return jsonResponse({ ok: true, herdr, auth, ...(lan_exposure ? { lan_exposure } : {}),
-            web_ui: { boot_id: bootId, revision: process.env["OVIS_REVISION"] ?? null } });
+          return jsonResponse({ ok: true, herdr, auth, ...(lan_exposure ? { lan_exposure } : {}), ...(security ? { security } : {}),
+            web_ui: { boot_id: bootId, revision: process.env["OVIS_REVISION"] ?? null } }, 200, securityHeaders);
         } catch (error) {
           return errorResponse(error);
         }
@@ -510,6 +556,9 @@ export function createServer(
       const integrationsResponse = await handleIntegrationsRequest(request, pathname);
       if (integrationsResponse) return integrationsResponse;
 
+      const boardResponse = await handleBoardRequest(request, pathname);
+      if (boardResponse) return boardResponse;
+
       const filesResponse = await handleFileRequest(request, url, pathname, { bridgeAuthorized, requestHost, forwarded, client, access });
       if (filesResponse) return filesResponse;
 
@@ -527,7 +576,7 @@ export function createServer(
       const paneResponse = await handlePaneRequest(request, url, pathname, options);
       if (paneResponse) return paneResponse;
 
-      const tasksResponse = await handleTasksRequest(request, url, pathname, { omo, claudeAgents });
+      const tasksResponse = await handleTasksRequest(request, url, pathname, { omo, claudeAgents, opencodeAgents });
       if (tasksResponse) return tasksResponse;
 
       // a GET a watching device may make on purpose: a subagent's prose and tool-call arguments (which can carry file
@@ -592,7 +641,10 @@ export function createServer(
     settlePortalStartup({ ok: true });
   }
 
-  const registration = options.registerBridge ? registerBridge(server.port ?? 0, bridgeToken) : null;
+  // the app's SSH tunnel reaches a bridge on the PC's 127.0.0.1 only (#1960)
+  const target = options.registerBridge ? relayTarget(hostname) : null;
+  const relay = target ? loopbackRelay(target, server.port ?? 0) : null;
+  const registration = options.registerBridge ? registerBridge(relay?.port ?? server.port ?? 0, bridgeToken) : null;
 
   core.start();
 
@@ -601,6 +653,7 @@ export function createServer(
     hostname,
     // both subscriptions live: a test may create a workspace and wait for its session-changed
     statusReady: Promise.all([collector.ready, collector.structureReady]).then(() => undefined),
+    focusReady: collector.focusReady,
     /** a create request's first message for a pane's agent, as the create routes queue it (server/core/pending.ts); for tests that run no agent */
     queueFirstMessage,
     alertsSettled: () => push.settled(),
@@ -611,6 +664,7 @@ export function createServer(
         openCodeState.clear();
         void options.portal?.shutdown();
         registration?.close();
+        relay?.stop();
         closeCodexDaemonSources();
       });
       void shellAgents.stop();

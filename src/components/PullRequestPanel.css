@@ -176,11 +176,11 @@
 
 /* a narrow header keeps the title: the state word goes first, then the number (the glyph and +N stay) */
 @media (max-width: 768px) {
-  .pr-header-button .pr-badge-word { display: none; }
+  .pr-header-button .pull-badge-word { display: none; }
 }
 
 @media (max-width: 480px) {
-  .pr-header-button .pr-badge-number { display: none; }
+  .pr-header-button .pull-badge-number { display: none; }
 }
 
 /* links gh cannot read: the glyph alone, dim, with no state of its own to say */

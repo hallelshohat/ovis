@@ -44,9 +44,10 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     await page.goto(`${origin}/?pane=${encodeURIComponent(panes.api)}`);
 
     const row = page.locator('.workspace-group[data-workspace="w1C"] > .workspace-header .sidebar-pr');
-    await row.locator(".pr-badge.is-failing").waitFor();
-    assert.equal(await row.locator(".pr-badge-more").textContent(), "+1", `${theme}: the row counts the chat's other open PR`);
-    assert.equal(await row.locator(".pr-badge-number").count(), 0, `${theme}: a sidebar row draws the glyph, not the number`);
+    await row.locator(".pull-badge.is-failing").waitFor();
+    assert.equal(await row.locator(".visually-hidden").filter({ hasText: "1 more open" }).count(), 1, `${theme}: the row says the chat's other open PR`);
+    assert.equal(await row.locator(".pull-badge-more").count(), 0, `${theme}: a sidebar row keeps its room for the title`);
+    assert.equal(await row.locator(".pull-badge-number").count(), 0, `${theme}: a sidebar row draws the glyph, not the number`);
 
     const button = page.locator(".pr-header-button");
     assert.match(await button.innerText(), /client-sdk#88\s*Checks failing/, `${theme}: the header leads with the failing PR`);
@@ -62,7 +63,7 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     await button.click();
     await inspector.waitFor();
 
-    const story = await page.locator(".pr-event").evaluateAll((rows) => rows.map((row) => (row.querySelector(".pr-event-verb")?.textContent ?? "branch") + " " + (row.querySelector(".pr-badge-number")?.textContent ?? "")));
+    const story = await page.locator(".pr-event").evaluateAll((rows) => rows.map((row) => (row.querySelector(".pr-event-verb")?.textContent ?? "branch") + " " + (row.querySelector(".pull-badge-number")?.textContent ?? "")));
     assert.deepEqual(story, ["Opened #1925", "Merged #1925", "branch ", "Opened #1931", "Opened client-sdk#88"], `${theme}: the thread tells the PRs' story in order`);
 
     await page.evaluate(() => { (window as unknown as { __requests: string[] }).__requests.length = 0; });
@@ -82,13 +83,13 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     await confirm.waitFor();
     assert.match(await confirm.innerText(), /Merge #1940\?/);
     await confirm.getByRole("button", { name: "Squash and merge", exact: true }).click();
-    await page.locator(".pr-header-button .pr-badge.is-merged").waitFor();
+    await page.locator(".pr-header-button .pull-badge.is-merged").waitFor();
     await confirm.waitFor({ state: "detached" });
     assert.equal(await page.evaluate(() => document.activeElement?.closest("[role=dialog], [role=alertdialog]") ?? null), null, `${theme}: a done merge leaves no dialog holding the focus`);
     assert.equal(await inspector.getByText("Earlier in this chat", { exact: true }).count(), 1, `${theme}: a merged PR moves under Earlier in this chat`);
     await shot(page, `merged-${theme}`);
     assert.deepEqual(errors, []);
-    console.log(`PASS desktop ${theme}: sidebar glyph and +1, header button and inspector, the thread's story, Ask to fix fills the box, merge after a confirmation`);
+    console.log(`PASS desktop ${theme}: sidebar glyph (+1 said), header button and inspector, the thread's story, Ask to fix fills the box, merge after a confirmation`);
   } finally { await context.close(); }
 }
 
@@ -100,7 +101,7 @@ async function phone(browser: Browser, origin: string): Promise<void> {
     await page.goto(`${origin}/?pane=${encodeURIComponent(panes.api)}`);
     const button = page.locator(".pr-header-button");
     await button.waitFor();
-    assert.equal(await button.locator(".pr-badge-word").isVisible(), false, "a phone's header keeps the title: the state word goes");
+    assert.equal(await button.locator(".pull-badge-word").isVisible(), false, "a phone's header keeps the title: the state word goes");
     await button.tap();
     const sheet = page.locator(".modal.pr-sheet");
     await sheet.waitFor();

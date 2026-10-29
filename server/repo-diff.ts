@@ -1,7 +1,7 @@
-import { closeSync, lstatSync, openSync, readSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 
-import type { RepoBranchComparison, RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, RepoDiffStatus } from "../shared/protocol.ts";
+import type { RepoBranchComparison, RepoDiffFile, RepoDiffFileContents, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, RepoDiffStatus } from "../shared/protocol.ts";
 import { errorResponse, jsonResponse } from "./http.ts";
 
 /**
@@ -80,7 +80,7 @@ function contextOf(options: RepoDiffOptions): Context {
   };
 }
 
-function gitEnvironment(): Record<string, string> {
+export function gitEnvironment(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) {
     // a repository the server itself was started inside (a hook, a test runner) is not the one asked about
@@ -411,16 +411,21 @@ export async function repoDiffFile(cwd: string, params: URLSearchParams, options
     if (!run.stdout.startsWith("diff --git ")) return answer(null, "unsupported", file);
     return answer(run.stdout, null, file.status === "untracked" ? { ...file, binary: false } : file);
   };
-  // a branch patch is the pinned comparison's or none: HEAD is read again once the working tree has been,
-  // whatever the read answered, so a checkout that landed during it (one that changed the file, or one
-  // that left nothing changed there) is refused as a moved HEAD rather than answered under the old identity
-  const pinned = comparison.comparison;
+  return pinnedRead(context, cwd, comparison.comparison, read);
+}
+
+/**
+ * A branch read is the pinned comparison's or none: HEAD is read again once the working tree has been,
+ * whatever the read answered, so a checkout that landed during it (one that changed the file, or one
+ * that left nothing changed there) is refused as a moved HEAD rather than answered under the old identity.
+ */
+async function pinnedRead<T>(context: Context, cwd: string, pinned: RepoBranchComparison | null, read: () => Promise<T>): Promise<T> {
   const confirmPinned = async (): Promise<void> => {
     if (pinned === null) return;
     const after = await repositoryOf(context, cwd);
     if (after.root !== pinned.repository_root || after.head !== pinned.head_oid) throw new RepoDiffError("comparison_changed", "the repository or its HEAD is no longer the one this comparison was made on; refresh the list", 409);
   };
-  let result: RepoDiffFilePatch;
+  let result: T;
   try {
     result = await read();
   } catch (error) {
@@ -429,6 +434,78 @@ export async function repoDiffFile(cwd: string, params: URLSearchParams, options
   }
   await confirmPinned();
   return result;
+}
+
+type Side = { text: string } | { unavailable: NonNullable<RepoDiffFileContents["unavailable"]> };
+
+/** One side as git stores it (`rev:path`, `:0:path` for the index), never through a textconv filter. */
+async function blobSide(context: Context, root: string, spec: string): Promise<Side> {
+  const run = await runGit(context, root, ["cat-file", "blob", spec], context.maxPatchBytes);
+  if (run.overflow) return { unavailable: "too_large" };
+  // a submodule's commit or a path the revision does not hold is no blob to show
+  if (run.code !== 0) return { unavailable: "unsupported" };
+  return run.stdout.includes("\0") ? { unavailable: "binary" } : { text: run.stdout };
+}
+
+/** One side from the working tree: a regular file only, never a link followed out of the repository. */
+function diskSide(path: string, maxBytes: number): Side {
+  const kind = untrackedKind(path, maxBytes);
+  if (kind !== "text") return { unavailable: kind };
+  try {
+    const text = readFileSync(path, "utf8");
+    return text.includes("\0") ? { unavailable: "binary" } : { text };
+  } catch {
+    return { unavailable: "unsupported" };
+  }
+}
+
+/**
+ * GET /api/workspace/diff/contents: both whole sides of one changed file, for the viewer to expand
+ * the unchanged lines between hunks. The file is found as /diff/file finds it, and each side is read
+ * from where that comparison reads it: the old one from the index (workspace), HEAD (staged), the
+ * base commit (commit) or the pinned merge base (branch), at the rename's old path; the new one from
+ * the working tree (workspace, branch), the index (staged) or the head commit (commit).
+ */
+export async function repoDiffContents(cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<RepoDiffFileContents> {
+  const context = contextOf(options);
+  const path = repositoryPath("path", params.get("path") ?? "");
+  const oldParam = params.get("old_path");
+  const oldPath = oldParam === null || oldParam === "" ? null : repositoryPath("old_path", oldParam);
+  const repository = await repositoryOf(context, cwd);
+  const comparison = await comparisonOf(context, repository, params, "file");
+  const pathspec = oldPath !== null && oldPath !== path ? [oldPath, path] : [path];
+
+  const answer = (file: RepoDiffFile, old: string | null, next: string | null, unavailable: RepoDiffFileContents["unavailable"]): RepoDiffFileContents => ({
+    repository,
+    scope: comparison.scope,
+    comparison: comparison.comparison,
+    file,
+    old: unavailable === null ? old : null,
+    new: unavailable === null ? next : null,
+    unavailable,
+    limits: { max_bytes: context.maxPatchBytes },
+  });
+
+  const read = async (): Promise<RepoDiffFileContents> => {
+    const listing = await changedFiles(context, repository.root, comparison, pathspec);
+    const file = listing.files.find((candidate) => candidate.path === path);
+    if (file === undefined) throw new RepoDiffError("not_found", "nothing changed at that path in this comparison", 404);
+    if (oldPath !== null && file.old_path !== oldPath) throw new RepoDiffError("invalid_path", "old_path no longer belongs to this file's change; refresh the list", 400);
+    if (file.status === "unmerged") return answer(file, null, null, "unmerged");
+    if (file.binary === true) return answer(file, null, null, "binary");
+    const source = file.old_path ?? file.path;
+    const oldRevision = comparison.scope === "workspace" ? ":0" : comparison.scope === "staged" ? "HEAD" : comparison.scope === "commit" ? comparison.base! : comparison.comparison!.merge_base_oid;
+    const fromDisk = comparison.scope === "workspace" || comparison.scope === "branch";
+    const newRevision = comparison.scope === "staged" ? ":0" : comparison.head!;
+    const [old, next] = await Promise.all([
+      file.status === "added" || file.status === "untracked" ? Promise.resolve<Side>({ text: "" }) : blobSide(context, repository.root, `${oldRevision}:${source}`),
+      file.status === "deleted" ? Promise.resolve<Side>({ text: "" }) : fromDisk ? Promise.resolve(diskSide(join(repository.root, file.path), context.maxPatchBytes)) : blobSide(context, repository.root, `${newRevision}:${file.path}`),
+    ]);
+    if ("unavailable" in old) return answer(file, null, null, old.unavailable);
+    if ("unavailable" in next) return answer(file, null, null, next.unavailable);
+    return answer(file, file.status === "added" || file.status === "untracked" ? null : old.text, file.status === "deleted" ? null : next.text, null);
+  };
+  return pinnedRead(context, cwd, comparison.comparison, read);
 }
 
 /**
@@ -460,9 +537,9 @@ export async function repoDiffRefs(cwd: string, options: RepoDiffOptions = {}): 
 }
 
 /** The HTTP answer of any of the routes, with every refusal in the `{ error: { code, message } }` envelope. */
-export async function repoDiffResponse(kind: "files" | "file" | "refs", cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<Response> {
+export async function repoDiffResponse(kind: "files" | "file" | "contents" | "refs", cwd: string, params: URLSearchParams, options: RepoDiffOptions = {}): Promise<Response> {
   try {
-    const body = kind === "files" ? await repoDiffFiles(cwd, params, options) : kind === "file" ? await repoDiffFile(cwd, params, options) : await repoDiffRefs(cwd, options);
+    const body = kind === "files" ? await repoDiffFiles(cwd, params, options) : kind === "file" ? await repoDiffFile(cwd, params, options) : kind === "contents" ? await repoDiffContents(cwd, params, options) : await repoDiffRefs(cwd, options);
     return jsonResponse(body, 200, { "cache-control": "private, no-store" });
   } catch (error) {
     if (error instanceof RepoDiffError) return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);

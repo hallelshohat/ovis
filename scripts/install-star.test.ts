@@ -447,8 +447,11 @@ describe.skipIf(platform() === "win32")("install.sh and the browser", () => {
     });
   }
 
-  it.concurrent("opens nothing on a PC with no display and no BROWSER", async () => {
+  it.concurrent("opens nothing on a Linux PC with no display and no BROWSER", async () => {
     const pc = new Pc().running();
+    const uname = join(pc.scratch, "bin", "uname");
+    rmSync(uname);
+    writeFileSync(uname, '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n', { mode: 0o755 });
     const { out, exitCode } = await pc.unattended();
     expect(exitCode).toBe(0);
     expect(out).toContain("open http://127.0.0.1:7317 in your browser");
