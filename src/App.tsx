@@ -3,7 +3,7 @@ import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Searc
 import { agentDisplayLabel } from "./lib/compose.ts";
 import { Inspector } from "./components/Inspector.tsx";
 import { PrHeaderButton, PrSheet, PullRequestPanel } from "./components/PullRequestPanel.tsx";
-import { PullRequestsContext, usePullRequestInspector } from "./lib/usePanePullRequests.ts";
+import { PullRequestsContext, usePullRequestInspector, usePullRequestPrefetch } from "./lib/usePanePullRequests.ts";
 
 import type { HerdrPane } from "../shared/protocol.ts";
 import { authenticate, createTab, moveTabToWorkspace, shareSeen, swapPaneWith } from "./lib/api.ts";
@@ -252,6 +252,7 @@ export function App() {
 
   const handleServerMessage = useServerMessageHandler(setOutputStopped, selectedMachineId);
   // the chat's pull requests: an inspector column from 1200px, a sheet below it (DESIGN.md: Pull requests)
+  usePullRequestPrefetch(machines);
   const prs = usePullRequestInspector(selectedMachineId, selectedPaneId, (viewing !== null && fileDocked) || (webPage !== null && filePanelAvailable));
   const { pullRequests } = prs;
 
