@@ -1,5 +1,8 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
+import { PrEventRow } from "./PrEventRow.tsx";
+import { prEventRows, type PrEventRowData } from "../lib/prEventRows.ts";
+import { usePanePullRequests } from "../lib/usePanePullRequests.ts";
 import {
   ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, Hourglass, Layers, LoaderCircle, SquareTerminal, Target,
   type LucideProps,
@@ -285,8 +288,9 @@ const NO_ROWS: readonly Pick<PendingMessage, "id" | "state">[] = [];
 
 /** One row of the timeline: a loaded turn in its browser slot, or a provisional sent row keyed by its outcome. */
 type ChatRow = { key: string; beforeUser: boolean } & (
-  | { turn: ConversationTurn; index: number; outcome: CommandOutcome | null }
-  | { turn: null; outcome: CommandOutcome }
+  | { turn: ConversationTurn; index: number; outcome: CommandOutcome | null; pr?: undefined }
+  | { turn: null; outcome: CommandOutcome; pr?: undefined }
+  | { turn: null; outcome: null; pr: PrEventRowData }
 );
 
 /** The view of a structured (not scrollback) answer. */
@@ -2465,7 +2469,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const row = first === null ? undefined : timelineRows.find((candidate) => candidate.key === first.key);
     rememberChatPosition(paneStorageId(machineId, paneId), {
       historyId: history.current ?? null,
-      turn: row === undefined ? "" : row.turn === null ? `outcome|${row.outcome.id}` : chatTurnAnchor(row.turn),
+      turn: row === undefined ? "" : row.turn === null ? (row.pr ? row.key : `outcome|${row.outcome.id}`) : chatTurnAnchor(row.turn),
       offset: first === null ? 0 : first.top - top,
       atEnd: row === undefined,
     });
@@ -2632,6 +2636,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const rowMemories = useMemo(() => new Map<string, ChatRowMemory>(), [timelineScope]);
   // the turns with the commands sent from here: a chip on the turn that records one, a provisional
   // sent row for one no turn records (yet), placed by send time (lib/outcomeChip.ts)
+  const pullRequests = usePanePullRequests(machineId, paneId);
   const shownOutcomes = useMemo(() => {
     if (historyMove === null || historyMove.history !== historyId) return outcomes;
     if (moveMade.current === null) {
@@ -2648,12 +2653,19 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       if (!slot) throw new Error("A loaded chat turn has no row identity");
       return { key: slot.key, turn: shownTurns[row.index]!, index: row.index, outcome: row.outcome, beforeUser: false };
     });
+    // the chat's pull request story, each line where it happened among the turns (lib/prEventRows.ts)
+    if (pullRequests && pullRequests.events.length > 0) {
+      const turnAt = rows.map((row) => row.turn?.ts ?? null);
+      for (const event of prEventRows(pullRequests.events, turnAt, pullRequests.pull_requests).reverse()) {
+        rows.splice(event.before, 0, { key: event.key, turn: null, outcome: null, pr: event, beforeUser: false });
+      }
+    }
     // a sent row opens an exchange as a user turn does
     return rows.map((row, index) => {
       const next = rows[index + 1];
       return { ...row, beforeUser: row.turn?.role === "assistant" && next !== undefined && (next.turn === null || next.turn.role === "user") };
     });
-  }, [withOutcomes, shownTurns, rowSlots]);
+  }, [withOutcomes, shownTurns, rowSlots, pullRequests]);
   /**
    * Puts the row at `index` `offset` px below the view's top, the reader reading there. The list's
    * index scroll starts from estimated heights, so the row is brought to its offset once measured,
@@ -2695,7 +2707,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const saved = restoring.current;
     if (saved === null || !loaded || error !== null || state.source !== "conversation") return;
     restoring.current = null;
-    const index = chatRestoreIndex(saved, history.current ?? null, timelineRows.map((row) => row.turn === null ? `outcome|${row.outcome.id}` : chatTurnAnchor(row.turn)));
+    const index = chatRestoreIndex(saved, history.current ?? null, timelineRows.map((row) => row.turn === null ? (row.pr ? row.key : `outcome|${row.outcome.id}`) : chatTurnAnchor(row.turn)));
     const list = timeline.current, node = scroller.current;
     if (index === null || list === null || node === null) return;
     placeRow(list, node, index, saved.offset);
@@ -2804,6 +2816,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   }, [peek, outcomes, turns, agent, onCommandScreenClosed]);
   const outcomeActions = useMemo((): OutcomeActions => ({ answer: promptUp ? focusPrompt : null, terminal: onOpenTerminal ?? null, commands }), [promptUp, focusPrompt, onOpenTerminal, commands]);
   const renderTurn = useCallback((row: ChatRow) => {
+    if (row.pr) return <PrEventRow row={row.pr} />;
     if (row.turn === null) return <OutcomeRow outcome={row.outcome} actions={outcomeActions} skills={skillMatcher} />;
     const { turn } = row;
     const live = isLiveWorkTurn(turn, row.index === shownTurns.length - 1, workStatus, finishedBeforeSend);

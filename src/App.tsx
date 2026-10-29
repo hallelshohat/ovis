@@ -1,5 +1,9 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell, ChevronDown, CircleHelp, Ellipsis, FolderOpen, Link, Menu, MessageCircle, MessageSquare, PanelLeft, Search, SquareTerminal, Target, X } from "lucide-react";
+import { agentDisplayLabel } from "./lib/compose.ts";
+import { Inspector } from "./components/Inspector.tsx";
+import { PrHeaderButton, PrSheet, PullRequestPanel } from "./components/PullRequestPanel.tsx";
+import { PullRequestsContext, usePullRequestInspector } from "./lib/usePanePullRequests.ts";
 
 import type { HerdrPane, PaneDirection } from "../shared/protocol.ts";
 import { authenticate, createTab, movePaneBeside, moveTabToWorkspace, paneSessionKey, shareSeen, swapPaneWith } from "./lib/api.ts";
@@ -291,7 +295,10 @@ export function App() {
   // herdr moved a pane under a new ID, from anywhere (the server's pane-moved): followPaneMove below, called at the event
   useRosterEvents({ onPaneMoved: (machineId, from, to) => followPaneMove(machineId, from, to), machineSessions, locked, onRosterStream, receivePreferencesRef, snapshotRequests, onRoster, reorderCoordinator, setMachines, rosterIn, setMachineRosterLoaded, machinesRef, onPaneStatus, onPaneExited, followFocusRef, selectionRef, splitShownRef, splitRef, pendingLink, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, scheduleRefetch, preferencesResubscribedRef, preferencesDisconnectedRef, preferencesClosedRef, dropIn, chime, setPairedNotices, setRelayPairings, setRemotePairings, setRemovedNotices, getTakeNotificationTargetRef: () => takeNotificationTargetRef });
 
-  const handleServerMessage = useServerMessageHandler(setOutputStopped);
+  const handleServerMessage = useServerMessageHandler(setOutputStopped, selectedMachineId);
+  // the chat's pull requests: an inspector column from 1200px, a sheet below it (DESIGN.md: Pull requests)
+  const prs = usePullRequestInspector(selectedMachineId, selectedPaneId);
+  const { pullRequests } = prs;
 
   const { enableNotifications, disableNotifications, repairNotifications } = useNotificationSwitch({ updateSettings, locked, notifications, setNotifications, alerts, alertsRef, alertsOn, setPushOn });
   // the first-run setup guide: by itself once on a fresh install, again from Settings → Agents' Setup guide
@@ -781,7 +788,7 @@ export function App() {
   );
 
   return (
-    <MachineSessionsProvider sessions={machineSessions} machineIds={machines.map((machine) => machine.id)}><MachineContext.Provider value={selectedMachineId}><AppLayoutContext.Provider value={appLayout}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null && filePanelWidth === null ? undefined : {
+    <PullRequestsContext.Provider value={true}><MachineSessionsProvider sessions={machineSessions} machineIds={machines.map((machine) => machine.id)}><MachineContext.Provider value={selectedMachineId}><AppLayoutContext.Provider value={appLayout}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null && filePanelWidth === null ? undefined : {
       ...(sidebarWidth === null ? {} : { "--sidebar-user-w": `${sidebarWidth}px` }),
       ...(filePanelWidth === null ? {} : { "--file-panel-user-w": `${filePanelWidth}px` }),
     } as CSSProperties}>
@@ -879,6 +886,7 @@ export function App() {
         )}
         {/* both lenses, the open one on a thumb that slides to it (Apple's segmented control): the chat in the
             rounded face with its bubble, the terminal in the mono face with its prompt. Mod+Shift+J switches too */}
+        {selectedPane && <PrHeaderButton data={pullRequests} expanded={prs.expanded} controls="pull-requests" onToggle={prs.toggle} />}
         {selectedPane && (
           <div className="view-switch" data-view={view} role="group" aria-label="Pane view">
             <button type="button" className="lens-option is-chat" aria-pressed={view === "chat"} aria-label={t("Chat")} title={t("Chat transcript (⌘⇧J)")}
@@ -1188,8 +1196,15 @@ export function App() {
         {filesOpen && filesDocked && filesDialog(true)}
         {webPage !== null && !(viewing !== null && fileDocked) &&
           <WebPanel key={webPage} url={webPage} docked={filePanelAvailable} covered={webDialogCover} onClose={closeWebPage} panelStart={filePanelAvailable ? <FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} /> : undefined} />}
+        {/* the workbench's inspector: the chat's pull requests beside the pane, where a file or a page is not docked */}
+        {prs.docked && prs.panelOpen && prs.shown && pullRequests && selectedPaneId !== null && viewing === null && webPage === null &&
+          <Inspector id="pull-requests" title={t("Pull requests")} onClose={() => prs.setPanelOpen(false)}>
+            <PullRequestPanel data={pullRequests} machineId={selectedMachineId} paneId={selectedPaneId} agentName={agentDisplayLabel(selectedAgent)} />
+          </Inspector>}
       </div>
       </PanePressContext.Provider>
+      {!prs.docked && prs.sheetOpen && pullRequests && selectedPaneId !== null &&
+        <PrSheet data={pullRequests} machineId={selectedMachineId} paneId={selectedPaneId} agentName={agentDisplayLabel(selectedAgent)} onClose={() => prs.setSheetOpen(false)} />}
 
       <MachineContext.Provider value={newSessionMachineId}><NewSessionDialog
         key={newSessionMachineId}
@@ -1273,6 +1288,6 @@ export function App() {
         // a peek shows the terminal: its toggle says Switch to chat, which ends the peek
         view={terminalPeek !== null ? "terminal" : view} actions={actions} watching={auth?.role === "watch"} />
       <MarkdownLinkMenu />
-    </div></AppLayoutContext.Provider></MachineContext.Provider></MachineSessionsProvider>
+    </div></AppLayoutContext.Provider></MachineContext.Provider></MachineSessionsProvider></PullRequestsContext.Provider>
   );
 }
