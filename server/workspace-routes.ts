@@ -36,7 +36,7 @@ export function expandedDirectory(value: string): string | null {
 /** `git remote get-url origin` in `cwd`; null when git has none or cannot answer */
 async function originRemote(cwd: string): Promise<string | null> {
   try {
-    const proc = Bun.spawn(["git", "-C", cwd, "remote", "get-url", "origin"], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: gitEnvironment(), timeout: 5_000 });
+    const proc = Bun.spawn(["git", "-C", cwd, "remote", "get-url", "origin"], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: gitEnvironment(true), timeout: 5_000 });
     const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     return code === 0 ? out.trim() : null;
   } catch {

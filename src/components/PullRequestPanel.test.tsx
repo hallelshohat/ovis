@@ -1,101 +1,56 @@
-import { afterEach, beforeEach, expect, jest, spyOn, test } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
-import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-
-import { PullRequestPanel } from "./PullRequestPanel.tsx";
-import { paneStorageId } from "../../shared/machines.ts";
-import type { PullRequestCheckLog, PullRequestView } from "../../shared/pull-request.ts";
-import { composerDraftKey, composerDrafts } from "../lib/composerDraft.ts";
-import { paneLifetimes } from "../lib/paneLifetime.ts";
+import { renderToStaticMarkup } from "react-dom/server";
+import { byAttention, type PanePullRequests, type PullRequest } from "../../shared/pull-requests.ts";
 import { SettingsProvider } from "../lib/settings.ts";
+import { fixRequest, PrHeaderButton, PullRequestPanel } from "./PullRequestPanel.tsx";
 
-const globals = ["IS_REACT_ACT_ENVIRONMENT", "window", "document", "getComputedStyle", "navigator"];
-const saved = new Map(globals.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
-const draftKey = composerDraftKey(paneStorageId("local", "fixture"));
-let renderer: ReactTestRenderer | undefined;
+Object.defineProperty(navigator, "languages", { configurable: true, value: ["en-US"] });
 
-const VIEW: PullRequestView = {
-  number: 12, title: "Fix the thing", url: "https://github.com/acme/widgets/pull/12", state: "open", draft: false,
-  head_ref: "fix/thing", base_ref: "main", head_oid: "f".repeat(40), merge_state: "blocked", merge_queue: false, mergeable: false, merge_method: "squash",
-  checks: [
-    { name: "test", workflow: "CI", state: "fail", url: "https://github.com/acme/widgets/actions/runs/1/job/103", job_id: "103" },
-    { name: "lint", workflow: "CI", state: "pass", url: "https://github.com/acme/widgets/actions/runs/1/job/101", job_id: "101" },
-  ],
-  threads: [],
-  threads_truncated: false,
-};
-const LOG: PullRequestCheckLog = { job_id: "103", text: "expected 2, got 3\nerror: 1 test failed", truncated: true };
+const pr = (number: number, over: Partial<PullRequest>): PullRequest => ({
+  url: `https://github.com/acme/api/pull/${number}`, number, repo: "acme/api", own: true, title: `PR ${number}`,
+  state: "open", checks: "passing", review: "none", check_runs: [], head: "feat", base: "main", additions: 4, deletions: 1,
+  created_at: "2026-10-28T13:00:00Z", merged_at: null, closed_at: null, updated_at: "2026-10-28T13:00:00Z", ...over,
+});
+const failing = pr(88, { own: false, repo: "acme/client-sdk", url: "https://github.com/acme/client-sdk/pull/88", title: "Send Idempotency-Key from the SDK", checks: "failing", check_runs: [{ name: "Fast checks", state: "passing", url: null }, { name: "Integration and browser", state: "failing", url: null }] });
+const scenario: PanePullRequests = { gh: "ok", linked: 0, events: [], pull_requests: [pr(1925, { state: "merged", merged_at: "2026-10-28T13:41:00Z" }), pr(1931, { checks: "pending" }), failing].sort(byAttention) };
+const render = (data: PanePullRequests) => renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(PullRequestPanel, { data, machineId: "local", paneId: "w1C:p1", agentName: "Claude" }) }));
 
-beforeEach(() => {
-  const listen = { addEventListener() {}, removeEventListener() {} };
-  const style = { setProperty() {}, removeProperty() {}, getPropertyValue: () => "", backgroundColor: "" };
-  Object.assign(globalThis, {
-    IS_REACT_ACT_ENVIRONMENT: true,
-    window: { ...listen, localStorage: { getItem: () => null, setItem() {} }, matchMedia: () => ({ ...listen, matches: false }) },
-    document: { ...listen, documentElement: { lang: "", dataset: {}, style }, querySelector: () => null },
-    getComputedStyle: () => style,
-    navigator: { languages: ["en"] },
+describe("the pull request panel", () => {
+  it("leads with the PR that needs the person, then the open rest, then the ended ones", () => {
+    const html = render(scenario);
+    expect(html).toContain(">Open · 2</span>");
+    expect(html).toContain(">Needs attention first</span>");
+    expect(html.indexOf("client-sdk#88")).toBeLessThan(html.indexOf("#1931"));
+    expect(html.indexOf("#1931")).toBeLessThan(html.indexOf("Earlier in this chat</span>"));
+    expect(html.indexOf("Earlier in this chat</span>")).toBeLessThan(html.indexOf("#1925"));
+    expect(html).toContain('class="pr-card is-lead is-failing"');
+    expect(html).toContain(">Ask Claude to fix</button>");
+    expect(html).not.toContain("Squash and merge");
   });
-  const data = new Map<string, string>();
-  spyOn(paneLifetimes.paneStorage, "getItem").mockImplementation((key) => data.get(key) ?? null);
-  spyOn(paneLifetimes.paneStorage, "setItem").mockImplementation((key, value) => { data.set(key, value); });
-  spyOn(paneLifetimes.paneStorage, "removeItem").mockImplementation((key) => { data.delete(key); });
-  composerDrafts.set(draftKey, "");
-});
 
-afterEach(async () => {
-  await act(async () => renderer?.unmount());
-  renderer = undefined;
-  composerDrafts.set(draftKey, "");
-  jest.restoreAllMocks();
-  for (const [name, descriptor] of saved) {
-    if (descriptor) Object.defineProperty(globalThis, name, descriptor);
-    else Reflect.deleteProperty(globalThis, name);
-  }
-});
+  it("offers a merge only on an open lead with green checks", () => {
+    const html = render({ gh: "ok", linked: 0, events: [], pull_requests: [pr(1931, { review: "approved", check_runs: [{ name: "Fast checks", state: "passing", url: null }] })] });
+    expect(html).toContain(">Squash and merge</button>");
+    expect(html).toContain("Approved");
+  });
 
-/** The HTTP boundary: the view and the log answer as the server would; every request is recorded. */
-function serve(view: PullRequestView): { method: string; url: string }[] {
-  const requests: { method: string; url: string }[] = [];
-  spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    requests.push({ method: init?.method ?? "GET", url });
-    return Response.json(url.includes("/workspace/pr/log") ? LOG : view);
-  }, globalThis.fetch));
-  return requests;
-}
+  it("says why there are none when gh cannot answer", () => {
+    const html = render({ gh: "missing", linked: 1, events: [], pull_requests: [] });
+    expect(html).toContain("GitHub CLI not found");
+    expect(html).not.toContain("pr-card");
+  });
 
-const panel = () => createElement(SettingsProvider, { children: createElement(PullRequestPanel, { paneId: "fixture", directory: "/repo" }) });
-const buttonNamed = (name: string): ReactTestInstance[] => renderer!.root.findAll((node) => node.type === "button" && node.children.join("") === name);
-const textOf = (node: ReactTestInstance | string): string => typeof node === "string" ? node : node.children.map(textOf).join("");
+  it("asks to fix the failing checks by name, for the person to send", () => {
+    expect(fixRequest(failing)).toBe("These checks failed on client-sdk#88 (Send Idempotency-Key from the SDK): Integration and browser. Please fix them and push the branch.");
+  });
 
-test("puts a failing check's name and the end of its log into the pane's draft, and sends nothing", async () => {
-  const requests = serve(VIEW);
-  composerDrafts.set(draftKey, "my own words");
-  await act(async () => { renderer = create(panel()); });
-  const send = buttonNamed("Send to agent");
-  // only the failing check offers it
-  expect(send).toHaveLength(1);
-  await act(async () => { send[0]!.props.onClick(); });
-  const draft = composerDrafts.read(draftKey).text;
-  expect(draft.startsWith("my own words\n\n")).toBe(true);
-  expect(draft).toContain("The check \"CI / test\" failed on pull request #12 (https://github.com/acme/widgets/actions/runs/1/job/103).");
-  expect(draft).toContain("```\nexpected 2, got 3\nerror: 1 test failed\n```");
-  expect(requests.map((request) => request.method)).toEqual(["GET", "GET"]);
-  expect(requests[1]!.url).toContain("/workspace/pr/log?pane_id=fixture&directory=%2Frepo&job_id=103&host=github.com");
-});
-
-test("keeps Merge off, with GitHub's reason, until GitHub would merge", async () => {
-  serve(VIEW);
-  await act(async () => { renderer = create(panel()); });
-  expect(buttonNamed("Squash and merge")).toHaveLength(0);
-  const merge = renderer!.root.findAll((node) => node.type === "button" && textOf(node) === "Squash and merge");
-  expect(merge).toHaveLength(1);
-  expect(merge[0]!.props.disabled).toBe(true);
-  expect(textOf(renderer!.root)).toContain("Required checks or reviews have not passed yet.");
-  await act(async () => renderer?.unmount());
-
-  serve({ ...VIEW, merge_state: "clean", mergeable: true });
-  await act(async () => { renderer = create(panel()); });
-  expect(renderer!.root.findAll((node) => node.type === "button" && textOf(node) === "Squash and merge")[0]!.props.disabled).toBe(false);
+  it("gives a way in to why when the chat wrote links gh cannot read, and stays quiet otherwise", () => {
+    const button = (data: PanePullRequests) => renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(PrHeaderButton, { data, expanded: false, controls: "pull-requests", onToggle: () => {} }) }));
+    const unread = button({ gh: "missing", linked: 2, events: [], pull_requests: [] });
+    expect(unread).toContain('class="pr-header-button is-unread"');
+    expect(unread).toContain('aria-label="Pull requests: GitHub CLI not found"');
+    expect(button({ gh: "missing", linked: 0, events: [], pull_requests: [] })).toBe("");
+    expect(button({ gh: "ok", linked: 0, events: [], pull_requests: [] })).toBe("");
+  });
 });
