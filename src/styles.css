@@ -200,7 +200,7 @@
   --panel-inset: var(--space-2);
   --panel-radius: var(--radius-lg);
   --inspector-w: 300px;
-  --side-sheet-w: 480px;
+  --side-sheet-w: 560px;
   --side-sheet-w-wide: 760px;
   /* a work block's tool calls hang on a rail, each on a node */
   --timeline-rail: 2px;
@@ -2633,12 +2633,13 @@ button {
   to { opacity: 0; }
 }
 
+/* a side sheet slides in from the window's edge, never past it: it moves by the inset it rests at */
 @keyframes side-sheet-in {
-  from { opacity: 0; transform: translateX(24px); }
+  from { opacity: 0; transform: translateX(var(--panel-inset)); }
 }
 
 @keyframes side-sheet-out {
-  to { opacity: 0; transform: translateX(24px); }
+  to { opacity: 0; transform: translateX(var(--panel-inset)); }
 }
 
 /* a menu fades where it opens: it never moves out from under the pointer that opened it */

@@ -727,7 +727,7 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--panel-inset` | `var(--space-2)` | — | Workbench: the gap between the app's edge and the inset work panel, and around a desktop side sheet |
 | `--panel-radius` | `var(--radius-lg)` | — | Workbench: the work panel's corners |
 | `--inspector-w` | `300px` | — | Workbench: the inspector column beside the work panel, until the person drags its edge |
-| `--side-sheet-w` | `480px` | — | A desktop side sheet (a dialog that holds a form or a list) |
+| `--side-sheet-w` | `560px` | — | A desktop side sheet (a dialog that holds a form or a list): the centred dialog's old width, so what fits inside it is unchanged |
 | `--side-sheet-w-wide` | `760px` | — | Settings as a desktop side sheet |
 | `--timeline-rail` | `2px` | — | A work block's rail its tool calls hang on |
 | `--timeline-node` | `8px` | — | A tool call's node on that rail |
@@ -859,9 +859,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   Session history, a plan account, a background agent) is a sheet down the right side, full height
   inside `--panel-inset`, `--side-sheet-w` wide (`--side-sheet-w-wide` for Settings), so the chat
   stays in view beside it, as the Codex app and Conductor open their side panels. It slides in from
-  `24px` with a fade (`--dur-slow`) and out the same way (`--dur-fast`, `--ease-in`). A confirm, the
-  palette, the file and diff viewers and the lightboxes stay centred: they pop in from `0.97` scale
-  (`--dur-base`) and shrink away. lib/sheets.ts draws every exit, desktop and phone.
+  the window's edge (`--panel-inset`, never past it) with a fade (`--dur-slow`) and out the same way (`--dur-fast`, `--ease-in`). A confirm, the
+  palette, the file and diff viewers and the lightboxes stay centred: they fade in (`--dur-base`)
+  and out, with no scale, so what they measure while they open is true. lib/sheets.ts draws every exit, desktop and phone.
 - At `<=640px`, it becomes a bottom sheet with top `--radius-xl` corners and safe-area padding.
   Every surface on a `.modal-scrim` (dialogs, the palette, the row sheet) rises from the bottom
   edge as an iPhone's sheet does (`--dur-sheet` on `--ease-spring`, the scrim darkening with it),
