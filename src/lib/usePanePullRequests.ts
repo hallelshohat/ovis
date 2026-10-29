@@ -22,6 +22,9 @@ interface Entry {
   settle: ReturnType<typeof setTimeout> | null;
   pending: Promise<void> | null;
   listeners: Set<() => void>;
+  /** the reads asked for, numbered, and the newest one whose answer is shown: an older answer landing late is dropped */
+  issued: number;
+  shown: number;
 }
 
 const entries = new Map<string, Entry>();
@@ -38,17 +41,36 @@ const online = (): boolean => typeof navigator === "undefined" || navigator.onLi
 function entry(key: string): Entry {
   let found = entries.get(key);
   if (!found) {
-    found = { data: null, users: 0, timer: null, settle: null, pending: null, listeners: new Set() };
+    found = { data: null, users: 0, timer: null, settle: null, pending: null, listeners: new Set(), issued: 0, shown: 0 };
     entries.set(key, found);
   }
   return found;
 }
 
-function read(machineId: string, paneId: string, fresh: boolean): Promise<void> {
+let fetcher = fetchPullRequests;
+
+/** Tests answer the reads themselves; returns the restore. */
+export function setPullRequestFetcher(next: typeof fetchPullRequests): () => void {
+  const previous = fetcher;
+  fetcher = next;
+  return () => { fetcher = previous; };
+}
+
+/** What a pane's reads last showed (tests). */
+export function shownPullRequests(machineId: string, paneId: string): PanePullRequests | null {
+  return entries.get(keyOf(machineId, paneId))?.data ?? null;
+}
+
+/** One read of a pane's PRs; a fresh one does not wait for a read already under way, and whichever was asked last wins. */
+export function readPullRequests(machineId: string, paneId: string, fresh: boolean): Promise<void> {
   const key = keyOf(machineId, paneId);
   const own = entry(key);
   if (own.pending && !fresh) return own.pending;
-  const pending = fetchPullRequests(paneId, fresh, machineId).then((data) => {
+  const number = ++own.issued;
+  const pending = fetcher(paneId, fresh, machineId).then((data) => {
+    // a slower read asked before the one shown says older news: it is dropped
+    if (number < own.shown) return;
+    own.shown = number;
     own.data = data;
   }, () => {
     // an older PC (no such route) or one away: nothing to show, and nothing said about it
@@ -69,7 +91,7 @@ function schedule(machineId: string, paneId: string): void {
   const delay = nextDelay(seen(), online()) ?? PR_POLL_MS;
   own.timer = setTimeout(() => {
     if (nextDelay(seen(), online()) === null) schedule(machineId, paneId);
-    else void read(machineId, paneId, false);
+    else void readPullRequests(machineId, paneId, false);
   }, delay);
 }
 
@@ -78,12 +100,12 @@ export function pullRequestsChanged(machineId: string, paneId: string): void {
   const own = entries.get(keyOf(machineId, paneId));
   if (!own || own.users === 0) return;
   if (own.settle) clearTimeout(own.settle);
-  own.settle = setTimeout(() => { own.settle = null; void read(machineId, paneId, true); }, TURN_SETTLE_MS);
+  own.settle = setTimeout(() => { own.settle = null; void readPullRequests(machineId, paneId, true); }, TURN_SETTLE_MS);
 }
 
 /** Read again now, fresh (after a merge, or when the person asks). */
 export function refreshPullRequests(machineId: string, paneId: string): Promise<void> {
-  return read(machineId, paneId, true);
+  return readPullRequests(machineId, paneId, true);
 }
 
 export function usePanePullRequests(machineId: string | null, paneId: string | null): PanePullRequests | null {
@@ -96,7 +118,7 @@ function usePullRequestData(machineId: string | null, paneId: string | null, ena
     if (key === null) return;
     const own = entry(key);
     own.users += 1;
-    if (own.data === null && !own.pending) void read(machineId!, paneId!, false);
+    if (own.data === null && !own.pending) void readPullRequests(machineId!, paneId!, false);
     else if (!own.timer) schedule(machineId!, paneId!);
     return () => {
       own.users -= 1;

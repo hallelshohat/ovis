@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { byAttention, type PanePullRequests, type PullRequest } from "../../shared/pull-requests.ts";
 import { SettingsProvider } from "../lib/settings.ts";
-import { fixRequest, PrHeaderButton, PullRequestPanel } from "./PullRequestPanel.tsx";
+import { fixRequest, PrHeaderButton, PrSheet, PullRequestPanel } from "./PullRequestPanel.tsx";
 
 Object.defineProperty(navigator, "languages", { configurable: true, value: ["en-US"] });
 
@@ -52,5 +52,10 @@ describe("the pull request panel", () => {
     expect(unread).toContain('aria-label="Pull requests: GitHub CLI not found"');
     expect(button({ gh: "missing", linked: 0, events: [], pull_requests: [] })).toBe("");
     expect(button({ gh: "ok", linked: 0, events: [], pull_requests: [] })).toBe("");
+  });
+
+  it("gives the sheet the id the header button controls", () => {
+    const html = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(PrSheet, { data: scenario, machineId: "local", paneId: "w1C:p1", agentName: "Claude", onClose: () => {} }) }));
+    expect(html).toContain('id="pull-requests" class="modal pr-sheet"');
   });
 });
