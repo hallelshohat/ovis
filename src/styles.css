@@ -1740,10 +1740,13 @@ button {
     background: var(--bg-panel);
   }
 
+  /* the edge is an outline drawn inside the box: a border would move every row the pane lays out
+     by its width, and the terminal's grid and the chat's paging measure to the device pixel */
   .terminal-host {
     margin: 0 var(--panel-inset) var(--panel-inset) 0;
-    border: var(--hairline) solid var(--border);
     border-radius: var(--panel-radius);
+    outline: var(--hairline) solid var(--border);
+    outline-offset: calc(var(--hairline) * -1);
   }
 
   .pane-slot[data-side="left"] {
@@ -2620,12 +2623,14 @@ button {
   }
 }
 
+/* a centred dialog fades in and out where it stands: a scale would move the rows a viewer or a
+   list measures while it opens */
 @keyframes modal-pop-in {
-  from { opacity: 0; transform: scale(0.97); }
+  from { opacity: 0; }
 }
 
 @keyframes modal-pop-out {
-  to { opacity: 0; transform: scale(0.97); }
+  to { opacity: 0; }
 }
 
 @keyframes side-sheet-in {

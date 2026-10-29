@@ -70,6 +70,12 @@ try {
       return socket;
     };
     for (const name of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"]) Object.defineProperty(window.WebSocket, name, { value: Demo[name] });
+    // the paging fixture owns its rows' geometry to the device pixel: the demo chat's pull request
+    // lines (site/demo/pullRequests.ts) would add rows of their own, so this page has none
+    const demoFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href).pathname.endsWith("/pane/pull-requests")
+      ? Promise.resolve(new Response(JSON.stringify({ gh: "ok", pull_requests: [], events: [] }), { headers: { "content-type": "application/json" } }))
+      : demoFetch(input, init);
   })();</script>`;
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>\n${record}\n<script type="module"`));
   const prefix = "/herdr-web-ui/demo/app/";

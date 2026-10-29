@@ -1954,7 +1954,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - The rows hang on a timeline (the Codex app's run log): a `--timeline-rail` rail down the block's
   left, `--status-working` while the agent runs, and a `--timeline-node` node per call in its
   state's colour (done, error) or an open ring while the call is still running, which fills as it
-  settles (`--dur-base`). A row's detail opens and folds with the block's own height motion.
+  settles (`--dur-base`). A row's detail opens at once: a growing row inside the chat's virtual list
+  would move the rows the reader is looking at while the list measures it.
 - A row is caret + verb + object: `▸ Read src/metrics.ts`, `▸ Edited src/pages/Reports.tsx`,
   `▸ Ran pnpm test`. The caret is always shown; there is no per-tool icon and no separator. The
   verb (Read, Edited, Wrote, Ran; `lib/toolVerbs.ts`, by exact tool id) is in the interface face,
