@@ -297,7 +297,7 @@ export function App() {
 
   const handleServerMessage = useServerMessageHandler(setOutputStopped, selectedMachineId);
   // the chat's pull requests: an inspector column from 1200px, a sheet below it (DESIGN.md: Pull requests)
-  const prs = usePullRequestInspector(selectedMachineId, selectedPaneId);
+  const prs = usePullRequestInspector(selectedMachineId, selectedPaneId, (viewing !== null && fileDocked) || (webPage !== null && filePanelAvailable));
   const { pullRequests } = prs;
 
   const { enableNotifications, disableNotifications, repairNotifications } = useNotificationSwitch({ updateSettings, locked, notifications, setNotifications, alerts, alertsRef, alertsOn, setPushOn });
@@ -1204,7 +1204,7 @@ export function App() {
         {webPage !== null && !(viewing !== null && fileDocked) &&
           <WebPanel key={webPage} url={webPage} docked={filePanelAvailable} covered={webDialogCover} onClose={closeWebPage} panelStart={filePanelAvailable ? <FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} /> : undefined} />}
         {/* the workbench's inspector: the chat's pull requests beside the pane, where a file or a page is not docked */}
-        {prs.docked && prs.panelOpen && prs.shown && pullRequests && selectedPaneId !== null && viewing === null && webPage === null &&
+        {prs.docked && prs.panelOpen && prs.shown && pullRequests && selectedPaneId !== null &&
           <Inspector id="pull-requests" title={t("Pull requests")} onClose={() => prs.setPanelOpen(false)}>
             <PullRequestPanel data={pullRequests} machineId={selectedMachineId} paneId={selectedPaneId} agentName={agentDisplayLabel(selectedAgent)} />
           </Inspector>}

@@ -7,7 +7,7 @@ import type { GhStatus, PrCheck, PrChecks, PrReview, PrState, PullRequest } from
 
 export type Run = (argv: string[], cwd: string, timeoutMs: number) => Promise<{ code: number; stdout: string; stderr: string } | null>;
 
-export const GH_FIELDS = "number,url,title,state,isDraft,reviewDecision,headRefName,baseRefName,additions,deletions,createdAt,mergedAt,closedAt,updatedAt,statusCheckRollup";
+export const GH_FIELDS = "number,url,title,state,isDraft,reviewDecision,reviewRequests,headRefName,baseRefName,additions,deletions,createdAt,mergedAt,closedAt,updatedAt,statusCheckRollup";
 export const GH_TIMEOUT_MS = 10_000;
 const MAX_OUTPUT = 4 * 1024 * 1024;
 
@@ -44,6 +44,22 @@ function checkRun(raw: unknown): PrCheck {
   return { name: text(fields["name"]), url: stamp(fields["detailsUrl"]), state };
 }
 
+/**
+ * One run per check, its newest: a check run again (a cancelled run, then a passing one) counts by
+ * the run GitHub itself goes by. A check is its workflow and name; a status, its context.
+ */
+export function newestRuns(raw: readonly unknown[]): unknown[] {
+  const newest = new Map<string, { run: unknown; at: string }>();
+  raw.forEach((run, index) => {
+    const fields = record(run);
+    const key = fields["__typename"] === "StatusContext" ? `status\0${text(fields["context"])}` : `run\0${text(fields["workflowName"])}\0${text(fields["name"])}`;
+    const at = text(fields["startedAt"]) || text(fields["completedAt"]) || text(fields["createdAt"]) || String(index).padStart(8, "0");
+    const known = newest.get(key);
+    if (!known || at >= known.at) newest.set(key, { run, at });
+  });
+  return [...newest.values()].map((entry) => entry.run);
+}
+
 function rollup(runs: PrCheck[]): PrChecks {
   if (runs.length === 0) return "none";
   if (runs.some((run) => run.state === "failing")) return "failing";
@@ -62,8 +78,12 @@ export function toPullRequest(raw: unknown, ownRepo: string | null): PullRequest
   const rawState = text(fields["state"]);
   const state: PrState = rawState === "MERGED" ? "merged" : rawState === "CLOSED" ? "closed" : fields["isDraft"] === true ? "draft" : "open";
   const decision = text(fields["reviewDecision"]);
-  const review: PrReview = decision === "APPROVED" ? "approved" : decision === "CHANGES_REQUESTED" ? "changes_requested" : decision === "REVIEW_REQUIRED" ? "review_required" : "none";
-  const check_runs = Array.isArray(fields["statusCheckRollup"]) ? fields["statusCheckRollup"].map(checkRun) : [];
+  // a reviewer asked for and not yet answered is a review requested, whatever the decision field says
+  // (GitHub leaves it empty where no review is required by branch protection)
+  const pending = Array.isArray(fields["reviewRequests"]) && fields["reviewRequests"].length > 0;
+  const review: PrReview = decision === "APPROVED" ? "approved" : decision === "CHANGES_REQUESTED" ? "changes_requested"
+    : decision === "REVIEW_REQUIRED" || pending ? "review_required" : "none";
+  const check_runs = Array.isArray(fields["statusCheckRollup"]) ? newestRuns(fields["statusCheckRollup"]).map(checkRun) : [];
   return {
     url, number: count(fields["number"]), repo, own: ownRepo !== null && repo.toLowerCase() === ownRepo.toLowerCase(),
     title: text(fields["title"]), state, checks: rollup(check_runs), review, check_runs,
@@ -94,12 +114,22 @@ export async function ghView(run: Run, cwd: string, url: string, ownRepo: string
   return raw === null ? null : toPullRequest(raw, ownRepo);
 }
 
-/** The branch's PRs; null when gh could not say (an empty list means it has none). */
+export const LIST_LIMIT = 50;
+export const LIST_LIMIT_MAX = 1000;
+
+/**
+ * The branch's PRs, all of them: when gh answers as many as asked there may be more, so it is asked
+ * again for four times as many, up to LIST_LIMIT_MAX. null when gh could not say (an empty list
+ * means it has none).
+ */
 export async function ghListHead(run: Run, cwd: string, branch: string, ownRepo: string | null): Promise<PullRequest[] | null> {
-  const result = await run(["gh", "pr", "list", "--head", branch, "--state", "all", "--limit", "20", "--json", GH_FIELDS], cwd, GH_TIMEOUT_MS);
-  if (result === null || result.code !== 0) return null;
-  const raw = safeJson(result.stdout);
-  return Array.isArray(raw) ? raw.map((item) => toPullRequest(item, ownRepo)) : null;
+  for (let limit = LIST_LIMIT; ; limit = Math.min(limit * 4, LIST_LIMIT_MAX)) {
+    const result = await run(["gh", "pr", "list", "--head", branch, "--state", "all", "--limit", String(limit), "--json", GH_FIELDS], cwd, GH_TIMEOUT_MS);
+    if (result === null || result.code !== 0) return null;
+    const raw = safeJson(result.stdout);
+    if (!Array.isArray(raw)) return null;
+    if (raw.length < limit || limit >= LIST_LIMIT_MAX) return raw.map((item) => toPullRequest(item, ownRepo));
+  }
 }
 
 export async function ghMerge(run: Run, cwd: string, url: string): Promise<{ ok: true } | { ok: false; reason: string }> {
