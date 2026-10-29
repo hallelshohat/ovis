@@ -74,6 +74,8 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     const sheet = page.locator(".modal.pr-sheet");
     await sheet.waitFor();
     assert.equal(await button.getAttribute("aria-expanded"), "true", `${theme}: the button says the sheet is open`);
+    const controls = await button.getAttribute("aria-controls");
+    assert.equal(await page.evaluate((id) => document.getElementById(id ?? "")?.classList.contains("pr-sheet") ?? false, controls), true, `${theme}: the button controls the sheet it opened`);
     assert.equal(await sheet.getByText("client-sdk#88", { exact: true }).count() > 0, true, `${theme}: the sheet lists the PRs`);
     await page.keyboard.press("Escape");
     await sheet.waitFor({ state: "detached" });
