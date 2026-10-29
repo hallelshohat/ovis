@@ -179,7 +179,8 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   const keepFocus = (event: ReactMouseEvent<HTMLButtonElement>): void => event.preventDefault();
 
   // opened from inside a dialog (a link in a file preview): drawn over it, sheet or popover
-  const overModal = anchor.closest('[aria-modal="true"]') !== null;
+  // an anchor that is no element (a test's stand-in) is in no dialog
+  const overModal = typeof anchor.closest === "function" && anchor.closest('[aria-modal="true"]') !== null;
 
   const run = (item: RowMenuItem): void => {
     if (item.disabled) return;
