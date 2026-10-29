@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import listed from "../fixtures/gh/pr-list-branch.json";
 import viewed from "../fixtures/gh/pr-view-open.json";
+import { attentionRank } from "../../shared/pull-requests.ts";
 import { ghRepo, toPullRequest, type Run } from "./gh.ts";
 
 const answer = (code: number, stdout = "", stderr = ""): Run => async () => ({ code, stdout, stderr });
@@ -29,5 +30,12 @@ describe("gh pull requests", () => {
     expect(await ghRepo(answer(4, "", "To get started with GitHub CLI, please run:  gh auth login"), "/w")).toEqual({ status: "unauthenticated", repo: null });
     expect(await ghRepo(answer(1, "", "no git remotes found"), "/w")).toEqual({ status: "no_remote", repo: null });
     expect(await ghRepo(answer(0, '{"nameWithOwner":"acme/api"}'), "/w")).toEqual({ status: "ok", repo: "acme/api" });
+  });
+
+  it("reads a PR waiting on an assigned reviewer as a review requested, ranked so", () => {
+    // the shape of zed-industries/zed#66227 as gh answered it: no decision, one pending reviewer, green checks
+    const pr = toPullRequest({ ...listed[0], reviewDecision: "", reviewRequests: [{ __typename: "User", login: "dinocosta" }], statusCheckRollup: [{ __typename: "CheckRun", name: "CI", status: "COMPLETED", conclusion: "SUCCESS" }] }, "acme/api");
+    expect([pr.review, pr.checks, attentionRank(pr)]).toEqual(["review_required", "passing", 2]);
+    expect(toPullRequest({ ...listed[0], reviewDecision: "", reviewRequests: [] }, "acme/api").review).toBe("none");
   });
 });

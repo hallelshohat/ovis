@@ -2165,7 +2165,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   chat's transcript wrote and the PRs of every branch the chat ran on (Claude Code's per-message
   `gitBranch`, Codex's session-start branch, else the branch seen while the chat was open), and asks
   `gh` in the pane's folder. A PR found only through a branch that ended before the chat began is
-  left out; one the chat links stays. Open PRs are read again after the chat has been quiet `10s`
+  left out; one the chat links stays. The branches seen are the chat's: resumed in another pane
+  (session history), it keeps them. A reviewer asked for and not yet answered is a review requested,
+  whatever GitHub's decision field says. A lookup `gh` cannot answer keeps the last good answer and
+  is asked again after `60s`, or at once on a fresh read. Open PRs are read again after the chat has been quiet `10s`
   past a change and every `60s` while the page is seen; merged and closed ones are read once.
 - One leads: the one that needs the person first (failing checks, requested changes, a requested
   review, running checks, ready to merge, draft, merged, closed). Its badge is a glyph in the

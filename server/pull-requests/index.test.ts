@@ -191,4 +191,53 @@ describe("a chat's own pull requests, as review found them", () => {
     const none = await ask("fresh-down", transcript("down2.jsonl", [{ timestamp: "2026-10-28T10:00:00Z", gitBranch: "feature-a" }]));
     expect([none.gh, none.pull_requests]).toEqual(["error", []]);
   });
+
+  it("keeps a resumed chat's branches, PRs and switches in another pane", async () => {
+    const run = listing({
+      "feature-a": [raw(1, "acme/api", { headRefName: "feature-a", createdAt: "2026-10-28T10:05:00Z" })],
+      "feature-b": [raw(2, "acme/api", { headRefName: "feature-b", createdAt: "2026-10-28T10:25:00Z" })],
+    });
+    const chat: Chat = { id: "opencode:db:resumed", read: async () => ({ urls: [], branches: [], started_at: "2026-10-28T10:00:00Z" }) };
+    let branch = "feature-a";
+    const ask = (paneId: string, when: string) => panePullRequests({ paneId, cwd: "/w", chat, fresh: true }, { run, now: () => at(when), currentBranch: async () => branch });
+    await ask("old-pane", "2026-10-28T10:10:00Z");
+    branch = "feature-b";
+    const before = await ask("old-pane", "2026-10-28T10:30:00Z");
+    const after = await ask("new-pane", "2026-10-28T11:00:00Z");
+    for (const answer of [before, after]) {
+      expect(answer.pull_requests.map((pr) => pr.number).sort()).toEqual([1, 2]);
+      expect(answer.events.filter((event) => event.kind === "branch")).toHaveLength(1);
+    }
+  });
+
+  it("keeps known PRs when a repository lookup fails, and asks again soon", async () => {
+    let repoDown = false;
+    const calls: string[][] = [];
+    const up = listing({ "feature-a": [raw(1, "acme/api", { headRefName: "feature-a", createdAt: "2026-10-28T10:05:00Z" })] });
+    const run: Run = async (argv, cwd, timeout) => {
+      calls.push(argv);
+      return repoDown && argv[1] === "repo" ? { code: 1, stdout: "", stderr: "HTTP 503" } : up(argv, cwd, timeout);
+    };
+    const chat = transcript("repo-down.jsonl", [{ timestamp: "2026-10-28T10:00:00Z", gitBranch: "feature-a" }]);
+    const ask = (fresh: boolean, ms: number) => panePullRequests({ paneId: "rd", cwd: "/rd", chat, fresh }, { run, now: () => at("2026-10-28T10:30:00Z") + ms, currentBranch: async () => "feature-a" });
+    expect((await ask(false, 0)).pull_requests.map((pr) => pr.number)).toEqual([1]);
+    repoDown = true;
+    const stale = await ask(false, 600_001);
+    expect([stale.gh, stale.pull_requests.map((pr) => pr.number)]).toEqual(["ok", [1]]);
+    repoDown = false;
+    calls.length = 0;
+    const back = await ask(true, 660_001);
+    expect(calls.some((argv) => argv[1] === "repo")).toBe(true);
+    expect([back.gh, back.pull_requests.map((pr) => pr.number)]).toEqual(["ok", [1]]);
+  });
+
+  it("asks a repository that failed with nothing known again on a fresh read, not ten minutes later", async () => {
+    let repoDown = true;
+    const up = listing({});
+    const run: Run = async (argv, cwd, timeout) => (repoDown && argv[1] === "repo" ? { code: 1, stdout: "", stderr: "HTTP 503" } : up(argv, cwd, timeout));
+    const ask = (fresh: boolean) => panePullRequests({ paneId: "rf", cwd: "/rf", chat: null, fresh }, { run, now: () => at("2026-10-28T10:30:00Z"), currentBranch: async () => null });
+    expect((await ask(false)).gh).toBe("error");
+    repoDown = false;
+    expect((await ask(true)).gh).toBe("ok");
+  });
 });

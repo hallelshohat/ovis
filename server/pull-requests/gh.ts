@@ -7,7 +7,7 @@ import type { GhStatus, PrCheck, PrChecks, PrReview, PrState, PullRequest } from
 
 export type Run = (argv: string[], cwd: string, timeoutMs: number) => Promise<{ code: number; stdout: string; stderr: string } | null>;
 
-export const GH_FIELDS = "number,url,title,state,isDraft,reviewDecision,headRefName,baseRefName,additions,deletions,createdAt,mergedAt,closedAt,updatedAt,statusCheckRollup";
+export const GH_FIELDS = "number,url,title,state,isDraft,reviewDecision,reviewRequests,headRefName,baseRefName,additions,deletions,createdAt,mergedAt,closedAt,updatedAt,statusCheckRollup";
 export const GH_TIMEOUT_MS = 10_000;
 const MAX_OUTPUT = 4 * 1024 * 1024;
 
@@ -62,7 +62,11 @@ export function toPullRequest(raw: unknown, ownRepo: string | null): PullRequest
   const rawState = text(fields["state"]);
   const state: PrState = rawState === "MERGED" ? "merged" : rawState === "CLOSED" ? "closed" : fields["isDraft"] === true ? "draft" : "open";
   const decision = text(fields["reviewDecision"]);
-  const review: PrReview = decision === "APPROVED" ? "approved" : decision === "CHANGES_REQUESTED" ? "changes_requested" : decision === "REVIEW_REQUIRED" ? "review_required" : "none";
+  // a reviewer asked for and not yet answered is a review requested, whatever the decision field says
+  // (GitHub leaves it empty where no review is required by branch protection)
+  const pending = Array.isArray(fields["reviewRequests"]) && fields["reviewRequests"].length > 0;
+  const review: PrReview = decision === "APPROVED" ? "approved" : decision === "CHANGES_REQUESTED" ? "changes_requested"
+    : decision === "REVIEW_REQUIRED" || pending ? "review_required" : "none";
   const check_runs = Array.isArray(fields["statusCheckRollup"]) ? fields["statusCheckRollup"].map(checkRun) : [];
   return {
     url, number: count(fields["number"]), repo, own: ownRepo !== null && repo.toLowerCase() === ownRepo.toLowerCase(),
