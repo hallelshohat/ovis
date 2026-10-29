@@ -1,5 +1,7 @@
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Bell, BellOff, ChevronDown, ChevronRight, Ellipsis, FolderInput, FolderOutput, Lock, LockOpen, Pin, PinOff, Terminal } from "lucide-react";
+import { useFlip } from "../lib/flip.ts";
+import { PaneLeadBadge } from "./PullRequestBadge.tsx";
 
 import type { Machine } from "../../shared/machines.ts";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -57,6 +59,8 @@ interface AgentRowBodyProps {
   progress?: number;
   helper?: boolean;
   since?: string | null;
+  /** the chat's leading pull request (PullRequestBadge.tsx), beside its plan and background count */
+  pullRequest?: ReactNode;
 }
 
 /** How long a row has been in its state, as herdr-app's agent rows say it: under a minute, minutes, hours, days. */
@@ -82,7 +86,8 @@ export function blockedLabel(pane: Pick<HerdrPane, "agent_kind" | "agent_message
   return pane.agent_message?.trim() || null;
 }
 
-function AgentRowBody({ mark, markKind, title, name, context, tokens, backgroundTasks, plan, paneContext, status, note = null, muted, locked = false, blockedNote: blocked = null, blockedLabel: blockedShort = null, progress, helper = false, since = null }: AgentRowBodyProps) {
+
+function AgentRowBody({ mark, markKind, title, name, context, tokens, backgroundTasks, plan, paneContext, status, note = null, muted, locked = false, blockedNote: blocked = null, blockedLabel: blockedShort = null, progress, helper = false, since = null, pullRequest = null }: AgentRowBodyProps) {
   const t = useT();
   const showProgress = progress !== undefined && (status === "working" || status === "blocked");
   return <>
@@ -111,7 +116,7 @@ function AgentRowBody({ mark, markKind, title, name, context, tokens, background
       {!helper && tokens.length > 0 && <span className="agent-tokens">{tokens.join(" · ")}</span>}
     </span>
     <span className="agent-row-status">
-      {note !== null && <span className="sidebar-filter-note">{note}</span>}<BackgroundBadge count={backgroundTasks} /><PlanBadge plan={plan} /><ContextBadge context={paneContext} />
+      {note !== null && <span className="sidebar-filter-note">{note}</span>}{pullRequest}<BackgroundBadge count={backgroundTasks} /><PlanBadge plan={plan} /><ContextBadge context={paneContext} />
       {locked && <span className="agent-muted" title={t("Locked")} data-testid="agent-locked"><Lock aria-hidden="true" /><span className="visually-hidden">{t("Locked")}</span></span>}
       {muted && <span className="agent-muted" title={t("Alerts muted")} data-testid="alerts-muted"><BellOff aria-hidden="true" /><span className="visually-hidden">{t("Alerts muted")}</span></span>}
     </span>
@@ -559,7 +564,8 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
           event.dataTransfer.setData(PANE_DRAG_TYPE, paneDragData({ machineId: machine.id, paneId: pane.pane_id }));
         }}>
         {missingContext && <span className="visually-hidden">{missingContext} · </span>}
-        <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} tokens={tokens} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} paneContext={online && settings.sidebarContext ? pane.context : undefined} status={status} note={filterContext && selected ? t("Selected") : null} muted={muted?.includes(paneMuteKey(machine.id, pane.pane_id)) === true} locked={locked.has(pinKey)} blockedNote={blocked} blockedLabel={blockedShort} progress={online ? pane.agent_progress : undefined} helper={depth > 0} since={since} />
+        {/* a saved roster's state is not news: a PC that is away says nothing about its agents */}
+        <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} tokens={tokens} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} paneContext={online && settings.sidebarContext ? pane.context : undefined} status={status} note={filterContext && selected ? t("Selected") : null} muted={muted?.includes(paneMuteKey(machine.id, pane.pane_id)) === true} locked={locked.has(pinKey)} blockedNote={blocked} blockedLabel={blockedShort} progress={online ? pane.agent_progress : undefined} helper={depth > 0} since={since} pullRequest={online ? <PaneLeadBadge machineId={machine.id} paneId={pane.pane_id} /> : null} />
       </button>
       {/* the workspace's pull request, asked of the row's own PC */}
       {online && <MachineContext.Provider value={machine.id}><PrBadge workspace={entry.workspace} compact /></MachineContext.Provider>}
@@ -655,10 +661,14 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     if (control) refocusPin.current = { key: state.key, control };
     togglePin(state.key);
   };
+  // a reorder (Activity order, a pin) moves the rows to their new places (lib/flip.ts)
+  useFlip(sectionRef, "data-pin-key");
+  // Settings -> Sidebar rows -> One line: an agent row is one line too, its place dim after its title
   const oneLine = settings.sidebarRows === "one";
   const waiting = allRows.filter((row) => rowStatus(row) === "blocked").length;
   return <section ref={sectionRef} onPointerEnter={() => setPointerIn(true)} onPointerLeave={() => setPointerIn(false)} onTouchEnd={holdAfterTouch} onTouchCancel={holdAfterTouch} onFocus={(event) => { setFocusIn(true); heldFocus.current = event.target; }} onBlur={(event) => { forgetFocus(event.target); if (!(typeof Node === "function" && event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setFocusIn(false); }} className={`agents-sidebar${folded ? " is-collapsed" : ""}${rows.length === 0 ? " is-empty" : ""}${oneLine ? " is-one-line is-compact" : ""}`} aria-label={t("Agents")}>
-    <button type="button" className="agent-section-toggle sidebar-section-label" aria-expanded={!folded} aria-controls={listId} onClick={() => {
+    <button type="button" className="agent-section-toggle sidebar-section-label section-label" aria-expanded={!folded} aria-controls={listId} onClick={() => {
+      // the filter's fold lasts for the filter's time and is never kept; the reader's own is
       if (filter.active) { setFilterFold(!folded); return; }
       setCollapsed(!collapsed);
       try { window.localStorage.setItem(FOLD_KEY, collapsed ? "0" : "1"); } catch {}

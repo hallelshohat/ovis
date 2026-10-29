@@ -1,5 +1,9 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell, ChevronDown, ChevronLeft, Eye, Plus, CircleHelp, Ellipsis, FolderOpen, Inbox, Link, Menu, MessageCircle, MessageSquare, PanelLeft, PanelsTopLeft, Search, Settings as SettingsGlyph, SquareTerminal, Target, TextSearch, X } from "lucide-react";
+import { agentDisplayLabel } from "./lib/compose.ts";
+import { Inspector } from "./components/Inspector.tsx";
+import { PrHeaderButton, PrSheet, PullRequestPanel } from "./components/PullRequestPanel.tsx";
+import { PullRequestsContext, usePullRequestInspector } from "./lib/usePanePullRequests.ts";
 
 import type { HerdrPane, PaneDirection } from "../shared/protocol.ts";
 import { authenticate, createTab, movePaneBeside, moveTabToWorkspace, paneSessionKey, shareSeen, swapPaneWith } from "./lib/api.ts";
@@ -312,7 +316,10 @@ export function App() {
   // herdr moved a pane under a new ID, from anywhere (the server's pane-moved): followPaneMove below, called at the event
   useRosterEvents({ onPaneMoved: (machineId, from, to) => followPaneMove(machineId, from, to), machineSessions, locked, onRosterStream, receivePreferencesRef, snapshotRequests, recovery, onRoster, reorderCoordinator, setMachines, rosterIn, setMachineRosterLoaded, machinesRef, onPaneStatus, onPaneExited, followFocusRef, selectionRef, splitShownRef, splitRef, pendingLink, selectionHint, setSelectedPaneId, setNotificationViewTarget, setTerminalPeek, setAutoSelected, scheduleRefetch, preferencesResubscribedRef, preferencesDisconnectedRef, preferencesClosedRef, dropIn, chime, setPairedNotices, setRelayPairings, setRemotePairings, setRemovedNotices, getTakeNotificationTargetRef: () => takeNotificationTargetRef });
 
-  const handleServerMessage = useServerMessageHandler(setOutputStopped);
+  const handleServerMessage = useServerMessageHandler(setOutputStopped, selectedMachineId);
+  // the chat's pull requests: an inspector column from 1200px, a sheet below it (DESIGN.md: Pull requests)
+  const prs = usePullRequestInspector(selectedMachineId, selectedPaneId);
+  const { pullRequests } = prs;
 
   const { enableNotifications, disableNotifications, repairNotifications } = useNotificationSwitch({ updateSettings, locked, notifications, setNotifications, alerts, alertsRef, alertsOn, setPushOn });
   const localSnapshot = machines.find((machine) => machine.id === "local")?.snapshot ?? null;
@@ -901,7 +908,7 @@ export function App() {
   );
 
   return (
-    <MachineSessionsProvider sessions={machineSessions} machineIds={machines.map((machine) => machine.id)}><MachineContext.Provider value={selectedMachineId}><AppLayoutContext.Provider value={appLayout}><div className={`app${(inMode ? !inboxWide : sidebarCollapsed) ? " sidebar-collapsed" : ""}${inMode ? " is-inbox" : ""}${listScreen ? " is-inbox-list" : ""}${inboxWide ? " is-inbox-wide" : ""}${inboxWide && !inbox.shown && selectedPane !== null && !chatShown ? " is-inbox-terminal" : ""}${tabRoom ? " is-inbox-tab-room" : ""}`} style={sidebarWidth === null && filePanelWidth === null ? undefined : {
+    <PullRequestsContext.Provider value={true}><MachineSessionsProvider sessions={machineSessions} machineIds={machines.map((machine) => machine.id)}><MachineContext.Provider value={selectedMachineId}><AppLayoutContext.Provider value={appLayout}><div className={`app${(inMode ? !inboxWide : sidebarCollapsed) ? " sidebar-collapsed" : ""}${inMode ? " is-inbox" : ""}${listScreen ? " is-inbox-list" : ""}${inboxWide ? " is-inbox-wide" : ""}${inboxWide && !inbox.shown && selectedPane !== null && !chatShown ? " is-inbox-terminal" : ""}${tabRoom ? " is-inbox-tab-room" : ""}`} style={sidebarWidth === null && filePanelWidth === null ? undefined : {
       ...(sidebarWidth === null ? {} : { "--sidebar-user-w": `${sidebarWidth}px` }),
       ...(filePanelWidth === null ? {} : { "--file-panel-user-w": `${filePanelWidth}px` }),
     } as CSSProperties}>
@@ -1014,6 +1021,9 @@ export function App() {
         ) : (
           <><Brand /><span className="machine-context-name">{selectedMachine?.name ?? selectedMachineId}</span></>
         )}
+        {/* a phone: one button to the other lens (components/LensToggle.tsx). Wider, both lenses, the open one on
+            a thumb that slides to it (Apple's segmented control). Mod+Shift+J switches too */}
+        {selectedPane && <PrHeaderButton data={pullRequests} expanded={prs.expanded} controls="pull-requests" onToggle={prs.toggle} />}
         {selectedPane && (isSheetWidth || inMode) && !inbox.shown && (
           <LensToggle view={view} peek={terminalPeek !== null} terminalAttach={terminalAttach} thread={inMode}
             title={(label) => shortcutTitle(label, "toggle-view")} onToggle={() => actions.toggleView("header")} />
@@ -1304,8 +1314,15 @@ export function App() {
         {filesOpen && filesDocked && filesDialog(true)}
         {webPage !== null && !(viewing !== null && fileDocked) &&
           <WebPanel key={webPage} url={webPage} docked={filePanelAvailable} covered={webDialogCover} onClose={closeWebPage} panelStart={filePanelAvailable ? <FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} /> : undefined} />}
+        {/* the workbench's inspector: the chat's pull requests beside the pane, where a file or a page is not docked */}
+        {prs.docked && prs.panelOpen && prs.shown && pullRequests && selectedPaneId !== null && viewing === null && webPage === null &&
+          <Inspector id="pull-requests" title={t("Pull requests")} onClose={() => prs.setPanelOpen(false)}>
+            <PullRequestPanel data={pullRequests} machineId={selectedMachineId} paneId={selectedPaneId} agentName={agentDisplayLabel(selectedAgent)} />
+          </Inspector>}
       </div>
       </PanePressContext.Provider>
+      {!prs.docked && prs.sheetOpen && pullRequests && selectedPaneId !== null &&
+        <PrSheet data={pullRequests} machineId={selectedMachineId} paneId={selectedPaneId} agentName={agentDisplayLabel(selectedAgent)} onClose={() => prs.setSheetOpen(false)} />}
 
       <MachineContext.Provider value={newSessionMachineId}><NewSessionDialog
         key={newSessionMachineId}
@@ -1392,6 +1409,6 @@ export function App() {
       <CommandPalette key={selectedMachineId} machines={sidebarMachines} onSelect={selectTarget} open={paletteOpen} initialQuery={paletteQuery} onClose={() => setPaletteOpen(false)} snapshot={snapshot} online={selectedMachine?.state === "connected"} selectedPaneId={selectedPaneId}
         view={terminalPeek !== null ? "terminal" : view} actions={actions} watching={auth?.role === "watch"} inboxMode={inMode} />
       <MarkdownLinkMenu />
-    </div></AppLayoutContext.Provider></MachineContext.Provider></MachineSessionsProvider>
+    </div></AppLayoutContext.Provider></MachineContext.Provider></MachineSessionsProvider></PullRequestsContext.Provider>
   );
 }

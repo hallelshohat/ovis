@@ -11,8 +11,8 @@ const fixture = readFileSync(new URL("./claude-transcript-parity.fixture.jsonl",
 it("draws a real exchange in the terminal's order: every text and tool once, where it was written", () => {
   const turns = parseClaudeTranscript(fixture);
   expect(turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
-  const segments = turnSegments(turns[1]!.parts).map((segment) => segment.kind === "text"
-    ? segment.part.text
+  const segments = turnSegments(turns[1]!.parts).map((segment) => segment.kind === "answer"
+    ? segment.parts.map((part) => part.text).join("\n\n")
     : segment.parts.map((part) => part.kind === "tool" ? `${JSON.parse(part.input).command} -> ${part.output}` : `${part.kind}: ${part.kind === "thinking" ? part.text : ""}`));
   expect(segments).toEqual([
     ["thinking: thinking 1"],
