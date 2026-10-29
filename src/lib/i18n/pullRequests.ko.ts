@@ -5,15 +5,11 @@
  */
 export const PULL_REQUESTS_KO: Record<string, string> = {
   "Checks failing": "검사 실패",
-  "Checks running": "검사 실행 중",
   "Review requested": "리뷰 요청됨",
-  "Changes requested": "변경 요청됨",
-  "Ready to merge": "병합 가능",
   "{n} more open": "열린 PR {n}개 더",
   "A pull request this chat opens shows here.": "이 채팅에서 연 풀 리퀘스트가 여기에 표시됩니다.",
   "Approved": "승인됨",
   "Ask {agent} to fix": "{agent}에게 수정 요청",
-  "Checks": "검사",
   "Earlier in this chat": "이 채팅의 이전 항목",
   "GitHub CLI is signed out": "GitHub CLI에서 로그아웃됨",
   "GitHub CLI not found": "GitHub CLI를 찾을 수 없음",
