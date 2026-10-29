@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Columns2, Copy, CopySlash, FileText, FoldVertical, Rows3, Search, TriangleAlert, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Columns2, Copy, CopySlash, FileDiff, FileText, FileWarning, FoldVertical, RefreshCw, Rows3, Search, TriangleAlert, X } from "lucide-react";
+import { EmptyState } from "./EmptyState.tsx";
 
 import "./FindBar.css";
 import "./RepoChanges.css";
@@ -276,14 +277,14 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const body = (() => {
     if (shown !== null) return <textarea ref={textRef} className="repo-diff-select-source" readOnly value={shown.text} aria-label={shown.kind === "patch" ? t("Patch") : t("Path")} spellCheck={false} />;
     if (load.status === "pending") return <DiffSkeleton label={t("Opening…")} />;
-    if (load.status === "stale") return <p className="repo-diff-note" role="alert">{comparisonChangedWord(t)}</p>;
+    if (load.status === "stale") return <EmptyState className="repo-diff-note" role="alert" icon={RefreshCw} title={comparisonChangedWord(t)} />;
     if (load.status === "failed") {
       const stale = load.error instanceof ApiError && load.error.status === 404 && load.error.code === "not_found";
-      return <p className="repo-diff-note" role="alert">{stale ? t("This file has no changes here any more; the list is out of date.") : diffErrorMessage(t, load.error)}</p>;
+      return <EmptyState className="repo-diff-note" role="alert" icon={FileWarning} title={stale ? t("This file has no changes here any more; the list is out of date.") : diffErrorMessage(t, load.error)} />;
     }
     const unavailable = unavailableMessage(t, load.answer);
-    if (unavailable !== null || patch === null) return <p className="repo-diff-note">{unavailable ?? t("No lines changed.")}</p>;
-    return <RenderBoundary resetKey={patch} fallback={() => <p className="repo-diff-note" role="alert">{t("This change can't be shown.")}</p>}>
+    if (unavailable !== null || patch === null) return <EmptyState className="repo-diff-note" icon={FileDiff} title={unavailable ?? t("No lines changed.")} />;
+    return <RenderBoundary resetKey={patch} fallback={() => <EmptyState className="repo-diff-note" role="alert" icon={FileWarning} title={t("This change can't be shown.")} />}>
       <Suspense fallback={<DiffSkeleton label={t("Opening…")} />}>
         <RepoDiff patch={patch} style={style} folded={folded} wrap={settings.wrapCode} theme={resolvedEntry.mode} colored={colored} active={finding ? activeMatch : changeMark} onUnfold={unfold} loadContents={loadContents} onStaleContents={markStale} />
       </Suspense>

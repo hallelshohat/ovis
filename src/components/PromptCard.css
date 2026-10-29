@@ -206,8 +206,8 @@
 }
 
 .prompt-card-step-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
 }
 
 @media (hover: hover) {

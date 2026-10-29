@@ -495,15 +495,15 @@ try {
               await dialog.waitFor({ state: "detached" });
               await settled(page);
             } else {
-              // at 1440 a dialog is a centred modal: it appears with no entrance or exit of its own
-              assert.deepEqual(motion.entrance, [], "a desktop modal has no entrance animation");
+              // at 1440 a confirmation is a centred modal: it fades in with its scrim and fades out (styles.css)
+              assert.deepEqual([...motion.entrance].sort(), ["modal-pop-in", "scrim-in"], "a desktop modal fades in with its scrim");
               await release(page);
-              await frame(page, `${prefix}-confirm-enter-end`, { ...about("confirm-enter-end"), note: "the modal's first frame is its last: no entrance animation at 1440" });
+              await frame(page, `${prefix}-confirm-enter-end`, { ...about("confirm-enter-end"), note: "the modal at the end of its fade in at 1440" });
               await arm(page);
               await page.keyboard.press("Escape");
               await dialog.waitFor({ state: "detached" });
               motion.exit = await dialogAnimations(page);
-              assert.deepEqual(motion.exit, [], "a desktop modal has no exit animation");
+              assert.deepEqual([...motion.exit].sort(), ["modal-pop-out", "scrim-out"], "a desktop modal fades out with its scrim");
               await release(page);
             }
             measurements[prefix]!.motion = motion;

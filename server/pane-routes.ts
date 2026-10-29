@@ -21,6 +21,10 @@ import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "./dialogs/claude.ts";
 import { claudeRewindOpen } from "./prompt.ts";
 import { expandedDirectory } from "./workspace-routes.ts";
+import { ghMerge, ghView } from "./pull-requests/gh.ts";
+import { forgetPullRequest, panePullRequests, pullRequestDeps } from "./pull-requests/index.ts";
+import { conversationSources, fileChat, PER_CHAT_FILES, type Chat } from "./pull-requests/sources.ts";
+import { canMerge, type PanePullRequests } from "../shared/pull-requests.ts";
 
 /** the native stores createServer was given; unset, each reader finds its own */
 export type PaneStores = { codexHome?: string; grokHome?: string; museData?: string; opencodeDb?: string; devinDbPath?: string; hermesHome?: string; openCodeStateDir?: string };
@@ -255,6 +259,59 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
       // OpenCode tool-image ordinals can change, and a Codex tool's picture (`codex-tool:`) loads with its row.
       const cacheControl = ref.startsWith("codex-") || ref.startsWith("opencode:") ? "private, no-store" : "private, max-age=86400, immutable";
       return new Response(image.bytes, { headers: { "content-type": image.mediaType, "cache-control": cacheControl, "x-content-type-options": "nosniff" } });
+    } catch (error) {
+      return errorResponse(error);
+    }
+  }
+
+  // a chat's pull requests: the links it wrote and the PRs of the branches it ran on (server/pull-requests/)
+  if (pathname === "/api/pane/pull-requests" || pathname === "/api/pane/pull-requests/merge") {
+    setRequestRoute(pathname);
+    const merge = pathname.endsWith("/merge");
+    if (request.method !== (merge ? "POST" : "GET")) return badRequest("method_not_allowed", merge ? "use POST" : "use GET");
+    if (request.headers.get("sec-fetch-site") === "cross-site") return jsonResponse({ error: { code: "cross_site", message: "A chat's pull requests are read from this app" } }, 403);
+    let paneId: string | null = url.searchParams.get("pane_id");
+    let target = "";
+    if (merge) {
+      const payload = await readJsonObject<{ pane_id?: unknown; url?: unknown }>(request);
+      if (payload instanceof Response) return payload;
+      paneId = typeof payload.pane_id === "string" ? payload.pane_id : null;
+      target = typeof payload.url === "string" ? payload.url : "";
+      if (!target) return badRequest("missing_url", "url is required");
+    }
+    if (!paneId) return badRequest("missing_pane_id", "pane_id is required");
+    try {
+      const { cwd } = await paneContext(paneId);
+      // the chat the pane shows now: a transcript file is read itself, a shared store through the chat's pages
+      const chat = await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome).then((found): Chat => {
+        if (PER_CHAT_FILES.has(found.source)) return fileChat(found.path);
+        const session = "session" in found ? found.session : "sessionId" in found ? found.sessionId : "";
+        const id = `${found.source}:${found.path}:${session}`;
+        return { id, read: () => conversationSources(id, async (page) => {
+          const conversation = await paneConversation(paneId, options.codexHome, page, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+          return { turns: conversation.turns, cursor: conversation.cursor };
+        }) };
+      }, () => null);
+      const deps = pullRequestDeps();
+      const answer = await panePullRequests({ paneId, cwd, chat, fresh: !merge && url.searchParams.get("fresh") === "1" }, deps);
+      if (!merge) return jsonResponse(answer satisfies PanePullRequests, 200, { "cache-control": "no-store" });
+      const listed = answer.pull_requests.find((pr) => pr.url === target);
+      if (!listed) return jsonResponse({ error: { code: "pr_not_in_chat", message: "That pull request is not one of this chat's" } }, 404);
+      // what GitHub says now, not what was shown: it may have merged or failed since
+      const now = await ghView(deps.run, cwd, target, listed.own ? listed.repo : null);
+      // the button's own rule (shared/pull-requests.ts canMerge), on what GitHub says now
+      if (now === null || !canMerge(now)) {
+        const reason = now === null ? "GitHub did not answer for this pull request"
+          : now.state !== "open" ? `It is ${now.state} now`
+          : now.review === "changes_requested" ? "Changes were requested since"
+          : now.checks === "pending" ? "Its checks are running again"
+          : "Its checks are failing now";
+        return jsonResponse({ error: { code: "pr_not_mergeable", message: reason }, state: now }, 409);
+      }
+      const merged = await ghMerge(deps.run, cwd, target);
+      forgetPullRequest(target);
+      if (!merged.ok) return jsonResponse({ error: { code: "merge_failed", message: merged.reason || "gh could not merge it" } }, 502);
+      return jsonResponse({ ok: true });
     } catch (error) {
       return errorResponse(error);
     }

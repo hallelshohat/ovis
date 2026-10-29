@@ -1,3 +1,4 @@
+import type { PanePullRequests } from "../../shared/pull-requests.ts";
 import { apiFetch as fetch } from "./api-request-id.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import type { SeenFinish } from "../../shared/seen.ts";
@@ -935,6 +936,16 @@ export async function fetchPanePromptState(paneId: string, machineId = "local"):
 /** POST /api/pane/prompt/answer: ApiError 409 `prompt_changed` when the menu moved on. */
 export async function answerPanePrompt(answer: PromptAnswer, machineId = "local"): Promise<void> {
   await sendJson(machinePath(machineId, "pane/prompt/answer"), "POST", answer);
+}
+
+/** GET /api/pane/pull-requests: the chat's pull requests, the leading one first; fresh asks GitHub again for the open ones. */
+export async function fetchPullRequests(paneId: string, fresh: boolean, machineId = "local"): Promise<PanePullRequests> {
+  return getJson<PanePullRequests>(machinePath(machineId, `pane/pull-requests?pane_id=${encodeURIComponent(paneId)}${fresh ? "&fresh=1" : ""}`));
+}
+
+/** POST /api/pane/pull-requests/merge: squash one of the chat's open PRs; a 409 says what it is now. */
+export async function mergePullRequest(paneId: string, url: string, machineId = "local"): Promise<void> {
+  await sendJson(machinePath(machineId, "pane/pull-requests/merge"), "POST", { pane_id: paneId, url });
 }
 
 /** GET /api/push: the server's VAPID key, the `applicationServerKey` this device subscribes with. */

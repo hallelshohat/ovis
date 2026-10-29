@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Bell, BellOff, ChevronDown, ChevronRight, Ellipsis, Pin, PinOff, Terminal } from "lucide-react";
+import { useFlip } from "../lib/flip.ts";
+import { PaneLeadBadge } from "./PullRequestBadge.tsx";
 
 import type { Machine } from "../../shared/machines.ts";
 import { paneStorageId } from "../../shared/machines.ts";
@@ -42,13 +44,15 @@ interface AgentRowBodyProps {
   note?: string | null;
   /** its alerts are off for everyone (lib/paneMutes.ts): said beside the state, as a word for a screen reader */
   muted: boolean;
+  /** the chat's leading pull request (PullRequestBadge.tsx), beside its plan and background count */
+  pullRequest?: ReactNode;
 }
 
 /**
  * One agent in a list: the coding agent's mark, what it is working on, who and where it is, what
  * its plugins report, and how it is doing.
  */
-function AgentRowBody({ mark, markKind, title, name, context, tokens, backgroundTasks, plan, status, note = null, muted }: AgentRowBodyProps) {
+function AgentRowBody({ mark, markKind, title, name, context, tokens, backgroundTasks, plan, status, note = null, muted, pullRequest = null }: AgentRowBodyProps) {
   const t = useT();
   return <>
     <span className="sidebar-mark" aria-hidden="true">{mark !== null ? <AgentMark agent={mark} size={18} /> : <Terminal />}</span>
@@ -68,7 +72,7 @@ function AgentRowBody({ mark, markKind, title, name, context, tokens, background
       {tokens.length > 0 && <span className="agent-tokens">{tokens.join(" · ")}</span>}
     </span>
     <span className="agent-row-status">
-      {note !== null && <span className="sidebar-filter-note">{note}</span>}<BackgroundBadge count={backgroundTasks} /><PlanBadge plan={plan} />
+      {note !== null && <span className="sidebar-filter-note">{note}</span>}{pullRequest}<BackgroundBadge count={backgroundTasks} /><PlanBadge plan={plan} />
       {muted && <span className="agent-muted" title={t("Alerts muted")} data-testid="alerts-muted"><BellOff aria-hidden="true" /><span className="visually-hidden">{t("Alerts muted")}</span></span>}
     </span>
     {/* drawn at the row's right edge, after its ⋯, as a workspace row's state is (AgentSidebar.css) */}
@@ -212,7 +216,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
           event.dataTransfer.setData(PANE_DRAG_TYPE, paneDragData({ machineId: machine.id, paneId: pane.pane_id }));
         }}>
         {/* a saved roster's state is not news: a PC that is away says nothing about its agents */}
-        <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} tokens={tokens} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} status={online ? activity.status(machine.id, pane) : undefined} note={filterContext && selected ? t("Selected") : null} muted={muted?.includes(paneMuteKey(machine.id, pane.pane_id)) === true} />
+        <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} tokens={tokens} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} status={online ? activity.status(machine.id, pane) : undefined} note={filterContext && selected ? t("Selected") : null} muted={muted?.includes(paneMuteKey(machine.id, pane.pane_id)) === true} pullRequest={online ? <PaneLeadBadge machineId={machine.id} paneId={pane.pane_id} /> : null} />
       </button>
       {/* the workspace's pull request, asked of the row's own PC */}
       {online && <MachineContext.Provider value={machine.id}><PrBadge workspace={entry.workspace} compact /></MachineContext.Provider>}
@@ -240,10 +244,12 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
     if (control) refocusPin.current = { key: state.key, control };
     togglePin(state.key);
   };
+  // a reorder (Activity order, a pin) moves the rows to their new places (lib/flip.ts)
+  useFlip(sectionRef, "data-pin-key");
   // Settings -> Sidebar rows -> One line: an agent row is one line too, its place dim after its title
   const oneLine = settings.sidebarRows === "one";
   return <section ref={sectionRef} className={`agents-sidebar${folded ? " is-collapsed" : ""}${rows.length === 0 ? " is-empty" : ""}${oneLine ? " is-one-line" : ""}`} aria-label={t("Agents")}>
-    <button type="button" className="agent-section-toggle sidebar-section-label" aria-expanded={!folded} aria-controls={listId} onClick={() => { if (filter.active) setFilterFold(!folded); else setCollapsed(!collapsed); }}>
+    <button type="button" className="agent-section-toggle sidebar-section-label section-label" aria-expanded={!folded} aria-controls={listId} onClick={() => { if (filter.active) setFilterFold(!folded); else setCollapsed(!collapsed); }}>
       {folded ? <ChevronRight className="agent-section-caret" aria-hidden="true" /> : <ChevronDown className="agent-section-caret" aria-hidden="true" />}
       <span>{t("Agents")}</span>
       {/* the count is of the agents running, filter or not */}

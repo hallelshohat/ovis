@@ -205,6 +205,9 @@ function pageStyles(): CSSStyleSheet | null {
   return sheet;
 }
 
+/** What a closing surface plays: a phone's sheet drops, a desktop side sheet slides out, a centred dialog shrinks away (styles.css). */
+const EXIT_ANIMATIONS = new Set(["sheet-out", "side-sheet-out", "modal-pop-out"]);
+
 /** The last frame of a closed sheet: put back, out of reach, until it has slid out. */
 function leave(scrim: HTMLElement, scrolled: WeakMap<Element, number>): void {
   const rules = pageStyles();
@@ -232,15 +235,14 @@ function leave(scrim: HTMLElement, scrolled: WeakMap<Element, number>): void {
   let timer = 0;
   const gone = (): void => { window.clearTimeout(timer); host.remove(); };
   timer = window.setTimeout(gone, LEAVE_MS);
-  scrim.addEventListener("animationend", (event) => { if (event.animationName === "sheet-out") gone(); });
+  scrim.addEventListener("animationend", (event) => { if (EXIT_ANIMATIONS.has(event.animationName)) gone(); });
 }
 
 /**
- * Follows every sheet from the moment it rises, and draws the drop of each one React removes.
- * Called once by main.tsx; returns the cleanup.
+ * Follows every sheet from the moment it rises, and draws the drop of each one React removes: a
+ * phone's sheet drops, a desktop dialog slides or shrinks away. Called once by main.tsx; returns the cleanup.
  */
 export function watchSheetExits(): () => void {
-  const sheets = media(SHEET_QUERY);
   const reduced = media("(prefers-reduced-motion: reduce)");
   const open = new Set<HTMLElement>();
   // where each list in an open sheet is scrolled to: a detached one reads 0, and its drop should not jump
@@ -255,7 +257,7 @@ export function watchSheetExits(): () => void {
     for (const scrim of open) {
       if (scrim.isConnected) continue;
       open.delete(scrim);
-      if (sheets?.matches === true && reduced?.matches !== true && !scrim.classList.contains("is-leaving")) leave(scrim, scrolled);
+      if (reduced?.matches !== true && !scrim.classList.contains("is-leaving")) leave(scrim, scrolled);
     }
     if (open.size === 0) observer.disconnect();
   });

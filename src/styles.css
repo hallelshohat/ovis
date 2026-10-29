@@ -101,6 +101,13 @@
   --syntax-variable: #e0c08f;
   --syntax-meta: #b49dd6;
 
+  /* a pull request's state (shared/pull-requests.ts): the agent states' colours, so every palette has them */
+  --pr-open: var(--status-done);
+  --pr-failing: var(--status-blocked);
+  --pr-draft: var(--status-idle);
+  --pr-review: var(--notice);
+  --pr-merged: var(--syntax-meta);
+
   /* type (comfortable density; compact overrides below) */
   --font-ui: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Malgun Gothic", sans-serif;
   /* "JetBrains Mono Web" is the bundled face (fonts/fonts.css): after the icon font, which draws
@@ -188,6 +195,16 @@
   --pending-max-h: min(20dvh, 12rem);
   --palette-w: 640px;
   --palette-top: 12vh;
+  /* the workbench (DESIGN.md §1): the work area is a panel inset from the app's edge, the
+     inspector a column beside it, and a desktop dialog a sheet down the right side */
+  --panel-inset: var(--space-2);
+  --panel-radius: var(--radius-lg);
+  --inspector-w: 300px;
+  --side-sheet-w: 560px;
+  --side-sheet-w-wide: 760px;
+  /* a work block's tool calls hang on a rail, each on a node */
+  --timeline-rail: 2px;
+  --timeline-node: 8px;
 
   /* focus */
   --ring: 2px solid var(--accent);
@@ -211,6 +228,9 @@
   /* a phone's sheet rises on the spring and drops faster than it rose */
   --dur-sheet: 360ms;
   --dur-sheet-out: 240ms;
+  /* a desktop side sheet or the inspector sliding in */
+  --dur-slow: 240ms;
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
 
   /* layers */
   --z-header: 4;
@@ -1699,6 +1719,41 @@ button {
   order: 1;
 }
 
+/* The workbench (Codex app, Conductor): from 641px the chrome (header, sidebar, tab rows) is one
+   surface with no rules between its parts, and each pane is a panel inset from it, its own edge
+   and corners, so the work reads as the thing on the desk. A split shows two panels. A touch screen
+   (a phone, also turned sideways, or a tablet) keeps the pane edge to edge: its key bar and message
+   box sit on the screen's bottom edge, over the home indicator's room. */
+@media (min-width: 641px) and (pointer: fine) {
+  .app-header,
+  .tab-strip,
+  .tab-strip-row,
+  .pane-slot-bar {
+    border-bottom-color: transparent;
+  }
+
+  .sidebar {
+    border-right-color: transparent;
+  }
+
+  .pane-column {
+    background: var(--bg-panel);
+  }
+
+  /* the edge is an outline drawn inside the box: a border would move every row the pane lays out
+     by its width, and the terminal's grid and the chat's paging measure to the device pixel */
+  .terminal-host {
+    margin: 0 var(--panel-inset) var(--panel-inset) 0;
+    border-radius: var(--panel-radius);
+    outline: var(--hairline) solid var(--border);
+    outline-offset: calc(var(--hairline) * -1);
+  }
+
+  .pane-slot[data-side="left"] {
+    border-right: 0;
+  }
+}
+
 /* a half's close sits at the end of its tab strip (TabStrip.css); a half with no strip (its pane
    gone, or crashed) keeps it in a bar of its own. The active half's row carries the accent, as
    the pane the header, the palette and the shortcuts act on */
@@ -2512,6 +2567,90 @@ button {
   to { transform: translateY(100%); }
 }
 
+/* From 641px a dialog that holds a form or a list is a sheet down the right side (Codex app,
+   Conductor), the chat still in view beside it; a confirmation, the palette, a viewer and a
+   lightbox stay centred and pop. Each one leaves as it came (lib/sheets.ts watchSheetExits). */
+@media (min-width: 641px) {
+  .modal-scrim:has(> :is(.new-session-modal, .worktree-modal, .files-dialog, .settings-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet)) {
+    justify-content: flex-end;
+    align-items: stretch;
+    padding: var(--panel-inset);
+  }
+
+  .modal-scrim > :is(.new-session-modal, .worktree-modal, .files-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet).modal {
+    width: min(100%, var(--side-sheet-w));
+    height: auto;
+    max-height: none;
+    border: var(--hairline) solid var(--border);
+  }
+
+  .modal-scrim > .settings-dialog.modal {
+    width: min(100%, var(--side-sheet-w-wide));
+    height: auto;
+    max-height: none;
+    border: var(--hairline) solid var(--border);
+  }
+
+  .modal-scrim.is-leaving {
+    pointer-events: none;
+  }
+}
+
+/* the motion of the above, only where the person has not asked for less */
+@media (min-width: 641px) and (prefers-reduced-motion: no-preference) {
+  .modal-scrim {
+    animation: scrim-in var(--dur-base) var(--ease-out);
+  }
+
+  .modal-scrim > :is(.modal, .menu) {
+    animation: modal-pop-in var(--dur-base) var(--ease-out);
+  }
+
+  .modal-scrim > :is(.new-session-modal, .worktree-modal, .files-dialog, .settings-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet).modal {
+    animation: side-sheet-in var(--dur-slow) var(--ease-out);
+  }
+
+  .modal-scrim.is-leaving {
+    animation: scrim-out var(--dur-fast) var(--ease-in) forwards;
+  }
+
+  .modal-scrim.is-leaving > * {
+    animation: modal-pop-out var(--dur-fast) var(--ease-in) forwards;
+  }
+
+  .modal-scrim.is-leaving > :is(.new-session-modal, .worktree-modal, .files-dialog, .settings-dialog, .session-modal, .usage-account-dialog, .bg-agent-detail, .pr-sheet) {
+    animation: side-sheet-out var(--dur-fast) var(--ease-in) forwards;
+  }
+}
+
+/* a centred dialog fades in and out where it stands: a scale would move the rows a viewer or a
+   list measures while it opens */
+@keyframes modal-pop-in {
+  from { opacity: 0; }
+}
+
+@keyframes modal-pop-out {
+  to { opacity: 0; }
+}
+
+/* a side sheet slides in from the window's edge, never past it: it moves by the inset it rests at */
+@keyframes side-sheet-in {
+  from { opacity: 0; transform: translateX(var(--panel-inset)); }
+}
+
+@keyframes side-sheet-out {
+  to { opacity: 0; transform: translateX(var(--panel-inset)); }
+}
+
+/* a menu fades where it opens: it never moves out from under the pointer that opened it */
+@keyframes popover-in {
+  from { opacity: 0; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
 /* A phone's keyboard is up (lib/viewport.ts): the scrim ends where the keyboard begins, as the
    shell does. An iPhone home screen app keeps the layout viewport at full height under the
    keyboard, so a sheet on the screen's bottom edge sat behind it, its text field included. */
@@ -2535,12 +2674,17 @@ button {
   margin-bottom: var(--space-4);
 }
 
-.field-label {
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  color: var(--text-dim);
+/* One section label everywhere: a dialog's field, a menu's group, the sidebar's lists, the
+   inspector's sections, the palette's groups and Settings' groups name what follows the same way */
+.section-label,
+.field-label,
+.menu-heading {
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-caps);
+  line-height: var(--lh-tight);
   text-transform: uppercase;
+  color: var(--text-dim);
 }
 
 .field-hint {
@@ -2591,6 +2735,11 @@ button {
 }
 
 /* popover menu (palette rows, slash/@ completions) */
+/* a menu drops in; on a scrim it moves as that surface does (no specificity: any sheet wins) */
+:where(.menu) {
+  animation: popover-in var(--dur-fast) var(--ease-out);
+}
+
 .menu {
   display: flex;
   flex-direction: column;
@@ -2652,11 +2801,6 @@ button {
 
 .menu-heading {
   padding: var(--space-2) var(--space-2) var(--space-1);
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  color: var(--text-dim);
 }
 
 /* ---------- sidebar error state (App-owned) ---------- */
@@ -2905,7 +3049,11 @@ button {
   }
 
   .modal-scrim,
-  .modal-scrim > * {
+  .modal-scrim > *,
+  .modal-scrim.is-leaving,
+  .modal-scrim.is-leaving > *,
+  .section-label,
+  .menu {
     animation: none;
   }
 

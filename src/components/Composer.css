@@ -1209,8 +1209,8 @@
 }
 
 .composer-queue-toggle:focus-visible {
-  outline: var(--hairline) solid var(--accent);
-  outline-offset: var(--space-1);
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
   border-radius: var(--radius-sm);
 }
 
@@ -1520,4 +1520,8 @@
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
   }
+}
+
+.composer-strip-pr:empty {
+  display: none;
 }

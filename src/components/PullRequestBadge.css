@@ -1,0 +1,54 @@
+/* A pull request's glyph in its state's colour (--pr-* tokens, styles.css), its number and word in
+   text colour: the state colours of several palettes are under 4.5:1 for small text, and the word
+   (or its screen-reader copy) says the state as well. The glyph's colour fades when the state
+   changes, so a check going red or a merge reads as a change, not a jump. */
+.pull-badge {
+  --pr-tone: var(--pr-open);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+}
+
+.pull-badge.is-failing,
+.pull-badge.is-changes { --pr-tone: var(--pr-failing); }
+.pull-badge.is-review { --pr-tone: var(--pr-review); }
+.pull-badge.is-pending,
+.pull-badge.is-draft,
+.pull-badge.is-closed { --pr-tone: var(--pr-draft); }
+.pull-badge.is-merged { --pr-tone: var(--pr-merged); }
+
+.pull-badge-icon {
+  flex: none;
+  color: var(--pr-tone);
+  transition: color var(--dur-base) var(--ease-out);
+  width: calc(var(--icon-size) * 0.75);
+  height: calc(var(--icon-size) * 0.75);
+}
+
+.pull-badge-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.pull-badge-word {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pull-badge-more {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pull-badge-icon { transition: none; }
+}

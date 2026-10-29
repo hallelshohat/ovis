@@ -10,6 +10,7 @@ import { DEVICES_JA } from "./i18n/devices.ja.ts";
 import { USAGE_JA } from "./i18n/usage.ja.ts";
 import { UPDATES_JA } from "./i18n/updates.ja.ts";
 import { PALETTE_JA } from "./i18n/palette.ja.ts";
+import { PULL_REQUESTS_JA } from "./i18n/pullRequests.ja.ts";
 
 /**
  * Japanese for every `t("…")` in src/ that no part in lib/i18n/ holds: keys more than one feature
@@ -23,6 +24,11 @@ import { PALETTE_JA } from "./i18n/palette.ja.ts";
  * in English. Placeholders in braces keep their English names.
  */
 const BASE: Record<string, string> = {
+  "Draft": "下書き",
+  "Merged": "マージ済み",
+  "failed": "失敗",
+  "running": "実行中",
+  "Pull requests": "プルリクエスト",
   "Closed": "閉じています",
   "Goal": "目標",
   "Waiting for your answer": "回答待ち",
@@ -310,6 +316,7 @@ export const JA_PARTS: Record<string, Record<string, string>> = {
   usage: USAGE_JA,
   updates: UPDATES_JA,
   palette: PALETTE_JA,
+  pullRequests: PULL_REQUESTS_JA,
 };
 
 export const JA: Record<string, string> = Object.assign({}, ...Object.values(JA_PARTS));

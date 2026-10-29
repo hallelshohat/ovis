@@ -1,0 +1,41 @@
+/* The inspector: a column on the chrome's surface beside the inset work panel (styles.css, the
+   workbench), as the Codex app and Conductor keep a PR's checks in view beside the chat. */
+.inspector {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--inspector-w);
+  width: var(--inspector-w);
+  min-width: 0;
+  min-height: 0;
+  margin: 0 var(--panel-inset) var(--panel-inset) 0;
+  background: var(--bg-panel);
+  animation: inspector-in var(--dur-slow) var(--ease-out);
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 0 0 var(--space-1);
+}
+
+.inspector-title {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.inspector-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1) var(--space-1) var(--space-3);
+}
+
+@keyframes inspector-in {
+  from { opacity: 0; transform: translateX(16px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inspector { animation: none; }
+}

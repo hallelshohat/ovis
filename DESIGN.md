@@ -19,6 +19,15 @@ stays the base every theme block overrides and the look a browser keeps when it 
 while amber was the default; the saved theme, not amber, is the page's first frame (see Rules). Settings are saved on a user's first
 change, so a browser that never changed one moves to Codex with everyone new.
 
+The app is a workbench (the Codex app, Conductor): from `641px`, with a mouse or trackpad, the chrome (header, sidebar, tab
+rows) is one surface with no rules between its parts, and each pane is a panel inset from it by
+`--panel-inset`, with its own hairline edge and `--panel-radius` corners, so the work reads as the
+thing on the desk. A split shows two panels. Beside the panel, from `1200px`, the inspector column
+holds what the selected pane is about (its pull requests, below). Dialogs that hold a form or a list
+open as a sheet down the right side so the chat stays in view; a diff takes the panel's place. A
+touch screen keeps the pane edge to edge (its key bar sits on the screen's bottom edge), and a
+phone its bottom sheets.
+
 The sidebar is one grid: a leading cell that says who or what a row is (the coding agent's brand
 mark, else the place's own glyph), a title, and a trailing cell that says how it is. Workspaces
 and Agents are independent lists, as in herdr's Spaces and Agents panels; tab and pane navigation
@@ -150,6 +159,16 @@ The glass tokens are expressions over the palette above, not colors of their own
 | Glass bar | `--bar-bg` | `color-mix(in srgb, var(--bg-panel) 72%, transparent)` | same expression |
 | Glass card | `--card-glass` | `color-mix(in srgb, var(--bg-elevated) 80%, transparent)` | same expression |
 | Glass blur | `--glass-blur` | `saturate(180%) blur(20px)` | same |
+
+A pull request's state takes the agent states' colours, so every palette draws it:
+
+| Role | Token | Dark | Light |
+|------|-------|------|-------|
+| PR open | `--pr-open` | `var(--status-done)` | same expression |
+| PR checks failing | `--pr-failing` | `var(--status-blocked)` | same expression |
+| PR draft | `--pr-draft` | `var(--status-idle)` | same expression |
+| PR review requested | `--pr-review` | `var(--notice)` | same expression |
+| PR merged | `--pr-merged` | `var(--syntax-meta)` | same expression |
 
 `--pdf-page` is the one color with the same value in both columns, on purpose: a PDF page is
 paper, not UI, and the viewer (`.file-viewer-pdf`) must not tint it for the theme. It is named in
@@ -736,6 +755,13 @@ Comfortable values are `:root`; the final column is the complete compact overrid
 | `--chat-fold-lines` | `12` | — | Lines of prose a long user message shows before it folds behind Show full message (Chat turn); `lib/userMessageFold.ts` folds a message past the same count |
 | `--palette-w` | `640px` | — | Command palette |
 | `--palette-top` | `12vh` | — | Palette top offset |
+| `--panel-inset` | `var(--space-2)` | — | Workbench: the gap between the app's edge and the inset work panel, and around a desktop side sheet |
+| `--panel-radius` | `var(--radius-lg)` | — | Workbench: the work panel's corners |
+| `--inspector-w` | `300px` | — | Workbench: the inspector column beside the work panel, until the person drags its edge |
+| `--side-sheet-w` | `560px` | — | A desktop side sheet (a dialog that holds a form or a list): the centred dialog's old width, so what fits inside it is unchanged |
+| `--side-sheet-w-wide` | `760px` | — | Settings as a desktop side sheet |
+| `--timeline-rail` | `2px` | — | A work block's rail its tool calls hang on |
+| `--timeline-node` | `8px` | — | A tool call's node on that rail |
 | `--context-line` | `calc(var(--fs-lg) * var(--lh-base))` = `24px` | `21.75px`, through the scale | The selected pane's crumb row, min and max height. Scoped to `.context`, not `:root`, so it follows `--fs-lg`/`--lh-base` in either density |
 
 ### Focus and layers
@@ -871,8 +897,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - `Mod` resolves to `⌘` on Apple platforms and `Ctrl` elsewhere.
 
 ### Modal (`.modal*`)
-- `.modal-scrim` centers an `aria-modal` dialog at `--z-modal`; `.modal` is a capped scrollable
+- `.modal-scrim` holds an `aria-modal` dialog at `--z-modal`; `.modal` is a capped scrollable
   column with header, body and footer and `--shadow-pop`.
+- From `641px` a dialog that holds a form or a list (New workspace, Worktree, Files, Settings,
+  Session history, a plan account, a background agent) is a sheet down the right side, full height
+  inside `--panel-inset`, `--side-sheet-w` wide (`--side-sheet-w-wide` for Settings), so the chat
+  stays in view beside it, as the Codex app and Conductor open their side panels. It slides in from
+  the window's edge (`--panel-inset`, never past it) with a fade (`--dur-slow`) and out the same way (`--dur-fast`, `--ease-in`). A confirm, the
+  palette, the file and diff viewers and the lightboxes stay centred: they fade in (`--dur-base`)
+  and out, with no scale, so what they measure while they open is true. lib/sheets.ts draws every exit, desktop and phone.
 - At `<=640px`, it becomes a bottom sheet with top `--radius-xl` corners and safe-area padding.
   Every surface on a `.modal-scrim` (dialogs, the palette, the row sheet) rises from the bottom
   edge as an iPhone's sheet does (`--dur-sheet` on `--ease-spring`, the scrim darkening with it),
@@ -2118,6 +2151,44 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   follows T3 Code's separation of [transport health and data freshness](https://github.com/pingdotgg/t3code/blob/main/docs/internals/connection-runtime.md):
   an open socket alone does not prove the conversation is current. No code or new controls are borrowed.
 
+### Inspector (`.inspector`)
+- A column on the chrome's surface beside the work panel (`--inspector-w`), from `1200px`: its head
+  is a section label and a close; Escape inside it closes it, and it never takes the focus on its
+  own. It slides in from `16px` (`--dur-slow`). It shows only when the selected pane has something
+  to show (today: pull requests), and a docked file or page takes its place. Below `1200px` the same
+  content opens as a side sheet, and on a phone as a bottom sheet, from the header.
+
+### Pull requests (`.pull-badge`, `.pr-card`, `.pr-event`)
+- A chat holds a list of pull requests, never one (T3 Code's threads keep a list too; Conductor's
+  one workspace, one PR, and the Codex app's one PR per task, do not fit an agent that switches
+  branches in one worktree). The server (`server/pull-requests/`) collects the GitHub PR links the
+  chat's transcript wrote and the PRs of every branch the chat ran on (Claude Code's per-message
+  `gitBranch`, Codex's session-start branch, else the branch seen while the chat was open), and asks
+  `gh` in the pane's folder. A PR found only through a branch that ended before the chat began is
+  left out; one the chat links stays. Open PRs are read again after the chat has been quiet `10s`
+  past a change and every `60s` while the page is seen; merged and closed ones are read once.
+- One leads: the one that needs the person first (failing checks, requested changes, a requested
+  review, running checks, ready to merge, draft, merged, closed). Its badge is a glyph in the
+  state's colour (`--pr-*`, aliases of the agent states', so every palette draws it) beside its
+  number and word in `--text`: several palettes keep their state colours under 4.5:1 for small text,
+  so text never takes them (`src/pr-contrast.test.ts`); an ended PR is quieter by its dim title, never faded; `+N` counts the
+  chat's other open ones. A sidebar row and the composer strip draw the glyph and number, the
+  header the number and the state word (the word goes below `768px`, the number below `480px`).
+  Another repository's PR is named `repo#N`. A state change fades the colour (`--dur-base`).
+- The inspector lists the open ones first, the lead drawn whole (title, `head → base`, lines, every
+  check, the review), the others one line each, then the merged and closed ones under Earlier in this
+  chat. Ask … to fix puts a request naming the failing checks in the message box, after anything
+  already there, and focuses it: nothing is sent. Squash and merge shows only on an open lead with
+  green checks, asks first (a confirm), and the server reads the PR again before it merges and says
+  what it is now when it no longer can (`409 pr_not_mergeable`).
+- The thread tells the story where it happened: one line per PR opened, merged or closed, edged in
+  its state's colour, and a quieter line for a branch switch, each placed before the first turn that
+  began after it.
+- No `gh` or a signed-out `gh` draws nothing on the rows. When the chat wrote PR links that `gh`
+  cannot read, the header shows the PR glyph alone, dim, named with the reason; it opens the
+  inspector, which says the one sentence for it (GitHub CLI not found, signed out). A chat with no
+  PR links says nothing: the resting screen stays calm.
+
 ### Work block (`.work-block`, `.work-row`)
 - A turn reads in the order it was written, as Claude Code's terminal draws it: the agent's words
   (`⏺ …` there) stand where they were said, in answer prose, never inside a fold; each run of tool
@@ -2142,6 +2213,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   arrives the row folds and the output is the call's own. A finished command says its exit status
   as the terminal does, `exit 0` in mono, a nonzero code in `--status-blocked`, only when the
   transcript records it (Claude's `Exit code N` result or ok flag, Codex's output line).
+- The rows hang on a timeline (the Codex app's run log): a `--timeline-rail` rail down the block's
+  left, `--status-working` while the agent runs, and a `--timeline-node` node per call in its
+  state's colour (done, error) or an open ring while the call is still running, which fills as it
+  settles (`--dur-base`). A row's detail opens at once: a growing row inside the chat's virtual list
+  would move the rows the reader is looking at while the list measures it.
 - A row is caret + verb + object: `▸ Read src/metrics.ts`, `▸ Edited src/pages/Reports.tsx`,
   `▸ Ran pnpm test`. The caret is always shown; there is no per-tool icon and no separator. The
   verb (Read, Edited, Wrote, Ran; `lib/toolVerbs.ts`, by exact tool id) is in the interface face,
@@ -3282,13 +3358,15 @@ The values are the ones in `src/styles.css`.
 | Spring easing | `--ease-spring` | `cubic-bezier(0.32, 0.72, 0, 1)` | Voice recording pill enter (180ms, scale 0.96->1 + opacity, from the mic button) and exit (120ms); a phone's sheet rising and springing back |
 | Sheet in | `--dur-sheet` | `360ms` | A phone's sheet rising, and springing back after a short drag |
 | Sheet out | `--dur-sheet-out` | `240ms` | A phone's sheet dropping, however it closed |
+| Slow | `--dur-slow` | `240ms` | A desktop side sheet or the inspector sliding in |
+| Ease in | `--ease-in` | `cubic-bezier(0.4, 0, 1, 1)` | Anything leaving: a dialog's exit, a popover closing |
 
 ### Rules
 - Only state changes move: hover/press, the drawer, a phone's sheets, settings switches, working and
   reconnecting.
-- From `641px` dialogs and their scrims snap open and closed; they have no entrance or exit
-  animation. At `<=640px` they are bottom sheets and move as an iPhone's do (Modal, above): what a
-  finger drags follows the finger, and the rest rises and drops.
+- From `641px` a side sheet slides in from the right and a centred dialog pops in (Modal, above);
+  both leave the way they came, faster than they came. At `<=640px` they are bottom sheets and move
+  as an iPhone's do: what a finger drags follows the finger, and the rest rises and drops.
 - The voice recording waveform is the one surface allowed to draw every frame: only while
   recording, driven by the live microphone level, transform-only (`scaleY` on 7 bars). The pill is
   a state change, not a dialog, so the snap rule above does not apply to it.
