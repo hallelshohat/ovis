@@ -1,4 +1,5 @@
 import { apiFetch } from "./api-request-id.ts";
+import type { PanePullRequests } from "../../shared/pull-requests.ts";
 import type { PreferencesChange, SharedPreferences } from "../../shared/preferences.ts";
 import type { AlertWebhookSave, AlertWebhookView } from "../../shared/alert-webhook.ts";
 import type { SeenFinish, SeenPresentation } from "../../shared/seen.ts";
@@ -1363,7 +1364,7 @@ export async function fetchPullRequestLog(target: PullRequestTarget, jobId: stri
 }
 
 /** POST /api/workspace/pr/merge: merges the pull request at the head it was read at, with the method shown. */
-export async function mergePullRequest(target: PullRequestTarget, merge: Pick<PullRequestMergeRequest, "number" | "head_oid" | "base_ref" | "method">, machineId = "local"): Promise<void> {
+export async function mergeWorkspacePullRequest(target: PullRequestTarget, merge: Pick<PullRequestMergeRequest, "number" | "head_oid" | "base_ref" | "method">, machineId = "local"): Promise<void> {
   await sendJson(machinePath(machineId, "workspace/pr/merge"), "POST", { ...(target.paneId ? { pane_id: target.paneId } : {}), ...(target.directory ? { directory: target.directory } : {}), ...merge } satisfies PullRequestMergeRequest);
 }
 
@@ -1586,6 +1587,16 @@ export async function fetchPanePromptState(paneId: string, machineId = "local"):
 /** POST /api/pane/prompt/answer: ApiError 409 `prompt_changed` when the menu moved on. */
 export async function answerPanePrompt(answer: PromptAnswer, machineId = "local"): Promise<void> {
   await sendJson(machinePath(machineId, "pane/prompt/answer"), "POST", answer);
+}
+
+/** GET /api/pane/pull-requests: the chat's pull requests, the leading one first; fresh asks GitHub again for the open ones. */
+export async function fetchPullRequests(paneId: string, fresh: boolean, machineId = "local"): Promise<PanePullRequests> {
+  return getJson<PanePullRequests>(machinePath(machineId, `pane/pull-requests?pane_id=${encodeURIComponent(paneId)}${fresh ? "&fresh=1" : ""}`));
+}
+
+/** POST /api/pane/pull-requests/merge: squash one of the chat's open PRs; a 409 says what it is now. */
+export async function mergePullRequest(paneId: string, url: string, machineId = "local"): Promise<void> {
+  await sendJson(machinePath(machineId, "pane/pull-requests/merge"), "POST", { pane_id: paneId, url });
 }
 
 /** GET /api/push: the server's VAPID key, the `applicationServerKey` this device subscribes with. */

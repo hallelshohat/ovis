@@ -4,7 +4,7 @@ import { FolderSearch, X } from "lucide-react";
 import "./FilesDialog.css";
 import { DirectoryBrowser } from "./DirectoryBrowser.tsx";
 import { MarkdownDocuments } from "./MarkdownDocuments.tsx";
-import { PullRequestPanel } from "./PullRequestPanel.tsx";
+import { WorkspacePullRequestPanel } from "./WorkspacePullRequestPanel.tsx";
 import { RepoChanges } from "./RepoChanges.tsx";
 import type { RepoDiffFile } from "../../shared/protocol.ts";
 import { useT } from "../lib/i18n.ts";
@@ -143,7 +143,7 @@ export function FilesDialog({ start, paneId, viewing, onOpenFile, onOpenDiff, on
       {/* not keyed by PC and pane: Changes keeps its scope (Branch) across a switch and itself drops answers for the target left behind */}
       {changesVisited && <div id="files-dialog-panel-changes" className="files-dialog-panel" role="region" aria-labelledby="files-dialog-tab-changes" hidden={tab !== "changes"}><RepoChanges paneId={paneId} directory={start} onOpenDiff={onOpenDiff} /></div>}
       {/* one panel per PC and pane: an answer or a merge still on its way for the last pane never lands in this one */}
-      {prVisited && <div id="files-dialog-panel-pr" className="files-dialog-panel" role="region" aria-labelledby="files-dialog-tab-pr" hidden={tab !== "pr"}><PullRequestPanel key={`${machineId}:${paneId}`} paneId={paneId} directory={start} machineName={machineName} /></div>}
+      {prVisited && <div id="files-dialog-panel-pr" className="files-dialog-panel" role="region" aria-labelledby="files-dialog-tab-pr" hidden={tab !== "pr"}><WorkspacePullRequestPanel key={`${machineId}:${paneId}`} paneId={paneId} directory={start} machineName={machineName} /></div>}
       {/* one list per PC and pane, as the browser: a pane switch reads the new pane's folder */}
       {docsVisited && <div id="files-dialog-panel-docs" className="files-dialog-panel" role="region" aria-labelledby="files-dialog-tab-docs" hidden={tab !== "docs"}><MarkdownDocuments key={`${machineId}:${paneId}`} paneId={paneId} onOpenFile={onOpenFile} /></div>}
     </div>

@@ -1,0 +1,40 @@
+/**
+ * Japanese for the keys only the pull request files use:
+ * components/PullRequestBadge.tsx, components/PullRequestPanel.tsx, components/PrEventRow.tsx.
+ * Register and fixed terms follow ../i18n.ja.ts; a key another feature also uses goes there.
+ */
+export const PULL_REQUESTS_JA: Record<string, string> = {
+  "Checks failing": "チェック失敗",
+  "Checks running": "チェック実行中",
+  "Review requested": "レビュー依頼中",
+  "Changes requested": "変更を要求されています",
+  "Ready to merge": "マージ可能",
+  "{n} more open": "ほかに {n} 件オープン",
+  "A pull request this chat opens shows here.": "このチャットで開いたプルリクエストがここに表示されます。",
+  "Approved": "承認済み",
+  "Ask {agent} to fix": "{agent} に修正を依頼",
+  "Checks": "チェック",
+  "Earlier in this chat": "このチャットの以前のもの",
+  "GitHub CLI is signed out": "GitHub CLI がサインアウトしています",
+  "GitHub CLI not found": "GitHub CLI が見つかりません",
+  "GitHub did not answer": "GitHub から応答がありません",
+  "Hide pull requests": "プルリクエストを隠す",
+  "Install gh on this PC to see this chat's pull requests.": "このチャットのプルリクエストを見るには、この PC に gh をインストールしてください。",
+  "Merge {label}?": "{label} をマージしますか？",
+  "Needs attention first": "要対応のものが先頭",
+  "No GitHub remote": "GitHub のリモートがありません",
+  "No pull requests yet": "プルリクエストはまだありません",
+  "Open pull requests": "オープンなプルリクエスト",
+  "Open {label} on GitHub": "{label} を GitHub で開く",
+  "Open · {n}": "オープン · {n}",
+  "Pull requests show again on the next try.": "次の試行でプルリクエストが再び表示されます。",
+  "Run gh auth login on this PC.": "この PC で gh auth login を実行してください。",
+  "Show pull requests": "プルリクエストを表示",
+  "Squash and merge": "スカッシュしてマージ",
+  "Squash and merge {title} into {base}.": "{title} を {base} にスカッシュしてマージします。",
+  "This folder's repository is not on GitHub.": "このフォルダーのリポジトリは GitHub にありません。",
+  "passed": "成功",
+  "Opened": "オープン",
+  "Branch {from} → {to}": "ブランチ {from} → {to}",
+  "Pull requests: {reason}": "プルリクエスト: {reason}",
+};

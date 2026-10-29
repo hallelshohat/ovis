@@ -42,7 +42,7 @@ export function turnSegments(parts: ConversationPart[]): TurnSegment[] {
     if (isProse(part)) {
       if (last?.kind === "answer") last.parts.push(part);
       else segments.push({ kind: "answer", start: index, parts: [part] });
-    } else if (part.kind !== "text") {
+    } else if (isWork(part)) {
       if (last?.kind === "work") last.parts.push(part);
       else segments.push({ kind: "work", start: index, parts: [part] });
     }

@@ -1,7 +1,8 @@
 import { moveDestinations } from "../lib/layoutTargets.ts";
 import { useAppLayout, MachineContext, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { Bell, Columns2, CornerLeftUp, Folder, FolderInput, FolderOpen, FolderSearch, GitBranch, Globe, History, ListFilter, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, PanelLeft, Pencil, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, TextSearch, X } from "lucide-react";
+import { EmptyState } from "./EmptyState.tsx";
+import { Bell, Columns2, CornerLeftUp, Folder, FolderInput, FolderOpen, FolderSearch, GitBranch, Globe, History, ListFilter, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, PanelLeft, Pencil, Pin, Plus, Puzzle, RefreshCw, Rows2, Search, Settings, SunMoon, SwitchCamera, TextSearch, X } from "lucide-react";
 
 import "./CommandPalette.css";
 
@@ -789,7 +790,7 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
             </div>
             );
           })}
-          {(itemCount === 0 || listingFailed) && <p className="palette-empty" role="status">{emptyText}</p>}
+          {(itemCount === 0 || listingFailed) && <EmptyState className="palette-empty" icon={listingFailed ? FolderSearch : Search} title={emptyText} />}
           {/* the empty list says what to do next (G-118): a query or a filter narrowed it, and both are a key away */}
           {itemCount === 0 && folder === null && (text !== "" || filter !== "all") && <p className="palette-empty palette-empty-hint">{t(filter !== "all" ? "Try fewer words, or pick All above to search every pane." : "Try fewer words, or clear the search.")}</p>}
           {listingFailed && (
