@@ -65,6 +65,22 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     await button.click();
     await inspector.waitFor();
 
+    // a file docked beside the pane takes the inspector's column: the button opens the PRs as a sheet, and the file stays
+    await page.locator(".chat-view a, .chat-view button").filter({ hasText: /^src\/lib\/idempotency\.ts$/ }).first().click();
+    await page.getByRole("button", { name: "Show beside the pane", exact: true }).click();
+    await page.locator(".file-viewer-docked").waitFor();
+    assert.equal(await inspector.count(), 0, `${theme}: a docked file holds the column`);
+    await button.click();
+    const sheet = page.locator(".modal.pr-sheet");
+    await sheet.waitFor();
+    assert.equal(await button.getAttribute("aria-expanded"), "true", `${theme}: the button says the sheet is open`);
+    assert.equal(await sheet.getByText("client-sdk#88", { exact: true }).count() > 0, true, `${theme}: the sheet lists the PRs`);
+    await page.keyboard.press("Escape");
+    await sheet.waitFor({ state: "detached" });
+    assert.equal(await page.locator(".file-viewer-docked").count(), 1, `${theme}: the file stays docked`);
+    await page.locator(".file-viewer-docked").getByRole("button", { name: /^Close/ }).first().click();
+    await inspector.waitFor();
+
     const story = await page.locator(".pr-event").evaluateAll((rows) => rows.map((row) => (row.querySelector(".pr-event-verb")?.textContent ?? "branch") + " " + (row.querySelector(".pull-badge-number")?.textContent ?? "")));
     assert.deepEqual(story, ["Opened #1925", "Merged #1925", "branch ", "Opened #1931", "Opened client-sdk#88"], `${theme}: the thread tells the PRs' story in order`);
 
