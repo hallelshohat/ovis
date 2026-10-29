@@ -20,7 +20,12 @@ export interface PrStatus {
   checks: string | null;
   review: { text: string; tone: PrTone } | null;
   diff: string | null;
+  /** `pr_threads` (`2 threads`), null when there are none open */
+  threads: string | null;
 }
+
+/** where an open pull request stands in one word, or its state when it is not open */
+export type PrWord = "ready" | "review" | "changes" | "running" | "failed" | "draft" | "merged" | "closed";
 
 /** the plugin's glyph for each rolled state, compact and emoji */
 const GLYPHS: Record<string, { state: PrState; checks: PrTone }> = {
@@ -62,6 +67,7 @@ export function prStatus(tokens: Readonly<Record<string, unknown>> | null | unde
   const state = (match[3] === undefined ? undefined : LABELS[match[3]]) ?? glyph?.state ?? "open";
   const checks = text(tokens, "pr_checks");
   const review = text(tokens, "pr_review");
+  const threads = text(tokens, "pr_threads");
   return {
     number: Number(match[2]),
     state,
@@ -69,7 +75,18 @@ export function prStatus(tokens: Readonly<Record<string, unknown>> | null | unde
     checks,
     review: review === null ? null : { text: review, tone: reviewTone(review) },
     diff: text(tokens, "pr_diff"),
+    threads: threads === null || /^0\b/.test(threads) ? null : threads,
   };
+}
+
+/** The badge's word for a pull request: failing checks first, then a review's answer, then running checks. */
+export function prStatusWord(pr: PrStatus): PrWord {
+  if (pr.state !== "open") return pr.state;
+  if (pr.checksTone === "fail") return "failed";
+  if (pr.review?.tone === "fail") return "changes";
+  if (pr.checksTone === "pending") return "running";
+  if (pr.review?.tone === "pending") return "review";
+  return "ready";
 }
 
 /**
