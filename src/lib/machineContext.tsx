@@ -96,7 +96,7 @@ export function useMachineApi() {
     fetchRepoDiffRefs: (query: Pick<api.RepoDiffQuery, "paneId" | "directory">) => api.fetchRepoDiffRefs(query, id),
     fetchPullRequest: (target: api.PullRequestTarget) => api.fetchPullRequest(target, id),
     fetchPullRequestLog: (target: api.PullRequestTarget, jobId: string, host: string) => api.fetchPullRequestLog(target, jobId, host, id),
-    mergePullRequest: (target: api.PullRequestTarget, merge: Parameters<typeof api.mergePullRequest>[1]) => api.mergePullRequest(target, merge, id),
+    mergePullRequest: (target: api.PullRequestTarget, merge: Parameters<typeof api.mergeWorkspacePullRequest>[1]) => api.mergeWorkspacePullRequest(target, merge, id),
     createWorkspace: (request: api.CreateWorkspaceRequest) => api.createWorkspace(request, id),
     createTab: (request: api.CreateTabRequest) => api.createTab(request, id),
     fetchSessionHistory: (workspace: string, agent: SessionHistoryAgent, pane: string | null = null) => api.fetchSessionHistory(workspace, agent, id, pane),
