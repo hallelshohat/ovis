@@ -2636,8 +2636,9 @@ button {
   to { opacity: 0; transform: translateX(24px); }
 }
 
+/* a menu fades where it opens: it never moves out from under the pointer that opened it */
 @keyframes popover-in {
-  from { opacity: 0; transform: translateY(-4px); }
+  from { opacity: 0; }
 }
 
 @keyframes fade-in {
