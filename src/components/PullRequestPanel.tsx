@@ -76,6 +76,8 @@ export function PullRequestPanel({ data, machineId, paneId, agentName }: PullReq
         onConfirm={async () => {
           await mergePullRequest(paneId, merging.url, machineId);
           await refreshPullRequests(machineId, paneId);
+          // the owner takes a confirmation down once its deed is done (ConfirmDialog.tsx)
+          setMerging(null);
         }}
         onClose={() => setMerging(null)}
       />}

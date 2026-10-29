@@ -81,6 +81,8 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     assert.match(await confirm.innerText(), /Merge #1940\?/);
     await confirm.getByRole("button", { name: "Squash and merge", exact: true }).click();
     await page.locator(".pr-header-button .pr-badge.is-merged").waitFor();
+    await confirm.waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => document.activeElement?.closest("[role=dialog], [role=alertdialog]") ?? null), null, `${theme}: a done merge leaves no dialog holding the focus`);
     assert.equal(await inspector.getByText("Earlier in this chat", { exact: true }).count(), 1, `${theme}: a merged PR moves under Earlier in this chat`);
     await shot(page, `merged-${theme}`);
     assert.deepEqual(errors, []);
