@@ -143,7 +143,7 @@ async function reducedMotion(browser: Browser, origin: string): Promise<void> {
     const page = await context.newPage();
     await page.goto(`${origin}/?pane=${encodeURIComponent(panes.api)}`);
     await page.locator("#pull-requests").waitFor();
-    await page.getByRole("button", { name: "New workspace on workstation" }).click();
+    await page.locator(".machine-new-row").click();
     await page.locator(".new-session-modal").waitFor();
     const moving = await page.evaluate(() => document.getAnimations().filter((animation) => animation.playState === "running" && !(animation instanceof CSSAnimation && /pulse|breathe|spin/.test(animation.animationName))).length);
     if (moving !== 0) console.log(await page.evaluate(() => document.getAnimations().map((a) => `${a instanceof CSSAnimation ? a.animationName : a instanceof CSSTransition ? a.transitionProperty : "web"} ${a.playState} ${(a.effect as KeyframeEffect | null)?.target?.className}`)));
