@@ -1943,8 +1943,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - The thread tells the story where it happened: one line per PR opened, merged or closed, edged in
   its state's colour, and a quieter line for a branch switch, each placed before the first turn that
   began after it.
-- No `gh`, a signed-out `gh` or a folder with no GitHub remote draws nothing on the rows; the
-  inspector says the one sentence for it.
+- No `gh` or a signed-out `gh` draws nothing on the rows. When the chat wrote PR links that `gh`
+  cannot read, the header shows the PR glyph alone, dim, named with the reason; it opens the
+  inspector, which says the one sentence for it (GitHub CLI not found, signed out). A chat with no
+  PR links says nothing: the resting screen stays calm.
 
 ### Work block (`.work-block`, `.work-row`)
 - One per assistant turn: a `▸ Worked for 7s · 1 edit · 2 commands` header (duration = next turn's

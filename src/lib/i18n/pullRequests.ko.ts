@@ -39,4 +39,5 @@ export const PULL_REQUESTS_KO: Record<string, string> = {
   "passed": "통과",
   "Opened": "열림",
   "Branch {from} → {to}": "브랜치 {from} → {to}",
+  "Pull requests: {reason}": "풀 리퀘스트: {reason}",
 };

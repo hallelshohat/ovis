@@ -182,3 +182,10 @@
 @media (max-width: 480px) {
   .pr-header-button .pr-badge-number { display: none; }
 }
+
+/* links gh cannot read: the glyph alone, dim, with no state of its own to say */
+.pr-header-unread {
+  width: calc(var(--icon-size) * 0.85);
+  height: calc(var(--icon-size) * 0.85);
+  color: var(--text-dim);
+}

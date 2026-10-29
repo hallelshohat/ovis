@@ -126,7 +126,16 @@ function GitHubLink({ pr }: { pr: PullRequest }) {
 export function PrHeaderButton({ data, expanded, controls, onToggle }: { data: PanePullRequests | null; expanded: boolean; controls: string; onToggle(): void }) {
   const t = useT();
   const lead = data?.pull_requests[0];
-  if (!lead) return null;
+  // links the chat wrote that gh cannot read: a quiet way in to the sentence that says why
+  if (!lead && data && data.gh !== "ok" && data.linked > 0) {
+    const sentence = ghSentence(data.gh, t).title;
+    return (
+      <button type="button" className="pr-header-button is-unread" aria-expanded={expanded} aria-controls={controls} aria-label={t("Pull requests: {reason}", { reason: sentence })} title={sentence} onClick={onToggle}>
+        <GitPullRequest className="pr-header-unread" aria-hidden="true" />
+      </button>
+    );
+  }
+  if (!lead || !data) return null;
   const more = data.pull_requests.filter((pr) => pr !== lead && (pr.state === "open" || pr.state === "draft")).length;
   return (
     <button type="button" className="pr-header-button" aria-expanded={expanded} aria-controls={controls} title={expanded ? t("Hide pull requests") : t("Show pull requests")} onClick={onToggle}>

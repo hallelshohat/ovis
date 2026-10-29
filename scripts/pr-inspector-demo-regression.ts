@@ -21,7 +21,9 @@ const recorder = `(() => {
   window.__requests = [];
   window.fetch = (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    window.__requests.push(((init && init.method) || (input instanceof Request ? input.method : "GET")) + " " + new URL(url, location.href).pathname);
+    const path = new URL(url, location.href).pathname;
+    window.__requests.push(((init && init.method) || (input instanceof Request ? input.method : "GET")) + " " + path);
+    if (window.__prAnswer && path.endsWith("/pane/pull-requests")) return Promise.resolve(new Response(JSON.stringify(window.__prAnswer), { headers: { "content-type": "application/json" } }));
     return own(input, init);
   };
 })();`;
@@ -111,6 +113,28 @@ async function phone(browser: Browser, origin: string): Promise<void> {
   } finally { await context.close(); }
 }
 
+async function ghMissing(browser: Browser, origin: string): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US" });
+  try {
+    await context.addInitScript(() => {
+      if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+      // this PC has no gh: the chat wrote one PR link it cannot read
+      (window as unknown as { __prAnswer: unknown }).__prAnswer = { gh: "missing", linked: 1, events: [], pull_requests: [] };
+    });
+    const page = await context.newPage();
+    await page.goto(`${origin}/?pane=${encodeURIComponent(panes.api)}`);
+    const button = page.locator(".pr-header-button.is-unread");
+    await button.waitFor();
+    assert.equal(await button.getAttribute("aria-label"), "Pull requests: GitHub CLI not found");
+    const inspector = page.locator("#pull-requests");
+    if (await inspector.count() === 0) await button.click();
+    await inspector.getByText("GitHub CLI not found", { exact: true }).waitFor();
+    assert.ok(await inspector.getByText("Install gh on this PC to see this chat's pull requests.", { exact: true }).isVisible());
+    await shot(page, "gh-missing");
+    console.log("PASS gh missing: the header's quiet button opens the inspector, which says why");
+  } finally { await context.close(); }
+}
+
 async function reducedMotion(browser: Browser, origin: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US", reducedMotion: "reduce" });
   try {
@@ -147,6 +171,7 @@ try {
     try {
       for (const theme of ["dark", "light"] as const) await desktop(browser, origin, theme);
       await phone(browser, origin);
+      await ghMissing(browser, origin);
       await reducedMotion(browser, origin);
     } finally { await browser.close(); }
   } finally { server.stop(true); }

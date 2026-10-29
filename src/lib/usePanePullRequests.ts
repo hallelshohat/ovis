@@ -128,7 +128,8 @@ export function usePullRequestInspector(machineId: string, paneId: string | null
   const docked = useMediaQuery("(min-width: 1200px)");
   const [panelOpen, setPanelOpen] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
-  const shown = (pullRequests?.pull_requests.length ?? 0) > 0;
+  // PRs to show, or links the chat wrote that gh cannot read: then the inspector says why
+  const shown = (pullRequests?.pull_requests.length ?? 0) > 0 || (pullRequests !== null && pullRequests.gh !== "ok" && pullRequests.linked > 0);
   const toggle = (): void => { if (docked) setPanelOpen((open) => !open); else setSheetOpen(true); };
   return { pullRequests, docked, shown, panelOpen, setPanelOpen, sheetOpen, setSheetOpen, toggle, expanded: docked ? panelOpen && shown : sheetOpen };
 }

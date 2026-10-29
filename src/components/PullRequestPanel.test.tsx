@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { byAttention, type PanePullRequests, type PullRequest } from "../../shared/pull-requests.ts";
 import { SettingsProvider } from "../lib/settings.ts";
-import { fixRequest, PullRequestPanel } from "./PullRequestPanel.tsx";
+import { fixRequest, PrHeaderButton, PullRequestPanel } from "./PullRequestPanel.tsx";
 
 Object.defineProperty(navigator, "languages", { configurable: true, value: ["en-US"] });
 
@@ -43,5 +43,14 @@ describe("the pull request panel", () => {
 
   it("asks to fix the failing checks by name, for the person to send", () => {
     expect(fixRequest(failing)).toBe("These checks failed on client-sdk#88 (Send Idempotency-Key from the SDK): Integration and browser. Please fix them and push the branch.");
+  });
+
+  it("gives a way in to why when the chat wrote links gh cannot read, and stays quiet otherwise", () => {
+    const button = (data: PanePullRequests) => renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(PrHeaderButton, { data, expanded: false, controls: "pull-requests", onToggle: () => {} }) }));
+    const unread = button({ gh: "missing", linked: 2, events: [], pull_requests: [] });
+    expect(unread).toContain('class="pr-header-button is-unread"');
+    expect(unread).toContain('aria-label="Pull requests: GitHub CLI not found"');
+    expect(button({ gh: "missing", linked: 0, events: [], pull_requests: [] })).toBe("");
+    expect(button({ gh: "ok", linked: 0, events: [], pull_requests: [] })).toBe("");
   });
 });
