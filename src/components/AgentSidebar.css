@@ -247,7 +247,7 @@
   .agent-item:has(> .agent-row:enabled):hover { background: var(--side-hover); }
 }
 
-.agent-item.is-selected { background: var(--side-selected); }
+.agent-item.is-selected { background: var(--side-selected); box-shadow: var(--side-selected-edge); }
 
 /* as a workspace row's in forced colors (Sidebar.css): a Highlight leading bar instead of the erased fill,
    drawn inside the row, since the list scrolls and would clip anything pulled into its edge; beside the focus

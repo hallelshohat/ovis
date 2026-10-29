@@ -21,13 +21,15 @@ async function checkState(page: Page, visible: boolean, height: number, inset: n
       padding: parseFloat(getComputedStyle(composer).paddingBottom),
       hostPadding: parseFloat(getComputedStyle(document.querySelector(".terminal-host")!).paddingBottom),
       bottom: composer.getBoundingClientRect().bottom,
+      // the workbench insets the pane with a mouse (styles.css): there the composer ends where the pane's panel does
+      panelGap: ((host) => parseFloat(host.marginBottom))(getComputedStyle(document.querySelector(".terminal-host")!)),
       space: parseFloat(getComputedStyle(root).getPropertyValue(visible ? "--space-2" : "--space-4")),
     };
   }, visible);
   assert.equal(state.keyboard, visible, "keyboard flag follows occlusion, not focus alone");
   assert.equal(state.published, visible || correction ? `${height}px` : "", "height override follows keyboard or measured standalone inset");
   assert.equal(state.height, height, "unobstructed standalone shell remains 100dvh without a blank band");
-  assert.equal(state.bottom, height, "composer stays at the shell bottom");
+  assert.equal(state.bottom + state.panelGap, height, "composer stays at the shell bottom (the pane panel's, with a mouse)");
   assert.equal(state.padding, visible ? state.space : Math.max(state.space, inset - state.space), "home indicator padding is restored on dismissal");
   assert.equal(state.hostPadding, 0, "home-indicator inset is not duplicated by the host");
 }

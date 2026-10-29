@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Folder, FolderOpen, GitBranch, GitMerge, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Folder, FolderOpen, GitBranch, GitCompare, GitMerge, RefreshCw } from "lucide-react";
+import { EmptyState } from "./EmptyState.tsx";
 
 import "./RepoChanges.css";
 import { FileGlyph } from "./FileGlyph.tsx";
@@ -345,7 +346,7 @@ export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps)
             </span>)}
           </li>}
           {listing !== null && answered !== null && rows(tree, listing.files, answered)}
-          {listing !== null && listing.files.length === 0 && <li className="repo-changes-note">{nothingChangedWord(t, listing.scope)}</li>}
+          {listing !== null && listing.files.length === 0 && <li className="repo-changes-note"><EmptyState icon={GitCompare} title={nothingChangedWord(t, listing.scope)} /></li>}
           {listing?.truncated && <li className="repo-changes-note" role="status">
             {listing.total === null
               ? t("The list was cut short; only the first {count} files are shown.", { count: listing.files.length.toLocaleString(locale) })

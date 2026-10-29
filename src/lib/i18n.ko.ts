@@ -18,6 +18,7 @@ import { UPDATES_KO } from "./i18n/updates.ko.ts";
 import { PALETTE_KO } from "./i18n/palette.ko.ts";
 import { RELAY_KO } from "./i18n/relay.ko.ts";
 import { RUNTIME_MOVE_KO } from "./i18n/runtime-move.ko.ts";
+import { PULL_REQUESTS_KO } from "./i18n/pullRequests.ko.ts";
 
 /**
  * Korean for every `t("…")` in src/ that no part in lib/i18n/ holds: keys more than one feature
@@ -83,6 +84,11 @@ const BASE: Record<string, string> = {
   "Remove": "제거",
   "Remove {name}": "{name} 제거",
   "Save": "저장",
+  "Draft": "초안",
+  "Merged": "병합됨",
+  "failed": "실패",
+  "running": "실행 중",
+  "Pull requests": "풀 리퀘스트",
   "Closed": "닫힘",
   "Goal": "목표",
   "Waiting for your answer": "답변을 기다리는 중",
@@ -97,7 +103,6 @@ const BASE: Record<string, string> = {
   "{current} of {total}": "{total}개 중 {current}",
   "Recent folders": "최근 폴더",
   "Stop agent": "에이전트 중지",
-  "Remove": "제거",
   "Stopping…": "중지 중…",
   "Dismiss": "닫기",
   "Input line": "입력창",
@@ -509,6 +514,7 @@ export const KO_PARTS: Record<string, Record<string, string>> = {
   palette: PALETTE_KO,
   relay: RELAY_KO,
   "runtime-move": RUNTIME_MOVE_KO,
+  pullRequests: PULL_REQUESTS_KO,
 };
 
 export const KO: Record<string, string> = Object.assign({}, ...Object.values(KO_PARTS));
