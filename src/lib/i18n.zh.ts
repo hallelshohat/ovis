@@ -104,6 +104,8 @@ const BASE: Record<string, string> = {
   "Save": "保存",
   "Draft": "草稿",
   "Merged": "已合并",
+  "Checks failed": "检查未通过",
+  "Waiting for review": "等待审查",
   "Checks running": "检查运行中",
   "Changes requested": "已请求更改",
   "Ready to merge": "可以合并",

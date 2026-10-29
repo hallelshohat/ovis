@@ -4,8 +4,7 @@
  * Register and fixed terms follow ../i18n.zh.ts; a key another feature also uses goes there.
  */
 export const PULL_REQUESTS_ZH: Record<string, string> = {
-  "Checks failing": "检查失败",
-  "Review requested": "已请求审查",
+  "Checks {passed}/{total} passed": "检查 {passed}/{total} 项通过",
   "{n} more open": "另有 {n} 个未关闭",
   "A pull request this chat opens shows here.": "此聊天打开的拉取请求会显示在这里。",
   "Approved": "已批准",
