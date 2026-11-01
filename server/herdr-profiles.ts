@@ -53,6 +53,22 @@ export function sameSshSession(a: SshTarget, b: SshTarget): boolean {
   return a.destination === b.destination && samePort(a.port, b.port) && (a.session || "default") === (b.session || "default");
 }
 
+/**
+ * Renames a saved herdr machine (`herdr machine rename`); the next read of the catalog carries the
+ * new label. The label is passed as `--label=<label>`, so one that starts with a dash is a value,
+ * not a flag.
+ */
+export async function renameHerdrProfile(profileId: string, label: string): Promise<void> {
+  try {
+    await run(process.env.OVIS_HERDR_BIN || "herdr", ["machine", "rename", `--label=${label}`, profileId], {
+      timeout: 5_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, encoding: "utf8", windowsHide: true,
+    });
+  } catch {
+    // as for the catalog read: herdr's stderr can include local paths
+    throw new Error("herdr could not rename this machine. Check herdr machine rename on this PC.");
+  }
+}
+
 export async function readHerdrProfiles(): Promise<HerdrMachineProfile[]> {
   try {
     const { stdout } = await run(process.env.OVIS_HERDR_BIN || "herdr", ["machine", "list", "--json"], {

@@ -467,7 +467,7 @@ export async function handleMachineRequest(request: Request, manager: MachineMan
       setRequestRoute("/api/machines/:machine_id");
       const patch = await request.json();
       if (!isJsonObject(patch)) return fail("invalid_body", "Expected a PC update", 400);
-      manager.patch(id, patch); return jsonResponse({ ok: true });
+      await manager.patch(id, patch); return jsonResponse({ ok: true });
     }
     if (parts.length === 1 && request.method === "DELETE") { setRequestRoute("/api/machines/:machine_id"); manager.remove(id); return jsonResponse({ ok: true }); }
     const path = parts.slice(1).join("/");
