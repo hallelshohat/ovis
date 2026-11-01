@@ -463,18 +463,21 @@
   white-space: nowrap;
 }
 
-.usage-accounts-actions {
+.usage-accounts-actions,
+.settings-order-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
 }
 
-.usage-accounts-actions .icon-button {
+.usage-accounts-actions .icon-button,
+.settings-order-actions .icon-button {
   color: var(--text-dim);
 }
 
 /* the ends of the list cannot move further: that arrow keeps its place in the column, unseen */
-.usage-accounts-actions .icon-button:disabled {
+.usage-accounts-actions .icon-button:disabled,
+.settings-order-actions .icon-button:disabled {
   visibility: hidden;
 }
 
