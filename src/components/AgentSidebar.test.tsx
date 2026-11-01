@@ -243,7 +243,7 @@ describe("AgentSidebar fold memory", () => {
     await act(async () => { renderer = create(view(filter)); });
     if (!renderer) throw new Error("sidebar did not mount");
     const mounted = renderer;
-    const toggle = () => mounted.root.findByProps({ className: "agent-section-toggle sidebar-section-label" });
+    const toggle = () => mounted.root.findByProps({ className: "agent-section-toggle sidebar-section-label section-label" });
     return {
       expanded: (): boolean => toggle().props["aria-expanded"],
       click: async () => { await act(async () => { toggle().props.onClick(); }); },

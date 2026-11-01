@@ -13,7 +13,7 @@ export const USAGE_JA: Record<string, string> = {
   "Signed in as {account}. Continuing may replace it.": "{account}でログイン済みです。続けると置き換わる場合があります。",
   "an existing account": "既存のアカウント",
   "Choose OpenCode Go or Zen for plan limits.": "プラン上限にはOpenCode GoかZenを選んでください。",
-  "Follow the steps in the new tab.": "新しいタブの案内に従ってください。",,
+  "Follow the steps in the new tab.": "新しいタブの案内に従ってください。",
   "Sign-in timed out. Try again.": "ログインがタイムアウトしました。再試行してください。",
   "Allow popups to sign in": "ログインにはポップアップを許可してください",
   "Choose a provider": "プロバイダーを選択",
