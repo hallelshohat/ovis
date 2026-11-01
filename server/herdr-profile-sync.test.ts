@@ -83,19 +83,46 @@ describe("automatic herdr machine inheritance", () => {
     manager.syncHerdrProfiles([]);
     expect(manager.list().map((m) => m.id)).toEqual(["local", "manual"]);
   });
-  it("derives rows rather than persisting a second catalog and refuses conflicting web mutations", () => {
+  it("derives rows rather than persisting a second catalog and refuses conflicting web mutations", async () => {
     const { manager, internals, dir } = fixture();
     manager.syncHerdrProfiles([profile]);
     const machine = manager.list()[1]!;
     internals.persist();
     expect(JSON.parse(readFileSync(join(dir, "machines.json"), "utf8"))).toEqual([]);
-    expect(() => manager.patch(machine.id, { name: "Other" })).toThrow("in herdr");
-    expect(() => manager.patch(machine.id, { enabled: false })).toThrow("in herdr");
+    // with no way to rename in herdr, a rename is herdr's own
+    await expect(manager.patch(machine.id, { name: "Other" })).rejects.toThrow("in herdr");
+    await expect(manager.patch(machine.id, { enabled: false })).rejects.toThrow("in herdr");
     expect(() => manager.remove(machine.id)).toThrow("in herdr");
     expect(() => manager.setup({ machine_id: machine.id, destination: "changed" })).toThrow("managed by herdr");
     manager.syncHerdrProfiles([{ ...profile, enabled: false }]);
     expect(() => manager.setup({ machine_id: machine.id, ...profile.target! })).toThrow("managed by herdr");
   });
+  it("renames a saved herdr machine through herdr, shows the name at once, and leaves its connection to herdr", async () => {
+    const { manager } = fixture();
+    const renamed: [string, string][] = [];
+    manager.renameHerdrProfiles(async (profileId, label) => { renamed.push([profileId, label]); });
+    manager.syncHerdrProfiles([profile]);
+    const machine = manager.list()[1]!;
+    await manager.patch(machine.id, { name: "  Lab box  " });
+    expect(renamed).toEqual([[profile.id, "Lab box"]]);
+    expect(manager.list()[1]!.name).toBe("Lab box");
+    // herdr's next catalog read carries the label it now holds
+    manager.syncHerdrProfiles([{ ...profile, label: "Lab box" }]);
+    expect(manager.list()[1]!.name).toBe("Lab box");
+    await expect(manager.patch(machine.id, { name: " " })).rejects.toThrow("1–100 characters");
+    await expect(manager.patch(machine.id, { enabled: false })).rejects.toThrow("in herdr");
+    expect(renamed).toHaveLength(1);
+  });
+
+  it("keeps the old name when herdr refuses the rename", async () => {
+    const { manager } = fixture();
+    manager.renameHerdrProfiles(async () => { throw new Error("herdr could not rename this machine."); });
+    manager.syncHerdrProfiles([profile]);
+    const machine = manager.list()[1]!;
+    await expect(manager.patch(machine.id, { name: "Lab box" })).rejects.toThrow("could not rename");
+    expect(manager.list()[1]!.name).toBe(profile.label);
+  });
+
   it("polls serially, preserves the last good roster on failure and ignores a late read after stop", async () => {
     const { manager } = fixture();
     const log = spyOn(console, "error").mockImplementation(() => {}); cleanups.push(() => log.mockRestore());
