@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ALargeSmall, AppWindow, ArrowDownUp, ArrowLeft, AudioLines, Ban, Bell, Bot, Box, Brain, NotebookPen, ChevronLeft, ChevronRight, CircleDot, ClipboardCopy, ClipboardPaste, Command, CornerDownLeft, ExternalLink as ExternalLinkIcon, FileClock, FilePen, Filter, FlaskConical, Gauge, Globe, Image as ImageIcon, Inbox, Info, Keyboard, Languages, Layers, ListCollapse, ListTree, Lock, MessageSquare, MessageSquareReply, MessagesSquare, Mic, Monitor, Mouse, MousePointer2, MoveHorizontal, Palette, PanelLeft, PanelRight, Plus, Puzzle, Rows3, Search, Send, Server, Shapes, Smartphone, Sparkles, SquareTerminal, Star, SunMoon, Tag, Tags, TextCursorInput, Trash2, Type, Volume2, WandSparkles, WrapText, X, type LucideIcon } from "lucide-react";
+import { ALargeSmall, AppWindow, ArrowDownUp, ArrowLeft, AudioLines, Ban, Bell, Bot, Box, Brain, NotebookPen, ChevronLeft, ChevronRight, CircleDot, ClipboardCopy, ClipboardPaste, Command, CornerDownLeft, ExternalLink as ExternalLinkIcon, FileClock, FilePen, Filter, FlaskConical, Gauge, Globe, Image as ImageIcon, Inbox, Info, Keyboard, Languages, Layers, ListCollapse, ListTree, Lock, MessageSquare, MessageSquareReply, MessagesSquare, Mic, Monitor, Mouse, MousePointer2, MoveHorizontal, Palette, PanelLeft, PanelRight, Plus, Puzzle, Rows3, Search, Send, Server, Shapes, Smartphone, Sparkles, SquareTerminal, Star, SunMoon, Tag, Tags, TextCursorInput, Trash2, Type, Volume2, WandSparkles, WrapText, X, ChevronDown, ChevronUp, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
@@ -45,6 +45,7 @@ import type { UpdatesModel } from "../lib/updates.ts";
 import type { UserError } from "../lib/userError.ts";
 import { LOCAL_MACHINE, pairedPc, pcAlertKey, type HerdrCoreFacts, type HerdrRuntimeFacts, type Machine, type MachineSettings, type RuntimeName } from "../../shared/machines.ts";
 import { canHideMachine, isMachineShown, setHiddenMachines, useHiddenMachines, withMachineHidden } from "../lib/hiddenMachines.ts";
+import { stepMachine } from "../lib/machineOrder.ts";
 import { alertFiltersChanged, updateAlertFilters, useAlertFilters } from "../lib/alertFilters.ts";
 import { alertMeWhenChips } from "./AlertChips.tsx";
 import { fetchMachines, fetchMemory, fetchRemoteAccess, requestRelayOffer, fetchVoiceStatus, machineRequest, saveVoiceConfig, switchRuntime, fetchBridgeHealth } from "../lib/api.ts";
@@ -104,34 +105,55 @@ export interface SettingsDialogProps {
   opensAll?: () => boolean;
   /** this PC's last feature list lacked account-opens-all/1 (an explicit withdrawal, S32-1) */
   withdrawn?: () => boolean;
+  /** the section to open on, for a button that points at it; the top otherwise */
   section?: "updates" | null;
+  /** the page a link to Settings names (`?settings=`, lib/deepLink.ts), for this opening alone */
   linkPage?: string | null;
+  /** the group on that page a link names (`&section=`): it is scrolled to and focused, as Updates is */
   linkSection?: string | null;
+  /** the page shown, for the address; null while a phone shows its list of pages */
   onPage?: (page: string | null) => void;
   onClose: () => void;
+  /** Account login runs on this server's PC, even while another PC is selected. */
   onUsageLogin: (paneId: string) => void;
+  /** shows a pane of `machineId` in its terminal: an agent's install or sign-in tab, from Agent integrations */
   onOpenPane: (machineId: string, paneId: string) => void;
   actions: AppActions;
   updates: UpdatesModel;
+  /** how this browser got in, from the last health check */
   auth: HealthAuth | null;
+  /** the herdr this app's server talks to, from the last health check */
   herdrVersion: string | null;
+  /** which runtime that is (herdr's TUI server, or herdr-core: the Herdr app's), from the same check; null before one answered */
   herdrRuntime?: "herdr" | "herdr-core" | null;
+  /** what the server's PC has of herdr-core, from the same check; null when it did not say */
   herdrCore?: HerdrCoreFacts | null;
+  /** which runtime the server serves and what Settings may switch it to, from the same check */
   herdrRuntimeFacts?: HerdrRuntimeFacts | null;
+  /** the PC shown now passes pictures (herdr-core, its panes attached): what Pictures in the terminal does there until a device chooses */
   picturesByDefault?: boolean;
+  /** the server's boot id from the same check: a new one after a switch is the restarted server */
   bootId?: string | null;
+  /** a runtime switch's restarted server answers: the app reads its facts and terminals again */
   onServerRestarted?: () => void;
   /** what protects this server, from the last bridge health check: never an earlier answer once one fails */
   security: SecurityFacts;
   onEnableNotifications: () => Promise<PushActionResult>;
+  /** the last change the server refused to save (lib/preferencesSync.ts); null once a save lands */
   saveError: UserError | null;
+  /** three saves failed in a row: nothing is sent until Retry, a reconnect or a longer wait */
   savePaused: boolean;
+  /** a Retry of that save is waiting for its answer */
   saveRetrying: boolean;
   onRetrySave: () => void;
+  /** a file preview is open beneath: the dialog is drawn above it */
   overPreview?: boolean;
+  /** every PC of the roster, the hidden ones too, in the PCs' order: Remote PCs lists them with their Show in sidebar switch */
   machines?: readonly Machine[];
   /** the selected pane's folder on this PC: Settings → Memory opens on its project */
   projectFolder?: string | null;
+  /** saves the PCs' order a Move up or down makes (lib/machineOrder.ts); none for a watching device */
+  onMoveMachine?: (next: string[] | null) => void;
 }
 
 /**
@@ -1220,13 +1242,13 @@ export function changePcDescription(t: Translate, demo: boolean, host: string): 
   return demo ? t("This is the demo. Go back to the app's list of PCs to open yours.") : t("This app shows {address}. Go back to its list of PCs to open another.", { address: host });
 }
 
-function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSettings, pcSettingsError, onPcSettings, openAddPc, connectPc, onHome, opensAll, withdrawn }: {
+function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSettings, pcSettingsError, onPcSettings, openAddPc, connectPc, onHome, opensAll, withdrawn, onMoveMachine }: {
   /** closes Settings onto the main screen, after a sign-in in the sheet the setup checklist opened (closedBySignIn) */
   onHome: () => void;
   opensAll?: (() => boolean) | undefined;
   withdrawn?: (() => boolean) | undefined;
   auth: HealthAuth | null; security: SecurityFacts; onSignOut: (() => Promise<void>) | null; onRevokedAll: () => void;
-  machines: readonly Machine[]; pcSettings: MachineSettings | null; pcSettingsError: string | null; onPcSettings: (patch: Partial<MachineSettings>) => void; openAddPc: (preset?: AddPcPreset) => void; connectPc: (machine: Machine) => void;
+  machines: readonly Machine[]; pcSettings: MachineSettings | null; pcSettingsError: string | null; onPcSettings: (patch: Partial<MachineSettings>) => void; openAddPc: (preset?: AddPcPreset) => void; connectPc: (machine: Machine) => void; onMoveMachine?: (next: string[] | null) => void;
 }) {
   const sessions = useMachineSessions();
   const { settings, update } = useSettings();
@@ -1384,6 +1406,7 @@ function DevicesPage({ auth, security, onSignOut, onRevokedAll, machines, pcSett
           </SettingsRow>
         </SettingsGroup>
         {relayOffered(relay) && !relayReadOnly && <RelayControls relay={relay} closesGate={closesGate} onReset={() => setIdentityResets((count) => count + 1)} />}
+        {onMoveMachine && <PcOrderGroup machines={machines} onMove={onMoveMachine} />}
         <SidebarPcsGroup machines={machines} />
         <AccessFacts facts={security} />
         <RemotePcsMore machines={machines} pcSettings={pcSettings} pcSettingsError={pcSettingsError} onPcSettings={onPcSettings} />
@@ -1519,11 +1542,38 @@ function MyPcRows({ machines, account, accountPcs, onAccountChanged, relayKey, w
   );
 }
 
+/**
+ * The PCs' order in the sidebar, the Agents list and the command palette, the Host's too, shared by
+ * every device of this server (lib/machineOrder.ts). The buttons are the way to it on a touch screen
+ * and from the keyboard; a mouse can also drag a PC's header in the sidebar.
+ */
+function PcOrderGroup({ machines, onMove }: { machines: readonly Machine[]; onMove: (next: string[] | null) => void }) {
+  const t = useT();
+  if (machines.length < 2) return null;
+  const ids = machines.map((machine) => machine.id);
+  return (
+    <SettingsGroup title={t("PC order")} section="pc-order" note={t("The same on every device. You can also drag a PC by its name in the sidebar.")}>
+      {machines.map((machine, index) => (
+        <SettingsRow key={machine.id} label={machine.name} description={machine.kind === "local" ? t("The Host: the computer this app runs on") : undefined}>
+          <span className="settings-order-actions">
+            <button type="button" className="icon-button" aria-label={t("Move {name} up", { name: machine.name })} disabled={index === 0} onClick={() => onMove(stepMachine(ids, ids, machine.id, -1))}><ChevronUp aria-hidden="true" /></button>
+            <button type="button" className="icon-button" aria-label={t("Move {name} down", { name: machine.name })} disabled={index === ids.length - 1} onClick={() => onMove(stepMachine(ids, ids, machine.id, 1))}><ChevronDown aria-hidden="true" /></button>
+          </span>
+        </SettingsRow>
+      ))}
+    </SettingsGroup>
+  );
+}
+
+/**
+ * Which PCs this device shows in its sidebar, Agents list and command palette, in the PCs' order. The
+ * choice stays in this browser; the last PC shown cannot be hidden (lib/hiddenMachines.ts).
+ */
 function SidebarPcsGroup({ machines }: { machines: readonly Machine[] }) {
   const t = useT();
   const hidden = useHiddenMachines();
   if (machines.length < 2) return null;
-  const listed = [...machines].sort((a, b) => Number(b.kind === "local") - Number(a.kind === "local"));
+  const listed = machines;
   return (
     <SettingsGroup title={t("Show in sidebar")} section="sidebar-pcs" note={t("Only on this device. A hidden PC stays connected, and a link or an alert still opens its panes. One PC is always shown.")}>
       {listed.map((machine) => {
@@ -1768,7 +1818,7 @@ function matchedGroups(result: Element | null, words: readonly string[]): string
   return [...groups.filter(holdsAll), ...groups.filter((group) => !holdsAll(group))].map((group) => group.dataset["section"]).filter((name): name is string => name !== undefined);
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, onOpenPane, actions, updates, auth, herdrVersion, herdrRuntime = null, herdrCore = null, herdrRuntimeFacts = null, picturesByDefault = false, bootId = null, onServerRestarted, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [], opensAll, withdrawn, projectFolder = null }: SettingsDialogProps) {
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, onOpenPane, actions, updates, auth, herdrVersion, herdrRuntime = null, herdrCore = null, herdrRuntimeFacts = null, picturesByDefault = false, bootId = null, onServerRestarted, security, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, machines = [], opensAll, withdrawn, projectFolder = null, onMoveMachine }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   const [restored] = useState(() => shownBy(settingsEntry(window.history.state)));
@@ -1959,7 +2009,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
       case "shortcuts": return <ShortcutsPage />;
       // after every device went, its own pairing included, a browser asks the server where it stands: the roster answers, or the gate does
       case "devices": return <DevicesPage opensAll={opensAll} withdrawn={withdrawn} auth={auth} security={security} onSignOut={actions.lock} onRevokedAll={actions.refresh} openAddPc={actions.openAddPc} connectPc={actions.connectPc} onHome={onClose}
-        machines={machines} pcSettings={pcSettings} pcSettingsError={pcSettingsError} onPcSettings={(patch) => void updatePcSettings(patch)} />;
+        machines={machines} onMoveMachine={onMoveMachine} pcSettings={pcSettings} pcSettingsError={pcSettingsError} onPcSettings={(patch) => void updatePcSettings(patch)} />;
       case "experimental": return <ExperimentalPage />;
       case "about": return <AboutPage updates={updates} herdrVersion={herdrVersion} herdrRuntime={herdrRuntime} herdrCore={herdrCore} herdrRuntimeFacts={herdrRuntimeFacts} bootId={bootId} onServerRestarted={onServerRestarted} onOpenPane={onOpenPane} bridgesFollow={pcSettings?.auto_update_bridges === true} />;
       default: return null;

@@ -1,5 +1,5 @@
 import { tally } from "../lib/usageCounters.ts";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import { Download, EyeOff, Inbox, Pencil, Plug, Plus, RefreshCw, Search, Settings, SlidersHorizontal, Trash2, Unplug, X } from "lucide-react";
 import { OWN_UPDATE_OFFER, pairedPc, type Machine, type MachineState, type MachineUpdate, type RemoteOvis } from "../../shared/machines.ts";
 import { copyText } from "../lib/clipboard.ts";
@@ -30,6 +30,7 @@ import "./SidebarSections.css";
 import { t, useT } from "../lib/i18n.ts";
 import { asksChoice, FoundHerdrChoices } from "./FoundHerdrChoices.tsx";
 import { useSettings } from "../lib/settings.ts";
+import { dropSide, type DropSide } from "../lib/machineOrder.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { machineErrorText, saysHerdrAway, sshFailure } from "../lib/userError.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
@@ -95,7 +96,7 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
   error: "Connection error",
 };
 
-interface Props { machines: Machine[]; footerStart?: ReactNode; inbox?: { waiting: number; open(): void } | null; afterPcs?: ReactNode; allMachines?: Machine[]; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; appLayout?: (machineId: string) => LayoutOffer; drawerOpen?: boolean; filterRequest?: number; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void; onUsageLogin(paneId: string): void }
+interface Props { machines: Machine[]; footerStart?: ReactNode; inbox?: { waiting: number; open(): void } | null; afterPcs?: ReactNode; allMachines?: Machine[]; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; appLayout?: (machineId: string) => LayoutOffer; drawerOpen?: boolean; filterRequest?: number; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; /** drops a PC dragged by its header beside another */ onMove?(id: string, targetId: string, side: DropSide): void; onSetup(machine: Machine, update?: boolean): void; onUsageLogin(paneId: string): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
   const activity = props.activity;
@@ -115,7 +116,10 @@ export function MachineSidebar(props: Props) {
     return next;
   }), []);
   const loneHost = props.machines.length === 1 && props.machines[0]!.kind === "local" ? props.machines[0]!.id : null;
-
+  // a PC moves by a mouse's drag of its header: not under a filter (it would land among PCs the filter
+  // hides), not by a finger (Settings → Remote PCs → PC order has the buttons), and not with one PC
+  const coarsePointer = useMediaQuery("(pointer: coarse)");
+  const [pcDrag, setPcDrag] = useState<PcDrag | null>(null);
   const exitToPcs = useMemo(() => pcListExit({ nativeApp: inNativeApp(), relayShell: shellMode() === "relay", pathname: window.location.pathname }), []);
   const drawerWidth = useMediaQuery(DRAWER_QUERY);
   const pagePcs = useShellPcs(exitToPcs === "shell", drawerWidth ? props.drawerOpen === true : true);
@@ -129,6 +133,10 @@ export function MachineSidebar(props: Props) {
   const unnamed = useMemo(() => new Set(headerless ? [loneHost] : []), [headerless, loneHost]);
   const filter = useMemo(() => sidebarFilter(query, props.machines, { machineId: props.selectedMachineId, paneId: props.selectedPaneId }, t, branchLabels, unnamed), [query, props.machines, props.selectedMachineId, props.selectedPaneId, t, branchLabels, unnamed]);
   const filterView = useMemo(() => ({ filter, reportBranches }), [filter, reportBranches]);
+  const canReorder = props.onMove !== undefined && !filter.active && !coarsePointer && props.machines.length > 1;
+  // a drag cut short by the filter opening (or the PC list shrinking) leaves nothing held
+  useEffect(() => { if (!canReorder) setPcDrag(null); }, [canReorder]);
+  const reorder: PcReorder | null = canReorder && props.onMove ? { drag: pcDrag, setDrag: setPcDrag, drop: props.onMove } : null;
   // the field offers the labels the rows show, as the browser's own suggestions: nothing typed is kept
   const suggestions = useMemo(() => filterSuggestions(props.machines, branchLabels, unnamed), [props.machines, branchLabels, unnamed]);
   const { settings } = useSettings();
@@ -270,7 +278,7 @@ export function MachineSidebar(props: Props) {
     <section className="pcs-sidebar" aria-label={t("PCs")}>
       <div ref={machineList} className="machine-list" id={listId} aria-label={t("PCs and workspaces")}>
         <p className={noMatchWords === null ? "visually-hidden" : "tree-state sidebar-filter-empty"} role="status">{noMatchWords}</p>
-        {props.machines.map((machine) => <MachineGroup key={machine.id} {...props} watching={props.watching || machine.view_only === true} machine={machine} headerless={headerless && machine.id === loneHost} canHide={canHideMachine(roster, hiddenIds, machine.id)} onHide={() => hideMachine(machine.id)} />)}
+        {props.machines.map((machine) => <MachineGroup key={machine.id} {...props} watching={props.watching || machine.view_only === true} machine={machine} headerless={headerless && machine.id === loneHost} canHide={canHideMachine(roster, hiddenIds, machine.id)} onHide={() => hideMachine(machine.id)} reorder={reorder} />)}
         {/* a driving window on any PC, the phone app and the hosted shell too: the account's PCs this PC does not list yet, added to it one by one */}
         {!props.watching && <SidebarAccountPcs machines={roster} hidden={filter.active} onAdded={props.actions.connectPc} onListed={setAccountRows} openable={ownLinks} />}
         <p className={loadingWords === null ? "visually-hidden" : "tree-state"} role="status">{loadingWords}</p>
@@ -360,7 +368,15 @@ export function manageActions(machine: Pick<Machine, "kind" | "herdr_profile_id"
   return actions;
 }
 
-function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }: Props & { machine: Machine; headerless?: boolean; canHide: boolean; onHide(): void }) {
+/** the drag data type of a PC's header: its id */
+const PC_DRAG_TYPE = "application/x-ovis-pc";
+/** the PC held by its header, and the PC and the side of it the pointer is over */
+interface PcDrag { id: string; over: string | null; side: DropSide }
+/** the sidebar's PCs can be dragged by their headers now (MachineSidebar says when) */
+interface PcReorder { drag: PcDrag | null; setDrag(drag: PcDrag | null): void; drop(id: string, targetId: string, side: DropSide): void }
+
+
+function MachineGroup({ machine, headerless = false, canHide, onHide, reorder, ...props }: Props & { machine: Machine; headerless?: boolean; canHide: boolean; onHide(): void; reorder: PcReorder | null }) {
   const t = useT();
   const compact = useSettings().settings.sidebarRows === "one";
   const drawer = useMediaQuery(DRAWER_QUERY);
@@ -481,8 +497,41 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, ...props }
             manageButton.current?.focus({ preventScroll: true });
           }}
     /> : undefined;
-  return <section className={`machine-group${current ? " is-current" : ""}${online ? "" : " is-offline"}${context ? " is-filter-context" : ""}${headerless ? " is-headerless" : ""}${folded ? " is-folded" : ""}${compact ? "" : " is-two-line"}`} hidden={hidden} aria-label={t("PC {name}", { name: machine.name })}>
+  // a PC's drag carries its id under a type of its own: a workspace's or a pane's drag over the group is not one
+  const pcDragOver = (event: DragEvent<HTMLElement>): DropSide | null => {
+    if (!reorder?.drag || !event.dataTransfer.types.includes(PC_DRAG_TYPE)) return null;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const box = event.currentTarget.getBoundingClientRect();
+    return dropSide(event.clientY, box.top, box.height);
+  };
+  const dragging = reorder?.drag?.id === machine.id;
+  const drop = reorder?.drag && !dragging && reorder.drag.over === machine.id ? reorder.drag.side : undefined;
+  return <section className={`machine-group${current ? " is-current" : ""}${online ? "" : " is-offline"}${context ? " is-filter-context" : ""}${headerless ? " is-headerless" : ""}${folded ? " is-folded" : ""}${compact ? "" : " is-two-line"}${dragging ? " is-dragging" : ""}`} hidden={hidden} aria-label={t("PC {name}", { name: machine.name })}
+    data-drop={drop}
+    onDragOver={(event) => {
+      const side = pcDragOver(event);
+      if (side !== null && reorder?.drag && (reorder.drag.over !== machine.id || reorder.drag.side !== side)) reorder.setDrag({ ...reorder.drag, over: machine.id, side });
+    }}
+    onDragLeave={(event) => {
+      // leaving for one of its own rows is still over this PC
+      if (reorder?.drag?.over === machine.id && !event.currentTarget.contains(event.relatedTarget as Node | null)) reorder.setDrag({ ...reorder.drag, over: null });
+    }}
+    onDrop={(event) => {
+      const side = pcDragOver(event);
+      const id = event.dataTransfer.getData(PC_DRAG_TYPE) || reorder?.drag?.id;
+      reorder?.setDrag(null);
+      if (side !== null && id) reorder?.drop(id, machine.id, side);
+    }}>
     {!headerless && <MachineHeader machine={machine} folded={folded} onToggle={toggle} compact={compact} current={current} name={renameField} titleRef={titleButton}
+      draggable={reorder !== null && !renaming}
+      onDragStart={(event) => {
+        if (!reorder || event.target !== event.currentTarget) return;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData(PC_DRAG_TYPE, machine.id);
+        reorder.setDrag({ id: machine.id, over: null, side: "before" });
+      }}
+      onDragEnd={() => reorder?.setDrag(null)}
       agents={online && agentCount > 0 ? { count: agentCount, words: agentCount === 1 ? t("1 agent") : t("{n} agents", { n: agentCount }) } : null}
       dot={online ? null : { state: machineDotState(machine), title: quiet ? dotWords : stateWords }}
       actions={machine.kind !== "local" && <button ref={manageButton} type="button" className="sidebar-row-action machine-manage" aria-label={t("Manage {name}", { name: machine.name })} title={t("Manage PC")} aria-haspopup={sheet ? "dialog" : "menu"} aria-expanded={menu !== null} onClick={(event) => setMenu(menu === null ? event.currentTarget : null)}><SlidersHorizontal aria-hidden="true" /></button>}
