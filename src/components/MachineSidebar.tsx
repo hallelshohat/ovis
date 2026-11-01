@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type FocusEvent, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, Monitor, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
 import { OWN_UPDATE_OFFER, type Machine, type MachineState, type MachineUpdate, type RemoteOvis } from "../../shared/machines.ts";
 import { copyText } from "../lib/clipboard.ts";
@@ -18,6 +18,8 @@ import { rowMenuAnchor } from "./RowMenu.tsx";
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
+import { dropSide, type DropSide } from "../lib/machineOrder.ts";
+import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { requestSettingsPage } from "../lib/paletteSettings.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { machineErrorText, saysHerdrAway } from "../lib/userError.ts";
@@ -33,7 +35,7 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
 
 /** `activity`: App's live counters per PC and finishes looked at here; both sidebar lists draw from it.
  *  `machines` are the PCs this device shows; `hiddenCount` says how many it keeps out (Settings → Remote PCs) */
-interface Props { machines: Machine[]; hiddenCount?: number; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; /** whether the Herdr app's window owns a PC's workspaces (lib/machineContext.tsx AppLayoutContext); none without it */ appLayout?: (machineId: string) => boolean; /** a phone's drawer is out: closing it clears the filter */ drawerOpen?: boolean; /** counts the command palette's Filter workspaces and agents: each new count shows the field and focuses it */ filterRequest?: number; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void; /** a sign-in tab the usage popover opened */ onUsageLogin(paneId: string): void }
+interface Props { machines: Machine[]; hiddenCount?: number; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; /** whether the Herdr app's window owns a PC's workspaces (lib/machineContext.tsx AppLayoutContext); none without it */ appLayout?: (machineId: string) => boolean; /** a phone's drawer is out: closing it clears the filter */ drawerOpen?: boolean; /** counts the command palette's Filter workspaces and agents: each new count shows the field and focuses it */ filterRequest?: number; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; /** drops a PC dragged by its header `side` of another (lib/machineOrder.ts); none for a watching device */ onMove?(id: string, targetId: string, side: DropSide): void; onSetup(machine: Machine, update?: boolean): void; /** a sign-in tab the usage popover opened */ onUsageLogin(paneId: string): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
   const activity = props.activity;
@@ -55,9 +57,17 @@ export function MachineSidebar(props: Props) {
   // one PC shown, and it is the Host: there is no other PC to tell it from, so its group is drawn without its
   // header (MachineGroup), and its name, which no row then shows, is not searched
   const loneHost = props.machines.length === 1 && props.machines[0]!.kind === "local" ? props.machines[0]!.id : null;
+  // a PC moves by a mouse's drag of its header: not under a filter (it would land among PCs the filter
+  // hides), not by a finger (Settings → Remote PCs → PC order has the buttons), and not with one PC
+  const coarsePointer = useMediaQuery("(pointer: coarse)");
+  const [pcDrag, setPcDrag] = useState<PcDrag | null>(null);
   const unnamed = useMemo(() => new Set(loneHost === null ? [] : [loneHost]), [loneHost]);
   const filter = useMemo(() => sidebarFilter(query, props.machines, { machineId: props.selectedMachineId, paneId: props.selectedPaneId }, t, branchLabels, unnamed), [query, props.machines, props.selectedMachineId, props.selectedPaneId, t, branchLabels, unnamed]);
   const filterView = useMemo(() => ({ filter, reportBranches }), [filter, reportBranches]);
+  const canReorder = props.onMove !== undefined && !filter.active && !coarsePointer && props.machines.length > 1;
+  // a drag cut short by the filter opening (or the PC list shrinking) leaves nothing held
+  useEffect(() => { if (!canReorder) setPcDrag(null); }, [canReorder]);
+  const reorder: PcReorder | null = canReorder && props.onMove ? { drag: pcDrag, setDrag: setPcDrag, drop: props.onMove } : null;
   // the field offers the labels the rows show, as the browser's own suggestions: nothing typed is kept
   const suggestions = useMemo(() => filterSuggestions(props.machines, branchLabels, unnamed), [props.machines, branchLabels, unnamed]);
   // Settings → Appearance → Sidebar filter off leaves the field out until the palette's Filter workspaces and
@@ -179,7 +189,7 @@ export function MachineSidebar(props: Props) {
     </div>}
     <div className="machine-list" aria-label={t("PCs and workspaces")}>
       <p className={noMatchWords === null ? "visually-hidden" : "tree-state sidebar-filter-empty"} role="status">{noMatchWords}</p>
-      {props.machines.map((machine) => <MachineGroup key={machine.id} {...props} machine={machine} headerless={machine.id === loneHost} />)}
+      {props.machines.map((machine) => <MachineGroup key={machine.id} {...props} machine={machine} headerless={machine.id === loneHost} reorder={reorder} />)}
       <p className={loadingWords === null ? "visually-hidden" : "tree-state"} role="status">{loadingWords}</p>
       {/* a PC kept out on this device is said, with the way to show it again */}
       {hiddenCount > 0 && <button type="button" className="machine-hidden-note" title={t("Choose the PCs this device shows")} onClick={() => { requestSettingsPage({ page: "remote", section: "sidebar-pcs" }); props.actions.openSettings(); }}>{hiddenCount === 1 ? t("1 PC hidden on this device") : t("{n} PCs hidden on this device", { n: hiddenCount })}</button>}
@@ -196,10 +206,17 @@ export function MachineSidebar(props: Props) {
   </div></SidebarFilterProvider></SidebarActivityProvider>;
 }
 
+/** the drag data type of a PC's header: its id */
+const PC_DRAG_TYPE = "application/x-ovis-pc";
+/** the PC held by its header, and the PC and the side of it the pointer is over */
+interface PcDrag { id: string; over: string | null; side: DropSide }
+/** the sidebar's PCs can be dragged by their headers now (MachineSidebar says when) */
+interface PcReorder { drag: PcDrag | null; setDrag(drag: PcDrag | null): void; drop(id: string, targetId: string, side: DropSide): void }
+
 /** `headerless`: the sidebar's lone Host, drawn without its header. What the header held is elsewhere: the state
  *  and its notice are lines of their own, the + is the New workspace row under the workspaces, and nothing is
  *  folded with no caret to open it. A Host has no manage panel; Add PC is in Settings and the palette. */
-function MachineGroup({ machine, headerless = false, ...props }: Props & { machine: Machine; headerless?: boolean }) {
+function MachineGroup({ machine, headerless = false, reorder, ...props }: Props & { machine: Machine; headerless?: boolean; reorder: PcReorder | null }) {
   const t = useT();
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(`ovis:pc-collapsed:${machine.id}`) === "1"; } catch { return false; } });
   const [editing, setEditing] = useState(false);
@@ -257,8 +274,41 @@ function MachineGroup({ machine, headerless = false, ...props }: Props & { machi
   };
   const boardTasks = <MachineContext.Provider value={machine.id}><BoardTasksButton machineName={machine.name} enabled={online && !props.watching} /></MachineContext.Provider>;
   // the PC's name is the head of its workspaces, and the caret beside its + the one fold over them
-  return <section className={`machine-group${props.selectedMachineId === machine.id ? " is-current" : ""}${online ? "" : " is-offline"}${context ? " is-filter-context" : ""}${headerless ? " is-headerless" : ""}`} hidden={hidden} aria-label={t("PC {name}", { name: machine.name })}>
-    {!headerless && <header className="machine-header">
+  // a PC's drag carries its id under a type of its own: a workspace's or a pane's drag over the group is not one
+  const pcDragOver = (event: DragEvent<HTMLElement>): DropSide | null => {
+    if (!reorder?.drag || !event.dataTransfer.types.includes(PC_DRAG_TYPE)) return null;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const box = event.currentTarget.getBoundingClientRect();
+    return dropSide(event.clientY, box.top, box.height);
+  };
+  const dragging = reorder?.drag?.id === machine.id;
+  const drop = reorder?.drag && !dragging && reorder.drag.over === machine.id ? reorder.drag.side : undefined;
+  return <section className={`machine-group${props.selectedMachineId === machine.id ? " is-current" : ""}${online ? "" : " is-offline"}${context ? " is-filter-context" : ""}${headerless ? " is-headerless" : ""}${dragging ? " is-dragging" : ""}`} hidden={hidden} aria-label={t("PC {name}", { name: machine.name })}
+    data-drop={drop}
+    onDragOver={(event) => {
+      const side = pcDragOver(event);
+      if (side !== null && reorder?.drag && (reorder.drag.over !== machine.id || reorder.drag.side !== side)) reorder.setDrag({ ...reorder.drag, over: machine.id, side });
+    }}
+    onDragLeave={(event) => {
+      // leaving for one of its own rows is still over this PC
+      if (reorder?.drag?.over === machine.id && !event.currentTarget.contains(event.relatedTarget as Node | null)) reorder.setDrag({ ...reorder.drag, over: null });
+    }}
+    onDrop={(event) => {
+      const side = pcDragOver(event);
+      const id = event.dataTransfer.getData(PC_DRAG_TYPE) || reorder?.drag?.id;
+      reorder?.setDrag(null);
+      if (side !== null && id) reorder?.drop(id, machine.id, side);
+    }}>
+    {!headerless && <header className="machine-header"
+      draggable={reorder !== null && !editing}
+      onDragStart={(event) => {
+        if (!reorder || event.target !== event.currentTarget) return;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData(PC_DRAG_TYPE, machine.id);
+        reorder.setDrag({ id: machine.id, over: null, side: "before" });
+      }}
+      onDragEnd={() => reorder?.setDrag(null)}>
       <div className="machine-title">
         <span className="sidebar-mark" aria-hidden="true"><Monitor /></span>
         <span className="machine-name">{machine.name}</span>
