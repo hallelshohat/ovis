@@ -52,7 +52,7 @@ import { useSettings, type Palette, type ResolvedTheme } from "../lib/settings.t
 import { learnFromSend } from "../lib/tabLabels.ts";
 import { useT } from "../lib/i18n.ts";
 import { isAppShortcut } from "../lib/shortcuts.ts";
-import { plainPageDirection } from "../lib/pageScroll.ts";
+import { ownsPageKeys, plainPageDirection } from "../lib/pageScroll.ts";
 import { keyboardTypingField, keyboardUp } from "../lib/keyboard.ts";
 import { keyboardControl } from "../lib/keyboardControl.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
@@ -1046,6 +1046,7 @@ export function PaneTerminal({
           || isAppShortcut(event, shortcutSettings.current) || pageScroll.current === null) return;
       const target = event.target;
       if (target instanceof Element && target.closest("input, textarea, [contenteditable=true]") && !target.matches(".composer-text")) return;
+      if (ownsPageKeys(target)) return;
       event.preventDefault();
       event.stopPropagation();
       pageScroll.current(direction);

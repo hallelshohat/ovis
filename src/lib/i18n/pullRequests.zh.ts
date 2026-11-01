@@ -32,4 +32,5 @@ export const PULL_REQUESTS_ZH: Record<string, string> = {
   "Opened": "已打开",
   "Branch {from} → {to}": "分支 {from} → {to}",
   "Pull requests: {reason}": "拉取请求：{reason}",
+  "{n} passed": "{n} 个通过",
 };

@@ -93,6 +93,8 @@ const BASE: Record<string, string> = {
   "Ready to merge": "병합 가능",
   "Checks": "검사",
   "failed": "실패",
+  "{n} failed": "실패 {n}개",
+  "{n} running": "{n}개 실행 중",
   "running": "실행 중",
   "Pull requests": "풀 리퀘스트",
   "Closed": "닫힘",
