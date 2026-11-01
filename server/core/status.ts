@@ -62,6 +62,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     /** how other PCs on this PC's Tailscale are found (server/tailnet-pcs.ts); tests give their own status and addresses */
     tailnetPcs?: TailnetPcsOptions;
     herdrProfiles?: () => Promise<HerdrMachineProfile[]>;
+    herdrRename?: (profileId: string, label: string) => Promise<void>;
     alertTiming?: Partial<AlertTiming>;
     /** this PC's relay ID, where it has one (server/relay/service.ts serverId): devices turn its alerts off by it */
     serverId?: () => string | undefined;
@@ -372,12 +373,13 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     path: join(options.stateDir ?? defaultStateDir(), DESKTOP_ACTIVITY_FILE),
     working: async () => busyPanes((await clientSnapshot()).panes),
   }) : null;
+  if (machines && options.herdrRename) machines.renameHerdrProfiles(options.herdrRename);
 
   function broadcastAll(message: ServerMessage): void {
-    if (message.type === "pane-status" || message.type === "pane-exited" || message.type === "session-changed") desktopActivity?.changed();
-    machines?.localMessage(message);
-    for (const client of clients) send(client, message);
-  }
+  if (message.type === "pane-status" || message.type === "pane-exited" || message.type === "session-changed") desktopActivity?.changed();
+  machines?.localMessage(message);
+  for (const client of clients) send(client, message);
+}
   /** A broken state file must cost the alert, never the server (an unhandled rejection would). */
   const logPushError = (error: unknown): void => {
     console.error(`web push: ${error instanceof Error ? error.message : String(error)}`);
