@@ -12,7 +12,7 @@ import { RequestLog } from "./request-log.ts";
 import { RelayReceiptIds } from "./machine-relay.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { OrderSequence } from "./order-sequence.ts";
-import { readHerdrProfiles, type HerdrMachineProfile } from "./herdr-profiles.ts";
+import { readHerdrProfiles, renameHerdrProfile, type HerdrMachineProfile } from "./herdr-profiles.ts";
 import { accessSync, chmodSync, constants, mkdirSync, rmSync, statSync } from "node:fs";
 import { recordDesktopListener } from "./desktop-listener.ts";
 import { version } from "../package.json";
@@ -247,6 +247,9 @@ export function createServer(
     /** false: the panes' files are on another machine (server/herdr-core/machine-entry.ts), so no route reads or makes files on this disk for them */
     localFiles?: boolean;
     herdrProfiles?: () => Promise<HerdrMachineProfile[]>;
+    /** Renames a saved herdr machine (herdr machine rename); tests supply their own. */
+    herdrRename?: (profileId: string, label: string) => Promise<void>;
+    /** herdr's config.toml, for its sidebar rows (server/herdr-sidebar.ts) and its copy_on_select (server/herdr-ui.ts); unset, where herdr itself reads it. Tests pass a temp file. */
     herdrConfigPath?: string;
     registerBridge?: boolean;
     /** the token a connection server presents as this PC's bridge; random unless a test names it */
@@ -1139,7 +1142,7 @@ export async function serve(): Promise<void> {
     instance = createServer({ updates, ...(profile ? { profile: "machine", machineRefusal, port: Number(startEnv["PORT"] ?? 0) } : { herdrUpdate: new HerdrUpdater(), herdrCoreFacts, herdrCoreInstaller: herdrCoreInstaller(),
       launchAccepted: () => launchAccepted,
       runtimeService: runtimeService({ stateDir, port: Number(startEnv["PORT"] || DEFAULT_PORT), serving: choice.runtime, source: choice.source, ...(fallback ? { fallback } : {}), env: startEnv, core: herdrCoreFacts, accepted: () => launchAccepted, restart: (id) => process.send?.({ type: "runtime-restart", id }) }) }),
-      portal, relay: createRelay, tailnet, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir),
+      portal, relay: createRelay, tailnet, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, herdrRename: renameHerdrProfile, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir),
       desktopActivity: process.env["OVIS_DESKTOP_APP"] === "1",
       ...(desktopOwnerFd !== null ? { desktopOwner: desktopOwnerFdChannel(desktopOwnerFd) } : {}),
       ...(lanConfig !== null && !("error" in lanConfig) ? { lanHttps: lanConfig } : {}) });

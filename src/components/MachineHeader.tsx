@@ -24,7 +24,7 @@ export function useMachineFold(machineId: string): [collapsed: boolean, toggle: 
   return [collapsed, toggle];
 }
 
-export interface MachineHeaderProps extends Pick<HTMLAttributes<HTMLElement>, "draggable" | "onDragStart" | "onDragEnd"> {
+export interface MachineHeaderProps extends Pick<HTMLAttributes<HTMLElement>, "draggable" | "onDragStart" | "onDragEnd" | "onContextMenu"> {
   machine: Machine;
   folded: boolean;
   onToggle(): void;
@@ -39,7 +39,7 @@ export interface MachineHeaderProps extends Pick<HTMLAttributes<HTMLElement>, "d
   end?: ReactNode;
 }
 
-export function MachineHeader({ machine, folded, onToggle, compact, agents, dot, current = false, name, titleRef, actions, end, draggable, onDragStart, onDragEnd }: MachineHeaderProps) {
+export function MachineHeader({ machine, folded, onToggle, compact, agents, dot, current = false, name, titleRef, actions, end, draggable, onDragStart, onDragEnd, onContextMenu }: MachineHeaderProps) {
   const t = useT();
   const foldLabel = folded ? t("Expand {name}", { name: machine.name }) : t("Collapse {name}", { name: machine.name });
   const body = <>
@@ -49,7 +49,7 @@ export function MachineHeader({ machine, folded, onToggle, compact, agents, dot,
     {machine.view_only === true && <span className="machine-kind">{t("View only")}</span>}
     {dot !== null && <span className={`machine-dot is-${dot.state}`} title={dot.title} aria-hidden="true" />}
   </>;
-  return <header className={`machine-header${compact ? " is-compact" : ""}`} draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+  return <header className={`machine-header${compact ? " is-compact" : ""}`} draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} onContextMenu={onContextMenu}>
     {name !== undefined
       ? <div className="machine-title">{body}</div>
       : <button ref={titleRef} type="button" className={`machine-title${current ? " is-current" : ""}`} aria-expanded={!folded} aria-label={foldLabel} title={machine.name} aria-current={current ? "true" : undefined} onClick={onToggle}>{body}</button>}
