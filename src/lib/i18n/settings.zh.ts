@@ -79,6 +79,8 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Only on this device. A hidden PC stays connected, and a link or an alert still opens its panes. One PC is always shown.": "仅对此设备生效。隐藏的 PC 仍保持连接，链接或通知仍可打开它的窗格。始终至少显示一台 PC。",
   "The Host: the computer this app runs on": "主机：运行此应用的计算机",
   "Show {name} in sidebar": "在侧边栏中显示 {name}",
+  "PC order": "PC 顺序",
+  "The same on every device. You can also drag a PC by its name in the sidebar.": "所有设备上的顺序相同。也可以在侧边栏中拖动 PC 的名称来调整顺序。",
   "hide PCs on this device": "在此设备上隐藏 PC",
   "Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.": "已保存的 PC 数据已损坏，应用启动时无法读取，已另存为 {files}。请重新添加缺少的 PC。",
   "The permission to connect to the PCs saved in herdr was damaged and could not be read when the app started. It was set aside as {files}; choose Connect on those PCs again.": "herdr 中保存的 PC 的连接许可已损坏，应用启动时无法读取，已另存为 {files}。请在这些 PC 上再次选择“连接”。",

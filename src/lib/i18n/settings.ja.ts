@@ -79,6 +79,8 @@ export const SETTINGS_JA: Record<string, string> = {
   "Only on this device. A hidden PC stays connected, and a link or an alert still opens its panes. One PC is always shown.": "このデバイスだけの設定です。非表示の PC も接続は続き、リンクや通知からはその PC のペインを開けます。PC は常に 1 台以上表示されます。",
   "The Host: the computer this app runs on": "ホスト: このアプリが動作しているコンピューター",
   "Show {name} in sidebar": "サイドバーに {name} を表示",
+  "PC order": "PC の並び順",
+  "The same on every device. You can also drag a PC by its name in the sidebar.": "すべてのデバイスで同じ並び順になります。サイドバーで PC の名前をドラッグして並べ替えることもできます。",
   "hide PCs on this device": "このデバイスで PC を非表示にする",
   "Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.": "保存された PC のデータが壊れていたため、アプリの起動時に読み込めませんでした。{files} として退避したので、見つからない PC はもう一度追加してください。",
   "The permission to connect to the PCs saved in herdr was damaged and could not be read when the app started. It was set aside as {files}; choose Connect on those PCs again.": "herdr に保存された PC への接続許可が壊れていたため、アプリの起動時に読み込めませんでした。{files} として退避したので、それらの PC で「接続」をもう一度選んでください。",
