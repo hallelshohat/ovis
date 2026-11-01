@@ -156,6 +156,44 @@ async function ghMissing(browser: Browser, origin: string): Promise<void> {
   } finally { await context.close(); }
 }
 
+async function manyChecks(browser: Browser, origin: string): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US" });
+  try {
+    await context.addInitScript(() => {
+      if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+      // a monorepo PR: 48 green checks, one still running and one failing, listed in GitHub's order
+      const passing = Array.from({ length: 48 }, (_, index) => ({ name: index % 6 === 0 ? `Integration Test (@acme/service-with-a-rather-long-name-${index})` : `Check ${index + 1}`, state: "passing", url: null }));
+      const runs = [...passing.slice(0, 20), { name: "Build internal images", state: "pending", url: null }, ...passing.slice(20), { name: "Notify on Failure", state: "failing", url: null }];
+      (window as unknown as { __prAnswer: unknown }).__prAnswer = { gh: "ok", linked: 0, events: [], pull_requests: [{
+        url: "https://github.com/acme/api/pull/9146", number: 9146, repo: "acme/api", own: true, title: "MFA enforcement column and filter on users and groups",
+        state: "open", checks: "failing", review: "none", check_runs: runs, head: "feat/mfa-enforcement-column", base: "main", additions: 1090, deletions: 44,
+        created_at: "2026-10-28T13:00:00Z", merged_at: null, closed_at: null, updated_at: "2026-10-28T13:00:00Z",
+      }] };
+    });
+    const page = await context.newPage();
+    await page.goto(`${origin}/?pane=${encodeURIComponent(panes.api)}`);
+    const inspector = page.locator("#pull-requests");
+    if (await inspector.count() === 0) await page.locator(".pr-header-button").click();
+    const list = inspector.locator(".pr-checks");
+    await list.waitFor();
+    await shot(page, "many-checks");
+    const rows = list.locator(".pr-check");
+    assert.equal(await rows.count(), 50);
+    assert.match(await rows.nth(0).getAttribute("class") ?? "", /is-failing/, "the failing check leads the list");
+    assert.match(await rows.nth(1).getAttribute("class") ?? "", /is-pending/, "the running check comes next");
+    assert.equal(await inspector.locator(".pr-checks-summary").innerText(), "48 passed · 1 running · 1 failed");
+    const box = await list.evaluate((node) => ({ client: node.clientHeight, scroll: node.scrollHeight, row: (node.firstElementChild as HTMLElement).getBoundingClientRect().height, overscroll: getComputedStyle(node).overscrollBehaviorY, tab: node.tabIndex }));
+    assert.ok(box.scroll > box.client, "the list scrolls inside the card");
+    assert.ok(box.client >= box.row * 8 && box.client <= box.row * 12, `the list shows about 8 to 10 rows (${box.client}px, rows ${box.row}px)`);
+    assert.equal(box.overscroll, "contain", "scrolling the list does not carry over to the panel");
+    assert.equal(box.tab, 0, "the keyboard can reach and scroll the list");
+    assert.ok(await inspector.getByRole("button", { name: "Ask Claude to fix", exact: true }).isVisible(), "the card's action stays in view");
+    const action = await inspector.getByRole("button", { name: "Ask Claude to fix", exact: true }).boundingBox();
+    assert.ok(action && action.y + action.height <= 900, "the card's action is on screen without scrolling the panel");
+    console.log("PASS many checks: problems first, a summary line, and a bounded list with its own scroller");
+  } finally { await context.close(); }
+}
+
 async function reducedMotion(browser: Browser, origin: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US", reducedMotion: "reduce" });
   try {
@@ -193,6 +231,7 @@ try {
       for (const theme of ["dark", "light"] as const) await desktop(browser, origin, theme);
       await phone(browser, origin);
       await ghMissing(browser, origin);
+      await manyChecks(browser, origin);
       await reducedMotion(browser, origin);
     } finally { await browser.close(); }
   } finally { server.stop(true); }

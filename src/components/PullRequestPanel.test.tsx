@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { byAttention, type PanePullRequests, type PullRequest } from "../../shared/pull-requests.ts";
 import { SettingsProvider } from "../lib/settings.ts";
-import { fixRequest, PrHeaderButton, PrSheet, PullRequestPanel } from "./PullRequestPanel.tsx";
+import { fixRequest, orderChecks, PrHeaderButton, PrSheet, PullRequestPanel } from "./PullRequestPanel.tsx";
 
 Object.defineProperty(navigator, "languages", { configurable: true, value: ["en-US"] });
 
@@ -33,6 +33,25 @@ describe("the pull request panel", () => {
     const html = render({ gh: "ok", linked: 0, events: [], pull_requests: [pr(1931, { review: "approved", check_runs: [{ name: "Fast checks", state: "passing", url: null }] })] });
     expect(html).toContain(">Squash and merge</button>");
     expect(html).toContain("Approved");
+  });
+
+  it("puts failing and running checks first and sums them up above the list", () => {
+    const runs: PullRequest["check_runs"] = [
+      { name: "a", state: "passing", url: null }, { name: "b", state: "failing", url: null },
+      { name: "c", state: "pending", url: null }, { name: "d", state: "passing", url: null },
+    ];
+    expect(orderChecks(runs).map((run) => run.name)).toEqual(["b", "c", "a", "d"]);
+    const html = render({ gh: "ok", linked: 0, events: [], pull_requests: [pr(9146, { checks: "failing", check_runs: runs })] });
+    expect(html).toContain('<p class="pr-checks-summary">2 passed · 1 running · 1 failed</p>');
+    expect(html.indexOf(">b</span>")).toBeLessThan(html.indexOf(">c</span>"));
+    expect(html.indexOf(">c</span>")).toBeLessThan(html.indexOf(">a</span>"));
+    expect(html).toContain('title="b"');
+    expect(html).toContain('<ul class="pr-checks" aria-label="Checks" tabindex="0">');
+  });
+
+  it("leaves states no check is in out of the summary", () => {
+    const html = render({ gh: "ok", linked: 0, events: [], pull_requests: [pr(1, { check_runs: [{ name: "Fast checks", state: "passing", url: null }] })] });
+    expect(html).toContain('<p class="pr-checks-summary">1 passed</p>');
   });
 
   it("says why there are none when gh cannot answer", () => {
