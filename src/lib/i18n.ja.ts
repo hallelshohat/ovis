@@ -109,6 +109,8 @@ const BASE: Record<string, string> = {
   "Ready to merge": "マージ可能",
   "Checks": "チェック",
   "failed": "失敗",
+  "{n} failed": "失敗 {n} 件",
+  "{n} running": "{n} 件実行中",
   "running": "実行中",
   "Pull requests": "プルリクエスト",
   "Closed": "閉じています",
