@@ -21,6 +21,7 @@ import { RowMenu, rowMenuAnchor, type RowMenuItem } from "./RowMenu.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { sidebarAgents } from "../lib/sidebarAgents.ts";
 import { useEdgeFades } from "../lib/useEdgeFades.ts";
+import { RenamePcDialog } from "./RenamePcDialog.tsx";
 import "./Machines.css";
 import "./SidebarSections.css";
 import { useT } from "../lib/i18n.ts";
@@ -347,6 +348,10 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, reorder, .
   const [name, setName] = useState(machine.name);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // a remote PC's header right-click menu, at the pointer, and the Rename PC dialog it opens
+  const [contextMenu, setContextMenu] = useState<{ anchor: HTMLElement; point: { x: number; y: number }; previousFocus: HTMLElement | null } | null>(null);
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const renamable = machine.kind === "ssh" && !props.watching;
   const online = machine.state === "connected";
   // a PC that waits on the user, or is updating, shows its notice in the state line's place
   const noticed = Boolean(machine.action_required || machine.updating);
@@ -392,7 +397,7 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, reorder, .
   // how the PC is reached follows its state word; a machine of herdr-core says where it is managed instead
   const stateWords = machine.action_required === "setup" ? t("Setup needed") : t(STATE_WORD[machine.state]);
   const stateLine = machine.kind === "hc" ? stateWords : `${stateWords} · ${machine.kind === "relay" ? t("through the relay") : t("over SSH")}`;
-  const manageNote = machine.kind === "hc" ? t("A machine of herdr-core. Add, rename or remove it with hc machine or in the Herdr app.") : machine.herdr_profile_id ? t("Managed by herdr. Rename, disable or remove it there.") : null;
+  const manageNote = machine.kind === "hc" ? t("A machine of herdr-core. Add, rename or remove it with hc machine or in the Herdr app.") : machine.herdr_profile_id ? t("Managed by herdr. Disable or remove it there.") : null;
   const manageItems = (): RowMenuItem[] => manageActions(machine, { busy, canHide }).map(({ id, disabled }): RowMenuItem => {
     switch (id) {
       case "rename": return { id, disabled, label: t("Rename…"), icon: Pencil, run: () => { setName(machine.name); setRenaming(true); } };
@@ -462,7 +467,13 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, reorder, .
         event.dataTransfer.setData(PC_DRAG_TYPE, machine.id);
         reorder.setDrag({ id: machine.id, over: null, side: "before" });
       }}
-      onDragEnd={() => reorder?.setDrag(null)}>
+      onDragEnd={() => reorder?.setDrag(null)}
+      onContextMenu={(event) => {
+        // the Host has no rename here: its name is the computer's
+        if (!renamable) return;
+        event.preventDefault();
+        setContextMenu({ anchor: event.currentTarget, point: { x: event.clientX, y: event.clientY }, previousFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null });
+      }}>
       <div className="machine-title" onClick={renaming ? undefined : toggle}>
         <span className="sidebar-mark" aria-hidden="true"><Monitor /></span>
         {renaming ? <input
@@ -515,6 +526,9 @@ function MachineGroup({ machine, headerless = false, canHide, onHide, reorder, .
     </span>} />}
     {confirmRemove && <ConfirmDialog title={t("Remove PC {name}?", { name: machine.name })} body={t(machine.kind === "relay" ? "Removes this PC here. To end its access too, revoke it under Phone & devices on that PC." : "Removes this registration. Remote sessions keep running.")} confirmLabel={t("Remove PC")}
       onConfirm={async () => { await mutate("DELETE", undefined, true); setConfirmRemove(false); }} onClose={() => setConfirmRemove(false)} />}
+    {contextMenu && <RowMenu anchor={contextMenu.anchor} point={contextMenu.point} restoreFocusTo={contextMenu.previousFocus} title={machine.name} items={[{ id: "rename-pc", label: t("Rename PC…"), icon: Pencil, run: () => setRenameDialogOpen(true) }]} onClose={() => setContextMenu(null)} />}
+    {renameDialogOpen && <RenamePcDialog name={machine.name} herdr={Boolean(machine.herdr_profile_id)} onClose={() => setRenameDialogOpen(false)}
+      onRename={async (next) => { await machineRequest(`/${machine.id}`, "PATCH", { name: next }); setName(next); setRenameDialogOpen(false); }} />}
     {error && <p className="machine-error" role="alert">{error}</p>}
     {/* under a filter a folded PC's roster is mounted, hidden, so the branches it reads can be found */}
     {(!folded || filtered !== null) && <div className={online ? "" : "machine-offline"} inert={!online} hidden={folded}>
