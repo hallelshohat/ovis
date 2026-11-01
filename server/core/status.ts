@@ -49,6 +49,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     telemetry?: Telemetry;
     machines?: boolean;
     herdrProfiles?: () => Promise<HerdrMachineProfile[]>;
+    herdrRename?: (profileId: string, label: string) => Promise<void>;
     alertTiming?: Partial<AlertTiming>;
     pushLoopbackHttp?: boolean;
     backgroundWait?: { grace: number; limit: number };
@@ -328,6 +329,7 @@ export function createStatusHub<Owner, Lease>({ options, devices, preferences, c
     ({ type: "pane-status", pane_id: paneId, agent_status: status, ...finishes.status(paneId, status), ...about, ...(waits.waiting(paneId) ? { background_wait: true as const } : {}) });
   const machines = options.machines === false ? null : new MachineManager(options.stateDir ?? defaultStateDir(), push, completions, clientSnapshot, { bootId: options.orderSequence?.epoch, localFinishEpoch: () => finishes.epoch });
   if (machines && options.herdrProfiles) machines.watchHerdrProfiles(options.herdrProfiles);
+  if (machines && options.herdrRename) machines.renameHerdrProfiles(options.herdrRename);
 
   function broadcastAll(message: ServerMessage): void {
     machines?.localMessage(message);

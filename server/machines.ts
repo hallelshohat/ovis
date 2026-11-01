@@ -246,6 +246,12 @@ export function bridgeAgentNews(tell: () => void) {
   };
 }
 
+/** A PC's name as a rename sends it: trimmed, 1–100 characters. */
+function pcName(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 100) throw new Error("Enter a PC name (1–100 characters)");
+  return value.trim();
+}
+
 export class MachineManager {
   private machines = new Map<string, Runtime>();
   private jobs = new Map<string, JobState>();
@@ -272,6 +278,7 @@ export class MachineManager {
   private remoteDiagnostics = new ConnectionDiagnostics("machine.remote");
   private discoveryTimer?: ReturnType<typeof setTimeout>;
   private discoveryStarted = false;
+  private herdrRename: ((profileId: string, label: string) => Promise<void>) | null = null;
   private settingsPath: string;
   private preferences: MachineSettings = { ...DEFAULT_SETTINGS };
   /** automatic bridge updates run one at a time: they share one bundle download */
@@ -1494,12 +1501,25 @@ export class MachineManager {
       void this.refresh(runtime).catch((e) => this.lost(runtime, generation!, e));
     };
   }
-  patch(id: string, patch: { name?: unknown; enabled?: unknown }): void {
+  /** How a saved herdr machine is renamed (server/herdr-profiles.ts renameHerdrProfile); none: only in herdr. */
+  renameHerdrProfiles(rename: (profileId: string, label: string) => Promise<void>): void { this.herdrRename = rename; }
+  async patch(id: string, patch: { name?: unknown; enabled?: unknown }): Promise<void> {
     const runtime = this.machines.get(id);
     if (!runtime) throw new Error("PC not found");
-    if (runtime.machine.herdr_profile_id) throw new Error("Rename or disable this machine in herdr");
+    const name = patch.name === undefined ? undefined : pcName(patch.name);
+    const profileId = runtime.machine.herdr_profile_id;
+    if (profileId) {
+      // herdr keeps the label: the rename is herdr's, and its catalog brings the name back on its next read.
+      // Connecting and disconnecting it stay herdr's (herdr machine enable / disable).
+      if (patch.enabled !== undefined) throw new Error("Disable or enable this machine in herdr");
+      if (name === undefined || !this.herdrRename) throw new Error("Rename this machine in herdr");
+      await this.herdrRename(profileId, name);
+      // shown at once; a PC herdr dropped while it renamed is not brought back
+      if (this.machines.get(id) === runtime && runtime.machine.name !== name) { runtime.machine.name = name; this.emit(); }
+      return;
+    }
     if (patch.enabled !== undefined && typeof patch.enabled !== "boolean") throw new Error("enabled must be boolean");
-    if (patch.name !== undefined) { if (typeof patch.name !== "string" || !patch.name.trim() || patch.name.length > 100) throw new Error("Enter a PC name (1–100 characters)"); runtime.machine.name = patch.name.trim(); }
+    if (name !== undefined) runtime.machine.name = name;
     if (patch.enabled !== undefined) {
       if (typeof patch.enabled !== "boolean") throw new Error("enabled must be boolean");
       runtime.machine.enabled = patch.enabled;
