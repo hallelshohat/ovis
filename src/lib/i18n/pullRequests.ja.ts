@@ -32,4 +32,5 @@ export const PULL_REQUESTS_JA: Record<string, string> = {
   "Opened": "オープン",
   "Branch {from} → {to}": "ブランチ {from} → {to}",
   "Pull requests: {reason}": "プルリクエスト: {reason}",
+  "{n} passed": "{n} 件成功",
 };

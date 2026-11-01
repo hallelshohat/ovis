@@ -110,6 +110,8 @@ const BASE: Record<string, string> = {
   "Ready to merge": "可以合并",
   "Checks": "检查",
   "failed": "失败",
+  "{n} failed": "{n} 个失败",
+  "{n} running": "{n} 个运行中",
   "running": "运行中",
   "Pull requests": "拉取请求",
   "Closed": "已关闭",
