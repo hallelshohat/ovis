@@ -107,12 +107,22 @@
 .pr-plus,
 .pr-minus { color: var(--text-dim); }
 
+.pr-checks-summary {
+  margin: var(--space-1) 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+/* about nine rows, then its own scroller: a half row shows there is more, and the panel scrolls only past its end */
 .pr-checks {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  margin: var(--space-1) 0 0;
+  max-height: calc(9.5 * (var(--fs-xs) * var(--lh-base) + var(--space-1)));
+  margin: 0;
   padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   list-style: none;
 }
 
@@ -133,6 +143,8 @@
   height: calc(var(--icon-size) * 0.7);
   color: var(--pr-open);
 }
+
+.pr-check { flex: none; }
 
 .pr-check.is-failing svg { color: var(--pr-failing); }
 .pr-check.is-pending svg { color: var(--pr-draft); }
