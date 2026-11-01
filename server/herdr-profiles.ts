@@ -54,13 +54,19 @@ export function sameSshSession(a: SshTarget, b: SshTarget): boolean {
 }
 
 /**
- * Renames a saved herdr machine (`herdr machine rename`); the next read of the catalog carries the
- * new label. The label is passed as `--label=<label>`, so one that starts with a dash is a value,
- * not a flag.
+ * The arguments of `herdr machine rename`. herdr 0.9 takes the profile id first and refuses it after
+ * the label (its usage line: `herdr machine rename <profile-id> --label <label>`, although its --help
+ * lists the label first). The label goes as `--label=<label>`, so one that starts with a dash is a
+ * value, not a flag.
  */
+export function herdrRenameArgs(profileId: string, label: string): string[] {
+  return ["machine", "rename", profileId, `--label=${label}`];
+}
+
+/** Renames a saved herdr machine (`herdr machine rename`); the next read of the catalog carries the new label. */
 export async function renameHerdrProfile(profileId: string, label: string): Promise<void> {
   try {
-    await run(process.env.OVIS_HERDR_BIN || "herdr", ["machine", "rename", `--label=${label}`, profileId], {
+    await run(process.env.OVIS_HERDR_BIN || "herdr", herdrRenameArgs(profileId, label), {
       timeout: 5_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, encoding: "utf8", windowsHide: true,
     });
   } catch {
