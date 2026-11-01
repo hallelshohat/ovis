@@ -92,9 +92,11 @@ describe("the folds Settings → Chat starts a turn with", () => {
     expect(running).toContain("2 commands");
     expect(expanded(render(parts, { live: true, waiting: true }, "assistant", { foldWork: true }))).toEqual([true]);
     expect(expanded(render([...parts, commentary("Still looking.")], { live: false }, "assistant", { foldWork: true }))).toEqual([false]);
-    // off, as before: the running block open, a settled one open only for words after its answer
+    // off, the running block opens; the fork keeps later narration visible outside the folded work
     expect(expanded(render(parts, { live: true }))).toEqual([true]);
-    expect(expanded(render([...parts, commentary("Still looking.")], { live: false }))).toEqual([true]);
+    const settled = render([...parts, commentary("Still looking.")], { live: false });
+    expect(expanded(settled)).toEqual([false]);
+    expect(settled).toContain("Still looking.");
   });
 
   it("starts the agent's reasoning open with Expand thinking on, and folded otherwise (#2346)", () => {
@@ -189,7 +191,7 @@ describe("an agent turn's folded work, drawn again", () => {
   const draw = async (parts: ConversationPart[], folds: Folds = {}) => {
     await act(async () => { if (renderer) renderer.update(view(parts, folds)); else renderer = create(view(parts, folds)); });
   };
-  const heads = () => renderer!.root.findAll((node) => node.props.className === "work-block-head");
+  const heads = () => renderer!.root.findAll((node) => node.type === "button" && node.props.className === "work-block-head");
   const opened = () => heads().map((node) => node.props["aria-expanded"] as boolean);
   const toggle = async (index: number) => { await act(async () => { heads()[index]!.props.onClick(); }); };
   const thoughts = () => renderer!.root.findAll((node) => node.type === "div" && node.props.className === "work-row work-row-thinking").map((row) => row.findByType("button"));
@@ -305,11 +307,10 @@ describe("an agent turn's folded work, drawn again", () => {
 
   it("keeps a block's fold while its run is hidden reasoning alone, until it draws again", async () => {
     const reasoning: ConversationPart = { kind: "thinking", text: "Weighing it." };
-    await draw([commentary("Checking."), reasoning]);
+    await draw([commentary("Checking."), reasoning], { showThinking: true });
     await toggle(0);
     expect(opened()).toEqual([false]);
-    // the words become the answer: what is left of the run draws no block, through every redraw
-    // while the reasoning streams
+    // hiding reasoning removes the block, but keeps its fold while the reasoning streams
     await draw([answer("Checking."), reasoning]);
     expect(opened()).toEqual([]);
     await draw([answer("Checking."), { ...reasoning, text: "Weighing it again." }]);
@@ -322,20 +323,19 @@ describe("an agent turn's folded work, drawn again", () => {
   });
 
   it("keeps a merged block's fold when a part leaves it", async () => {
-    await draw([tool("ls"), text("One shelf."), commentary("Checking it.")]);
+    await draw([tool("ls"), text("One shelf."), tool("cat")]);
     expect(opened()).toEqual([false, true]);
-    // the reader folds the working run and opens it again
     await toggle(1);
     await toggle(1);
-    // the words between become commentary: one run, which the reader folds
-    await draw([tool("ls"), commentary("One shelf."), commentary("Checking it.")]);
+    // empty prose joins the runs; the reader folds the merged block
+    await draw([tool("ls"), text(""), tool("cat")]);
     expect(opened()).toEqual([true]);
     await toggle(0);
     expect(opened()).toEqual([false]);
-    // its last words become the answer and leave it
-    await draw([tool("ls"), commentary("One shelf."), answer("Checking it.")]);
+    // the last part becomes prose and leaves the action run
+    await draw([tool("ls"), text(""), answer("Checking it.")]);
     expect(opened()).toEqual([false]);
-    await remount([tool("ls"), commentary("One shelf."), answer("Checking it.")]);
+    await remount([tool("ls"), text(""), answer("Checking it.")]);
     expect(opened()).toEqual([false]);
   });
 });
