@@ -52,7 +52,7 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     }
 
     const button = page.locator(".pr-header-button");
-    assert.match(await button.innerText(), /client-sdk#88\s*Checks failing/, `${theme}: the header leads with the failing PR`);
+    assert.match(await button.innerText(), /client-sdk#88\s*Checks failed/, `${theme}: the header leads with the failing PR`);
     const inspector = page.locator("#pull-requests");
     await inspector.waitFor();
     assert.equal(await button.getAttribute("aria-expanded"), "true");
