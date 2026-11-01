@@ -471,7 +471,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
       const from = pointed === null ? -1 : indexOf(pointed);
       const index = from < 0 ? (event.key === "ArrowDown" ? 0 : findLines.length - 1) : Math.min(Math.max(from + (event.key === "ArrowDown" ? 1 : -1), 0), findLines.length - 1);
       setChangeIndex(null);
-    setCursor({ index, quiet: false });
+      setCursor({ index, quiet: false });
       setNoteAdded(false);
     } else if (event.key === "Enter" && pointed !== null) {
       event.preventDefault();
