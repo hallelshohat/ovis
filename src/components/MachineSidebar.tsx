@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type FocusEvent, type KeyboardEvent } from "react";
-import { ChevronDown, ChevronRight, Monitor, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Monitor, Pencil, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
 import { OWN_UPDATE_OFFER, type Machine, type MachineState, type MachineUpdate, type RemoteOvis } from "../../shared/machines.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { AppLayoutContext, MachineContext } from "../lib/machineContext.tsx";
@@ -14,7 +14,8 @@ import { SidebarActivityProvider, type SidebarActivity } from "../lib/sidebarAct
 import { filterSuggestions, machineFilter, sidebarFilter, type SidebarBranchLabels } from "../lib/sidebarFilter.ts";
 import { SidebarFilterProvider, useSidebarFilter } from "../lib/sidebarFilterContext.ts";
 import { UsageMeters } from "./UsageMeters.tsx";
-import { rowMenuAnchor } from "./RowMenu.tsx";
+import { RowMenu, rowMenuAnchor } from "./RowMenu.tsx";
+import { RenamePcDialog } from "./RenamePcDialog.tsx";
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
 import { useSettings } from "../lib/settings.ts";
@@ -223,6 +224,10 @@ function MachineGroup({ machine, headerless = false, reorder, ...props }: Props 
   const [name, setName] = useState(machine.name);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // a remote PC's header right-click menu, at the pointer, and the Rename PC dialog it opens
+  const [menu, setMenu] = useState<{ anchor: HTMLElement; point: { x: number; y: number }; previousFocus: HTMLElement | null } | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const renamable = machine.kind === "ssh" && !props.watching;
   const online = machine.state === "connected";
   // a PC that waits on the user, or is updating, shows its notice in the state line's place
   const noticed = Boolean(machine.action_required || machine.updating);
@@ -308,7 +313,13 @@ function MachineGroup({ machine, headerless = false, reorder, ...props }: Props 
         event.dataTransfer.setData(PC_DRAG_TYPE, machine.id);
         reorder.setDrag({ id: machine.id, over: null, side: "before" });
       }}
-      onDragEnd={() => reorder?.setDrag(null)}>
+      onDragEnd={() => reorder?.setDrag(null)}
+      onContextMenu={(event) => {
+        // the Host has no rename here: its name is the computer's
+        if (!renamable) return;
+        event.preventDefault();
+        setMenu({ anchor: event.currentTarget, point: { x: event.clientX, y: event.clientY }, previousFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null });
+      }}>
       <div className="machine-title">
         <span className="sidebar-mark" aria-hidden="true"><Monitor /></span>
         <span className="machine-name">{machine.name}</span>
@@ -330,8 +341,13 @@ function MachineGroup({ machine, headerless = false, reorder, ...props }: Props 
       {!noticed && machine.error && <span className="machine-state-detail">{machineErrorText(machine.error, t)}</span>}
       {nextStep !== null && <span className="machine-state-next">{nextStep}</span>}
     </p>
+    {menu && <RowMenu anchor={menu.anchor} point={menu.point} restoreFocusTo={menu.previousFocus} title={machine.name} items={[{ id: "rename-pc", label: t("Rename PC…"), icon: Pencil, run: () => setRenaming(true) }]} onClose={() => setMenu(null)} />}
+    {renaming && <RenamePcDialog name={machine.name} herdr={Boolean(machine.herdr_profile_id)} onClose={() => setRenaming(false)}
+      onRename={async (next) => { await machineRequest(`/${machine.id}`, "PATCH", { name: next }); setName(next); setRenaming(false); }} />}
     {editing && <div className="machine-controls">
-      {machine.herdr_profile_id ? <p className="field-hint">{t("Managed by herdr. Rename, disable or remove it there.")}</p> : <form onSubmit={(e) => { e.preventDefault(); void mutate("PATCH", { name }); }}><label className="field"><span className="field-label">{t("PC name")}</span><input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></label><button className="btn" type="submit" disabled={busy !== null}>{t("Rename")}</button></form>}
+      {/* a PC saved in herdr is renamed in herdr by the server (herdr machine rename); the rest of it is herdr's */}
+      {machine.herdr_profile_id && <p className="field-hint">{t("Managed by herdr. Disable or remove it there.")}</p>}
+      <form onSubmit={(e) => { e.preventDefault(); void mutate("PATCH", { name }); }}><label className="field"><span className="field-label">{t("PC name")}</span><input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></label><button className="btn" type="submit" disabled={busy !== null}>{t("Rename")}</button></form>
       {/* The first removal click only arms the action; the second is destructive. */}
       <div className="machine-control-buttons">
         {!machine.herdr_profile_id && <button className="btn" disabled={busy !== null} onClick={() => void mutate("PATCH", { enabled: !machine.enabled })}>{t(machine.enabled ? "Disconnect" : "Connect")}</button>}

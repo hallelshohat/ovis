@@ -4,7 +4,7 @@ import { ClientConnectionLog } from "./client-connection-log.ts";
 import { RequestLog } from "./request-log.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { OrderSequence } from "./order-sequence.ts";
-import { readHerdrProfiles, type HerdrMachineProfile } from "./herdr-profiles.ts";
+import { readHerdrProfiles, renameHerdrProfile, type HerdrMachineProfile } from "./herdr-profiles.ts";
 import { accessSync, constants, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { PendingMessage, SessionSnapshot } from "../shared/protocol.ts";
@@ -155,6 +155,8 @@ export function createServer(
     bridgeOnly?: boolean;
     /** Read-only saved profiles from the local herdr client; tests supply their own catalog. */
     herdrProfiles?: () => Promise<HerdrMachineProfile[]>;
+    /** Renames a saved herdr machine (herdr machine rename); tests supply their own. */
+    herdrRename?: (profileId: string, label: string) => Promise<void>;
     /** herdr's config.toml, for its sidebar rows (server/herdr-sidebar.ts) and its copy_on_select (server/herdr-ui.ts); unset, where herdr itself reads it. Tests pass a temp file. */
     herdrConfigPath?: string;
     registerBridge?: boolean;
@@ -408,7 +410,7 @@ if (import.meta.main) {
   const relay = new RelayService({ stateDir });
   let instance: ReturnType<typeof createServer>;
   try {
-    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, relay, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir) });
+    instance = createServer({ updates, herdrUpdate: new HerdrUpdater(), portal, relay, telemetry, registerBridge: true, herdrProfiles: readHerdrProfiles, herdrRename: renameHerdrProfile, shellAgents: new ShellAgentLocator(), agentDetector: new AgentDetector({ locate: catalogLocator({ probe: defaultLoginProbe() }) }), stateDir, siblingStateDir: siblingStateDir(stateDir) });
     instance.warmAgentCatalog();
   } catch (err) {
     const { code, syscall } = err as { code?: string; syscall?: string };
