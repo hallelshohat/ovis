@@ -194,6 +194,39 @@ async function manyChecks(browser: Browser, origin: string): Promise<void> {
   } finally { await context.close(); }
 }
 
+// two workflows can name a check alike: a live update that turns one check red moves rows around,
+// and the list must still hold one row per check
+async function sameNameChecks(browser: Browser, origin: string): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US" });
+  try {
+    await context.addInitScript(() => {
+      if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+      const answer = (integration: string) => ({ gh: "ok", linked: 0, events: [], pull_requests: [{
+        url: "https://github.com/acme/api/pull/9147", number: 9147, repo: "acme/api", own: true, title: "Two workflows, one check name",
+        state: "open", checks: integration === "failing" ? "failing" : "passing", review: "none", head: "feat/two-builds", base: "main", additions: 1, deletions: 1,
+        check_runs: [{ name: "Build", state: "passing", url: null }, { name: "Build", state: "passing", url: null }, { name: "Integration", state: integration, url: null }],
+        created_at: "2026-10-28T13:00:00Z", merged_at: null, closed_at: null, updated_at: "2026-10-28T13:00:00Z",
+      }] });
+      const own = window as unknown as { __prAnswer: unknown; __prAnswerFor: typeof answer };
+      own.__prAnswer = answer("passing");
+      own.__prAnswerFor = answer;
+    });
+    const page = await context.newPage();
+    await page.clock.install();
+    await page.goto(`${origin}/?pane=${encodeURIComponent(panes.api)}`);
+    const inspector = page.locator("#pull-requests");
+    if (await inspector.count() === 0) await page.locator(".pr-header-button").click();
+    const rows = inspector.locator(".pr-check");
+    await inspector.locator(".pr-checks-summary").getByText("3 passed", { exact: true }).waitFor();
+    await page.evaluate(() => { const own = window as unknown as { __prAnswer: unknown; __prAnswerFor(state: string): unknown }; own.__prAnswer = own.__prAnswerFor("failing"); });
+    await page.clock.fastForward(61_000);
+    await inspector.locator(".pr-checks-summary").getByText("2 passed · 1 failed", { exact: true }).waitFor();
+    const names = await rows.evaluateAll((items) => items.map((item) => `${item.querySelector(".pr-check-name")?.textContent} ${item.className.replace("pr-check is-", "")}`));
+    assert.deepEqual(names, ["Integration failing", "Build passing", "Build passing"], "one row per check after a live update");
+    console.log("PASS same-name checks: a live update keeps one row per check, the failing one first");
+  } finally { await context.close(); }
+}
+
 async function reducedMotion(browser: Browser, origin: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-US", reducedMotion: "reduce" });
   try {
@@ -232,6 +265,7 @@ try {
       await phone(browser, origin);
       await ghMissing(browser, origin);
       await manyChecks(browser, origin);
+      await sameNameChecks(browser, origin);
       await reducedMotion(browser, origin);
     } finally { await browser.close(); }
   } finally { server.stop(true); }

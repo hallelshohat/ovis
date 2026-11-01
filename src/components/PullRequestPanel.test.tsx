@@ -40,13 +40,22 @@ describe("the pull request panel", () => {
       { name: "a", state: "passing", url: null }, { name: "b", state: "failing", url: null },
       { name: "c", state: "pending", url: null }, { name: "d", state: "passing", url: null },
     ];
-    expect(orderChecks(runs).map((run) => run.name)).toEqual(["b", "c", "a", "d"]);
+    expect(orderChecks(runs).map(({ run }) => run.name)).toEqual(["b", "c", "a", "d"]);
     const html = render({ gh: "ok", linked: 0, events: [], pull_requests: [pr(9146, { checks: "failing", check_runs: runs })] });
     expect(html).toContain('<p class="pr-checks-summary">2 passed · 1 running · 1 failed</p>');
     expect(html.indexOf(">b</span>")).toBeLessThan(html.indexOf(">c</span>"));
     expect(html.indexOf(">c</span>")).toBeLessThan(html.indexOf(">a</span>"));
     expect(html).toContain('title="b"');
     expect(html).toContain('<ul class="pr-checks" aria-label="Checks" tabindex="0">');
+  });
+
+  it("keys checks that share a name apart, so live updates never keep a stale row", () => {
+    const runs: PullRequest["check_runs"] = [
+      { name: "Build", state: "passing", url: null }, { name: "Build", state: "passing", url: null }, { name: "Integration", state: "failing", url: null },
+    ];
+    const keys = orderChecks(runs).map(({ key }) => key);
+    expect(new Set(keys).size).toBe(3);
+    expect(keys[0]).toBe("Integration\u00000");
   });
 
   it("leaves states no check is in out of the summary", () => {

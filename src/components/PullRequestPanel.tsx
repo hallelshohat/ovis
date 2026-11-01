@@ -31,9 +31,18 @@ export function fixRequest(pr: PullRequest): string {
 
 const CHECK_ORDER: Record<PrCheck["state"], number> = { failing: 0, pending: 1, passing: 2 };
 
-/** The checks that need the person first: failing, then running, then passed, each in GitHub's order. */
-export function orderChecks(runs: PrCheck[]): PrCheck[] {
-  return [...runs].sort((a, b) => CHECK_ORDER[a.state] - CHECK_ORDER[b.state]);
+/**
+ * The checks that need the person first: failing, then running, then passed, each in GitHub's order.
+ * Checks from two workflows can share a name, so each gets a key of its name and how many of that
+ * name came before it: a key React can tell apart while the rows change places.
+ */
+export function orderChecks(runs: PrCheck[]): { run: PrCheck; key: string }[] {
+  const seen = new Map<string, number>();
+  return runs.map((run) => {
+    const nth = seen.get(run.name) ?? 0;
+    seen.set(run.name, nth + 1);
+    return { run, key: `${run.name}\u0000${nth}` };
+  }).sort((a, b) => CHECK_ORDER[a.run.state] - CHECK_ORDER[b.run.state]);
 }
 
 /** One line over the list: "48 passed · 1 running · 1 failed", leaving out the states no check is in. */
@@ -114,7 +123,7 @@ function LeadCard({ pr, agentName, onAskFix, onMerge }: { pr: PullRequest; agent
       {pr.check_runs.length > 0 && <p className="pr-checks-summary">{checksSummary(pr.check_runs, t)}</p>}
       {/* its own scroller, so 50 checks never push the card's actions away; tabIndex lets the keyboard scroll it */}
       {pr.check_runs.length > 0 && <ul className="pr-checks" aria-label={t("Checks")} tabIndex={0}>
-        {orderChecks(pr.check_runs).map((run) => <li key={run.name} className={`pr-check is-${run.state}`}>
+        {orderChecks(pr.check_runs).map(({ run, key }) => <li key={key} className={`pr-check is-${run.state}`}>
           {run.state === "passing" ? <Check aria-hidden="true" /> : run.state === "failing" ? <X aria-hidden="true" /> : <Circle aria-hidden="true" />}
           <span className="pr-check-name" title={run.name}>{run.name}</span>
           <span className="visually-hidden">{run.state === "passing" ? t("passed") : run.state === "failing" ? t("failed") : t("running")}</span>
