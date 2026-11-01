@@ -3,7 +3,7 @@ import "./PullRequestPanel.css";
 import { Check, Circle, ExternalLink, GitBranch, GitPullRequest, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { paneStorageId } from "../../shared/machines.ts";
-import { canMerge, prLabel, type GhStatus, type PanePullRequests, type PullRequest } from "../../shared/pull-requests.ts";
+import { canMerge, prLabel, type GhStatus, type PanePullRequests, type PrCheck, type PullRequest } from "../../shared/pull-requests.ts";
 import { mergePullRequest } from "../lib/api.ts";
 import { composerDrafts } from "../lib/composerDraft.ts";
 import { useT } from "../lib/i18n.ts";
@@ -27,6 +27,32 @@ export interface PullRequestPanelProps {
 export function fixRequest(pr: PullRequest): string {
   const failed = pr.check_runs.filter((run) => run.state === "failing").map((run) => run.name);
   return `These checks failed on ${prLabel(pr)} (${pr.title}): ${failed.join(", ") || "the required checks"}. Please fix them and push the branch.`;
+}
+
+const CHECK_ORDER: Record<PrCheck["state"], number> = { failing: 0, pending: 1, passing: 2 };
+
+/**
+ * The checks that need the person first: failing, then running, then passed, each in GitHub's order.
+ * Checks from two workflows can share a name, so each gets a key of its name and how many of that
+ * name came before it: a key React can tell apart while the rows change places.
+ */
+export function orderChecks(runs: PrCheck[]): { run: PrCheck; key: string }[] {
+  const seen = new Map<string, number>();
+  return runs.map((run) => {
+    const nth = seen.get(run.name) ?? 0;
+    seen.set(run.name, nth + 1);
+    return { run, key: `${run.name}\u0000${nth}` };
+  }).sort((a, b) => CHECK_ORDER[a.run.state] - CHECK_ORDER[b.run.state]);
+}
+
+/** One line over the list: "48 passed · 1 running · 1 failed", leaving out the states no check is in. */
+export function checksSummary(runs: PrCheck[], t: ReturnType<typeof useT>): string {
+  const count = (state: PrCheck["state"]): number => runs.filter((run) => run.state === state).length;
+  return [
+    count("passing") > 0 ? t("{n} passed", { n: count("passing") }) : null,
+    count("pending") > 0 ? t("{n} running", { n: count("pending") }) : null,
+    count("failing") > 0 ? t("{n} failed", { n: count("failing") }) : null,
+  ].filter((part) => part !== null).join(" · ");
 }
 
 /** Puts a request in the pane's message box, after anything the person already wrote there, and gives the box the focus. */
@@ -94,10 +120,12 @@ function LeadCard({ pr, agentName, onAskFix, onMerge }: { pr: PullRequest; agent
       <div className="pr-card-head"><PullRequestBadge pr={pr} size="full" /><GitHubLink pr={pr} /></div>
       <p className="pr-card-title">{pr.title}</p>
       <p className="pr-card-meta"><GitBranch aria-hidden="true" /><span className="pr-card-branch">{pr.head} → {pr.base}</span><span className="pr-plus">+{pr.additions}</span><span className="pr-minus">−{pr.deletions}</span></p>
-      {pr.check_runs.length > 0 && <ul className="pr-checks" aria-label={t("Checks")}>
-        {pr.check_runs.map((run) => <li key={run.name} className={`pr-check is-${run.state}`}>
+      {pr.check_runs.length > 0 && <p className="pr-checks-summary">{checksSummary(pr.check_runs, t)}</p>}
+      {/* its own scroller, so 50 checks never push the card's actions away; tabIndex lets the keyboard scroll it */}
+      {pr.check_runs.length > 0 && <ul className="pr-checks" aria-label={t("Checks")} tabIndex={0}>
+        {orderChecks(pr.check_runs).map(({ run, key }) => <li key={key} className={`pr-check is-${run.state}`}>
           {run.state === "passing" ? <Check aria-hidden="true" /> : run.state === "failing" ? <X aria-hidden="true" /> : <Circle aria-hidden="true" />}
-          <span className="pr-check-name">{run.name}</span>
+          <span className="pr-check-name" title={run.name}>{run.name}</span>
           <span className="visually-hidden">{run.state === "passing" ? t("passed") : run.state === "failing" ? t("failed") : t("running")}</span>
         </li>)}
       </ul>}
