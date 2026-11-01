@@ -190,6 +190,17 @@ async function manyChecks(browser: Browser, origin: string): Promise<void> {
     assert.ok(await inspector.getByRole("button", { name: "Ask Claude to fix", exact: true }).isVisible(), "the card's action stays in view");
     const action = await inspector.getByRole("button", { name: "Ask Claude to fix", exact: true }).boundingBox();
     assert.ok(action && action.y + action.height <= 900, "the card's action is on screen without scrolling the panel");
+    // page keys on the focused list page the list, not the chat beside it
+    const chat = page.locator(".chat-view").first();
+    await list.focus();
+    const chatBefore = await chat.evaluate((node) => node.scrollTop);
+    await page.keyboard.press("PageDown");
+    await page.waitForFunction(() => (document.querySelector(".pr-checks")?.scrollTop ?? 0) > 0);
+    await page.keyboard.press("End");
+    await page.waitForFunction(() => { const node = document.querySelector(".pr-checks")!; return node.scrollTop + node.clientHeight >= node.scrollHeight - 1; });
+    await page.keyboard.press("PageUp");
+    await page.waitForFunction(() => { const node = document.querySelector(".pr-checks")!; return node.scrollTop + node.clientHeight < node.scrollHeight - 1; });
+    assert.equal(await chat.evaluate((node) => node.scrollTop), chatBefore, "the chat stays put while the list pages");
     console.log("PASS many checks: problems first, a summary line, and a bounded list with its own scroller");
   } finally { await context.close(); }
 }
