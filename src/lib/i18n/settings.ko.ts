@@ -85,6 +85,8 @@ export const SETTINGS_KO: Record<string, string> = {
   "Only on this device. A hidden PC stays connected, and a link or an alert still opens its panes. One PC is always shown.": "이 기기에만 적용됩니다. 숨긴 PC도 계속 연결되어 있으며, 링크나 알림으로는 그 PC의 패널을 그대로 열 수 있습니다. PC 하나는 항상 표시됩니다.",
   "The Host: the computer this app runs on": "호스트: 이 앱이 실행되는 컴퓨터",
   "Show {name} in sidebar": "사이드바에 {name} 표시",
+  "PC order": "PC 순서",
+  "The same on every device. You can also drag a PC by its name in the sidebar.": "모든 기기에서 같은 순서로 표시됩니다. 사이드바에서 PC 이름을 끌어 순서를 바꿀 수도 있습니다.",
   "hide PCs on this device": "이 기기에서 PC 숨기기",
   "Saved PC data was damaged and could not be read when the app started. It was set aside as {files}; add any missing PC again.": "저장된 PC 데이터가 손상되어 앱을 시작할 때 읽을 수 없었습니다. {files}(으)로 옮겨 두었으니, 빠진 PC는 다시 추가하세요.",
   "The permission to connect to the PCs saved in herdr was damaged and could not be read when the app started. It was set aside as {files}; choose Connect on those PCs again.": "herdr에 저장된 PC의 연결 허용 정보가 손상되어 앱을 시작할 때 읽을 수 없었습니다. {files}(으)로 옮겨 두었으니, 그 PC에서 연결을 다시 선택하세요.",
