@@ -3,7 +3,8 @@ import { closeSync, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { commandTerminals } from "./claude-subagents.ts";
 import { TranscriptBusyError, transcriptReader, type TranscriptFile } from "./transcript-reader.ts";
 
-export interface CommandEnd { id: string; at: number; status: "completed" | "failed" | "cancelled"; call: string | null }
+
+export interface CommandEnd { exitCode?: number | null; id: string; at: number; status: "completed" | "failed" | "cancelled"; call: string | null }
 export interface HistoryVersion { id: string; size: number; mtimeMs: number }
 export interface HistoryEvidence { version: HistoryVersion; through: number; complete: boolean; ends: HistoryEnd[] }
 export type HistoryEnd = CommandEnd & { from: number; to: number; digest: bigint };

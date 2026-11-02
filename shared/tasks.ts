@@ -19,7 +19,34 @@ export interface OmoTask {
    * child session in OpenCode's store), null for a source it reads nothing of (OmO's tasks, a
    * background command). Absent from a bridge from before the route.
    */
-  detail_kind?: "claude-subagent" | "opencode-subagent" | null;
+  detail_kind?: "claude-subagent" | "opencode-subagent" | "output" | null;
+  /** what started it: an `Agent` subagent, a background `Bash` command, a `Monitor` watch, a `Workflow` run, a Codex exec session. Absent from older bridges and OmO/OpenCode tasks */
+  kind?: BackgroundTaskKind;
+  /** the command (or watch, or workflow) it runs, when the title is its description */
+  command?: string | null;
+  /** what the command exited with, when its end says */
+  exit_code?: number | null;
+  /** the agent's id for the call that started it (Claude `tool_use.id`): the chat card it links to */
+  tool_use_id?: string | null;
+}
+
+export type BackgroundTaskKind = "subagent" | "command" | "monitor" | "workflow" | "exec";
+
+/**
+ * GET /api/pane/background-output?pane_id=&task_id=&offset=: a background command's output,
+ * from `offset` on (the bytes `start`..`offset` of it), at most 64 KiB a read. No offset, or one
+ * past the output's end (it was rewritten), reads its last 64 KiB with `reset`: the client drops
+ * what it had. `gone`: nothing of it is kept (Claude Code removes the folder with its session).
+ */
+export interface PaneBackgroundOutput {
+  task_id: string;
+  text: string;
+  start: number;
+  offset: number;
+  size: number;
+  reset: boolean;
+  gone: boolean;
+  server_time: string;
 }
 
 /** One step of an OmO workflow (a DAG node); `error` is why a failed one failed. */
