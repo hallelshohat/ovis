@@ -3,7 +3,8 @@ import { ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot,
 
 import "./BackgroundTasks.css";
 
-import { BackgroundAgentDetail } from "./BackgroundAgentDetail.tsx";
+import { BackgroundAgentDetail, KIND_ICONS, taskKind } from "./BackgroundAgentDetail.tsx";
+import { onOpenBackgroundTask } from "../lib/backgroundTaskLink.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { clockOffsetMs, endedSummary, formatElapsed, runGoing, spanMs, taskElapsedMs } from "../lib/omoTasks.ts";
 import { formatTokens } from "../lib/compose.ts";
@@ -45,6 +46,8 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
   // the running task whose detail is open over the list (BackgroundAgentDetail): its sheet takes
   // the list's Back, Escape and outside-press while it is up, and the list stays under it
   const [detail, setDetail] = useState<OmoTask | null>(null);
+  // a chat card asked for a task the list has not read yet: opened once the list has it
+  const [wanted, setWanted] = useState<string | null>(null);
   const detailUp = useRef(false);
   detailUp.current = detail !== null;
   const closeDetail = useCallback(() => setDetail(null), []);
@@ -52,7 +55,11 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
   usePhoneSheetBack(() => setOpen(false), open && detail === null);
   // the list closed, or the pane or PC changed under it: a detail left open would be another task's
   useEffect(() => { if (!open) setDetail(null); }, [open]);
-  useEffect(() => { setDetail(null); }, [paneId, machineId]);
+  useEffect(() => { setDetail(null); setWanted(null); }, [paneId, machineId]);
+  useEffect(() => onOpenBackgroundTask((pane, task) => {
+    if (pane !== paneId) return;
+    setSeen(true); setOpen(true); setWanted(task);
+  }), [paneId]);
   const [seen, setSeen] = useState(count > 0);
   useEffect(() => { if (count > 0) setSeen(true); }, [count]);
   useEffect(() => {
@@ -177,6 +184,15 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
     return () => observer.disconnect();
   }, [open]);
 
+  // a task a chat card asked for opens once the list holds it
+  useEffect(() => {
+    if (wanted === null || tasks === null) return;
+    const found = tasks.find((task) => task.id === wanted);
+    if (found !== undefined) { setDetail(found); setWanted(null); setShowEnded(found.status !== "running"); }
+  }, [wanted, tasks]);
+  // the sheet shows the task as the list last read it: its status and times move on while it is open
+  const shown = detail === null ? null : tasks?.find((task) => task.id === detail.id) ?? detail;
+
   const running = tasks?.filter((task) => task.status === "running") ?? [];
   const ended = tasks?.filter((task) => task.status !== "running") ?? [];
   const words: Record<OmoTask["status"], string> = {
@@ -186,8 +202,11 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
   const row = (task: OmoTask) => {
     const Icon = ICONS[task.status];
     const elapsed = taskElapsedMs(task, now + offset);
+    const kind = taskKind(task);
+    const kindWords: Record<NonNullable<typeof kind>, string> = { subagent: t("Subagent"), command: t("Background command"), exec: t("Background terminal"), monitor: t("Monitor"), workflow: t("Workflow") };
     const meta = [
-      task.category, task.model, elapsed === null ? null : formatElapsed(elapsed),
+      kind === null || kind === "subagent" ? task.category : kindWords[kind], task.model, elapsed === null ? null : formatElapsed(elapsed),
+      task.exit_code === null || task.exit_code === undefined ? null : t("exit {n}", { n: task.exit_code }),
       task.turns === null ? null : t(task.turns === 1 ? "{n} turn" : "{n} turns", { n: task.turns }),
       task.tool_calls === null ? null : t(task.tool_calls === 1 ? "{n} tool call" : "{n} tool calls", { n: task.tool_calls }),
       task.tokens === null ? null : t("{n} tokens", { n: formatTokens(task.tokens) }),
@@ -196,12 +215,14 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
       <span className="bg-task-title">{task.title}<span className="sr-only"> ({words[task.status]})</span></span>
       {(meta.length > 0 || (task.status !== "running" && task.status !== "completed")) && <span className="bg-task-meta">{[task.status !== "running" && task.status !== "completed" ? words[task.status] : null, meta || null].filter((item) => item !== null).join(" · ")}</span>}
     </span>;
-    // a running task opens its detail: what a Claude subagent is doing, or why this PC cannot say
-    if (task.status === "running") {
+    // a task opens its detail: a Claude subagent's conversation, a command's output, or why this PC cannot say
+    if (task.status === "running" || (task.detail_kind !== undefined && task.detail_kind !== null)) {
+      const KindIcon = kind === null ? null : KIND_ICONS[kind];
       return <li key={task.id} className={`bg-task is-${task.status} is-openable`}>
         <button type="button" className="bg-task-open" aria-haspopup="dialog" aria-expanded={detail?.id === task.id} onClick={(event) => { event.currentTarget.focus(); setDetail(task); }}>
           <Icon className="bg-task-icon" aria-hidden="true" />
           {main}
+          {KindIcon !== null && <KindIcon className="bg-task-kind" aria-hidden="true" />}
           <ChevronRight className="bg-task-caret" aria-hidden="true" />
         </button>
       </li>;
@@ -306,6 +327,6 @@ export function BackgroundTasks({ paneId, count, omo, subagents = false, plan = 
       </>}
       </>}
     </div>}
-    {detail !== null && <BackgroundAgentDetail key={`${machineId}\0${paneId}\0${detail.id}`} paneId={paneId} task={detail} onClose={closeDetail} />}
+    {shown !== null && <BackgroundAgentDetail key={`${machineId}\0${paneId}\0${shown.id}`} paneId={paneId} task={shown} onClose={closeDetail} clockOffset={offset} />}
   </span>;
 }

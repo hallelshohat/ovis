@@ -18,7 +18,7 @@ import { remoteAccess } from "./tailscale.ts";
 import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
 import { requestOrigin, serveStatic } from "./static.ts";
 import { compressResponse } from "./compress.ts";
-import { handleTasksRequest } from "./tasks-routes.ts";
+import { codexPaneOutput, handleTasksRequest } from "./tasks-routes.ts";
 import { handlePlanRequest } from "./plan-routes.ts";
 import { handleArtifactsRequest } from "./claude-artifacts.ts";
 import { handleBtwRequest } from "./omp-btw.ts";
@@ -31,8 +31,9 @@ import { handleAgentCatalogRequest } from "./agent-catalog-routes.ts";
 import { type AgentInstaller, INSTALL_PATH, SIGN_IN_PATH } from "./agent-catalog-install.ts";
 import { forgetPageMedia } from "./file-view.ts";
 import { textEditAllowed } from "./file-edit.ts";
-import { handleFileRequest } from "./file-routes.ts";
+import { handleFileRequest, paneClaudeTempFolder } from "./file-routes.ts";
 import { BACKGROUND_AGENT_PATH, handleBackgroundAgentRequest } from "./background-agent.ts";
+import { BACKGROUND_OUTPUT_PATH, handleBackgroundOutputRequest } from "./background-output.ts";
 import { paneGet, ping } from "./herdr/client.ts";
 import { RUNTIME_MOVE_PATH } from "./runtime-move.ts";
 import type { StopRefusal } from "./runtime-move-service.ts";
@@ -764,6 +765,11 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
   // contents) are what the live conversation already shows it of the agents of this pane
   if (pathname === BACKGROUND_AGENT_PATH) {
     return handleBackgroundAgentRequest(request, url, { paneGet, omoPane: (paneId) => omo.sessionOf(paneId) !== null, claudeAgents, opencodeAgents, read: options.backgroundAgentRead });
+  }
+
+  // a background command's output, as the terminal printed it: what the live conversation already shows of it while it runs
+  if (pathname === BACKGROUND_OUTPUT_PATH) {
+    return handleBackgroundOutputRequest(request, url, { claudeFolder: paneClaudeTempFolder, codexOutput: codexPaneOutput });
   }
 
   const planResponse = await handlePlanRequest(request, url, pathname, { omo, claudeAgents, plans });
