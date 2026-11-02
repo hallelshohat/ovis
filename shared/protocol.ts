@@ -264,6 +264,9 @@ export type { DevicePairedEvent, DeviceRemovedEvent, PairingIntent, RelayPairing
  *         as 1e3, non-finite) or a larger value is 400 invalid_lines before any RPC, whatever the
  *         pane; 400 missing_pane_id / invalid_source / invalid_format; an unknown pane is herdr's
  *         pane_not_found)
+ *  GET    /api/pane/background-output?pane_id=&task_id=&offset= -> PaneBackgroundOutput (a
+ *         background task's output from `offset`, at most 64 KiB; no offset reads its tail. 400
+ *         missing or invalid ids, 503 when the pane keeps no task output)
  *  GET    /api/pane/live-output?pane_id=&since=  -> PaneLiveOutputResponse (a running Claude
  *         Code command's output so far, from the files Claude streams it to while it runs: every
  *         one born from `since`, an ISO time, on, oldest first, each its task id and last 40 lines. `outputs`
@@ -681,6 +684,12 @@ export type ConversationPart =
      * unknown). Absent for other agents and older servers.
      */
     state?: "pending" | "ok" | "error";
+    /**
+     * The background task the call started (Claude's `run_in_background` Bash, Monitor, Workflow,
+     * Agent): its id in GET /api/pane/omo-tasks, and how it ended once its notification is in.
+     * Absent from calls that started none and from older servers.
+     */
+    background?: { task_id: string; kind: import("./tasks.ts").BackgroundTaskKind; status?: "completed" | "failed" | "cancelled"; exit_code?: number | null };
   }
   /** A native Claude/Codex user image, addressed by an opaque ref and fetched on demand: GET /api/pane/conversation/image?pane_id=…&ref=… */
   | { kind: "image"; media_type: string; ref: string }
@@ -745,7 +754,7 @@ export interface ConversationMetadata {
   provider?: string;
 }
 
-export type { OmoTask, OmoRunNode, OmoRun, OmoActivity, PaneBackgroundAgentDetail } from "./tasks.ts";
+export type { BackgroundTaskKind, OmoTask, OmoRunNode, OmoRun, OmoActivity, PaneBackgroundAgentDetail, PaneBackgroundOutput } from "./tasks.ts";
 
 export type { PlanStep, PanePlan } from "./plans.ts";
 

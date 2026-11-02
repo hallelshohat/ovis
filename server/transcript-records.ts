@@ -3,6 +3,8 @@ import type { ConversationPart, ConversationTurn, GoalWaitSources, OmoTaskResult
 import type { SubagentDetail, TaskNotification } from "./claude-subagents.ts";
 import { skillInvocationPrompt, skillPromptMessage } from "./skill-activity.ts";
 import { trimOutput } from "./tool-output.ts";
+import { toolSummary } from "../shared/tool-summary.ts";
+export { toolSummary };
 import { inlineImageType, ompBlobDigest, ompBlobImageType } from "./codex-images.ts";
 
 type Row = Record<string, unknown>;
@@ -287,24 +289,6 @@ export function agentTaskResult(notice: TaskNotification, detail: SubagentDetail
     result: result.slice(0, OMO_TASK_RESULT_MAX),
     ...(result.length > OMO_TASK_RESULT_MAX ? { result_cut: true } : {}),
   };
-}
-
-/** The one-line summary a collapsed tool chip shows. */
-export function toolSummary(name: string, input: Record<string, unknown>): string {
-  // an OmO or omp `task` call: the summary it gave the person, one per task of a batch
-  if (name === "task") {
-    const items = Array.isArray(input["tasks"]) ? input["tasks"].map(record) : [input];
-    const titles = items.map((item) => label(item["task_summary"]) ?? label(item["description"])).filter((title) => title !== null);
-    if (titles.length > 0) return titles.join(" · ").slice(0, 120);
-  }
-  // what the agent itself said the call is for: OmO's eval `summary`, the `description` Claude
-  // gives a Bash command or a subagent's prompt. Another tool's `description` is its own data.
-  const said = typeof input["code"] === "string" ? label(input["summary"])
-    : typeof input["command"] === "string" || typeof input["prompt"] === "string" ? label(input["description"]) : null;
-  if (said !== null) return said.slice(0, 120);
-  // pi names a file `path` where Claude names it `file_path`, and a notebook `notebook_path`.
-  const first = input["command"] ?? input["file_path"] ?? input["notebook_path"] ?? input["path"] ?? input["pattern"] ?? input["description"] ?? input["url"];
-  return typeof first === "string" ? first.slice(0, 120) : name;
 }
 
 /** Complete-record folds with detached, non-committing previews of a final JSONL tail. */

@@ -207,7 +207,7 @@
   padding: var(--space-1) var(--space-2);
 }
 
-/* a running task is a disclosure: the whole row is the button that opens its detail
+/* an openable task is a disclosure: the whole row is the button that opens its detail
    (BackgroundAgentDetail), with the caret of the ended fold at its end; the row's padding is the
    button's, so the hit area and the hover tint are the row */
 .bg-task.is-openable {
@@ -257,6 +257,15 @@ a.bg-task-open {
 }
 
 .bg-task-caret {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  align-self: center;
+  color: var(--text-dim);
+}
+
+/* what kind of task it is (a subagent, a command, a monitor, a workflow), quietly before the caret */
+.bg-task-kind {
   width: 14px;
   height: 14px;
   flex: none;

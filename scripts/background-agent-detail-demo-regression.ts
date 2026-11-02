@@ -7,11 +7,12 @@ import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
 
-// A running Claude subagent's detail, opened from the background-task list of the demo's
-// flaky-retry pane: the sheet opens from the row and closes on Escape, the scrim, a phone's Back,
+// A background task's detail, opened from the background-task list of the demo's flaky-retry pane:
+// a running Claude subagent's conversation, drawn as the chat draws a turn, and a background
+// command's output. The sheet opens from the row and closes on Escape, the scrim, a phone's Back,
 // with the focus back on the row; Refresh reads again; an answer to a read since closed or moved
-// away from is dropped; a command's row and an older bridge's rows say so instead of showing an
-// empty transcript; the sheet stays on the screen however long the transcript. The demo answers
+// away from is dropped; an older bridge's rows say so instead of showing an empty transcript; the
+// sheet stays on the screen however long the transcript. The demo answers
 // every read; a patch in the page, for this script only, holds a read until released, strips the
 // bridge's `detail_kind` for the older-bridge case and answers the error cases the server would.
 // All files and HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
@@ -97,7 +98,7 @@ interface View { width: 390 | 1440; theme: Theme; language?: "ko" }
 const name = ({ width, theme, language }: View, state?: string): string => `background-agent-${width}-${theme}${language ? `-${language}` : ""}${state ? `-${state}` : ""}.png`;
 const shot = async (page: Page, view: View, state?: string): Promise<void> => { if (evidence) await page.screenshot({ path: join(evidence, name(view, state)) }); };
 /** every animation on the page has ended: a sheet has risen, a scrim has darkened */
-const settled = (page: Page): Promise<void> => page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))).then(() => undefined));
+const settled = (page: Page): Promise<void> => page.evaluate(() => Promise.all(document.getAnimations().filter((animation) => animation.effect?.getTiming().iterations !== Infinity).map((animation) => animation.finished.catch(() => undefined))).then(() => undefined));
 const log = (page: Page): Promise<Log> => page.evaluate(() => window.bgLog);
 const detailReads = async (page: Page): Promise<number> => (await log(page)).requests.filter((request) => request.endsWith("/api/pane/background-agent")).length;
 /** what the run measured in the page, for the evidence summary: none of it is judged from pixels */
@@ -106,20 +107,24 @@ const selection: Record<string, Record<string, boolean | null>> = {};
 const geometry: Record<string, Record<string, string>> = {};
 const focusTrace: Array<Record<string, unknown>> = [];
 const keyTrace: Array<Record<string, unknown>> = [];
-const DETAIL_TEXT = [".bg-agent-detail-title", ".bg-agent-detail-meta", ".bg-agent-heading", ".bg-agent-text", ".bg-agent-tool-name", ".bg-agent-tool-args", ".bg-agent-note"];
+const DETAIL_TEXT = [".bg-agent-detail-title", ".bg-agent-detail-meta", ".bg-agent-prose", ".bg-agent-prompt .chat-bubble-body", ".bg-agent-note"];
+/** what the agent said and did, as the sheet draws it: its prose and its tool rows */
+const EVENTS = ".bg-agent-turn > .bg-agent-prose, .bg-agent-turn > .work-row";
+/** the agent's conversation, any part of it */
+const CONTENT = ".bg-agent-prompt, .bg-agent-turn";
 /** the sheet's reading floors, as the page computes them: on a phone the agent's words and the title at 17 px or more and every other line at 15, on a desktop 14 */
 const floors = async (page: Page, view: View): Promise<void> => {
   const sizes = await page.evaluate((selectors) => selectors.map((selector) => [selector, [...document.querySelectorAll(selector)].map((node) => parseFloat(getComputedStyle(node).fontSize))] as [string, number[]]), DETAIL_TEXT);
   const kept = (fontSizes[name(view)] ??= {});
   for (const [selector, values] of sizes) {
-    const floor = view.width === 390 ? (selector === ".bg-agent-text" || selector === ".bg-agent-detail-title" ? 17 : 15) : 14;
+    const floor = view.width === 390 ? (selector === ".bg-agent-detail-title" ? 17 : 15) : 14;
     assert.ok(values.every((size) => size >= floor), `${name(view)} ${selector}: ${JSON.stringify(values)} px, under ${floor} px`);
     if (values.length > 0) kept[selector] = [...new Set([...(kept[selector] ?? []), ...values])];
   }
 };
 /** the sheet's labels and words can be selected: a selection of each holds its text */
 const selectable = async (page: Page, view: View): Promise<void> => {
-  const found = await page.evaluate(() => [".bg-agent-detail-title", ".bg-agent-detail-meta", ".bg-agent-text", ".bg-agent-tool-args"].map((selector): [string, boolean | null] => {
+  const found = await page.evaluate(() => [".bg-agent-detail-title", ".bg-agent-detail-meta", ".bg-agent-prose", ".bg-agent-prompt .chat-bubble-body"].map((selector): [string, boolean | null] => {
     const node = document.querySelector(selector);
     if (node === null) return [selector, null];
     const range = document.createRange();
@@ -195,11 +200,12 @@ try {
         try {
           const mobile = view.width === 390;
           await openList(page);
-          assert.equal(await rows(page).count(), 2, "both running rows open a detail");
-          assert.deepEqual(await rows(page).evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("aria-haspopup"), node.getAttribute("aria-expanded")])), [["dialog", "false"], ["dialog", "false"]]);
-          // the fold of what ended is a plain list: nothing there opens
+          const running = list(page).locator(".bg-task-list:not([id]) .bg-task-open");
+          assert.equal(await running.count(), 3, "every running row opens a detail");
+          assert.deepEqual(await running.evaluateAll((nodes) => nodes.map((node) => [node.getAttribute("aria-haspopup"), node.getAttribute("aria-expanded")])), [["dialog", "false"], ["dialog", "false"], ["dialog", "false"]]);
+          // what ended opens too: a failed command to its output, a finished subagent to its conversation
           await list(page).locator(".bg-ended-toggle").click();
-          assert.equal(await list(page).locator(".bg-task-list[id] .bg-task-open").count(), 0, "an ended row is no disclosure");
+          assert.equal(await list(page).locator(".bg-task-list[id] .bg-task-open").count(), 2, "an ended row is a disclosure too");
           await list(page).evaluate((node) => { node.scrollTop = node.scrollHeight; });
           await shot(page, view, "list-end");
           await list(page).locator(".bg-ended-toggle").click();
@@ -224,17 +230,22 @@ try {
           assert.equal(await page.evaluate(() => document.querySelector(".bg-agent-detail")?.contains(document.activeElement)), true, "the focus is inside the sheet");
           const heading = dialog(page).locator(".bg-agent-detail-title");
           assert.equal(await heading.textContent(), "Review the retry test for timing assumptions");
-          assert.match(await dialog(page).locator(".bg-agent-section").first().locator(".bg-agent-text").textContent() ?? "", /^Review test\/retry\.test\.ts for assumptions about timing/, "the prompt is the dispatch");
-          const events = dialog(page).locator(".bg-agent-event");
+          // the subagent's conversation as the chat draws one: the prompt in the user's bubble, then its prose and its tool rows
+          assert.match(await dialog(page).locator(".bg-agent-prompt .chat-bubble-body").textContent() ?? "", /^Review test\/retry\.test\.ts for assumptions about timing/, "the prompt is the dispatch");
+          const events = dialog(page).locator(EVENTS);
           assert.equal(await events.count(), 5, "the first read holds five events");
-          assert.deepEqual(await dialog(page).locator(".bg-agent-tool-name").allTextContents(), ["Read", "Read", "Grep"]);
-          assert.equal(await dialog(page).locator(".bg-agent-tool-args").first().textContent(), '{"file_path":"test/retry.test.ts"}');
-          assert.equal(await dialog(page).locator("img, iframe, a[href]").count(), 0, "nothing of the transcript loads or links anywhere");
+          assert.deepEqual(await dialog(page).locator(".bg-agent-turn .work-row-head").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("title")!.split(" · ")[0])), ["Read", "Read", "Grep"]);
+          assert.equal(await dialog(page).locator(".bg-agent-turn .work-row-summary").first().textContent(), "test/retry.test.ts");
+          // a tool row opens to its arguments, as the chat's does
+          await dialog(page).locator(".bg-agent-turn .work-row-head").first().click();
+          assert.match(await dialog(page).locator(".bg-agent-turn .work-row-detail pre").textContent() ?? "", /"file_path": "test\/retry\.test\.ts"/);
+          await dialog(page).locator(".bg-agent-turn .work-row-head").first().click();
+          assert.equal(await dialog(page).locator("img, iframe").count(), 0, "nothing of the transcript loads anything");
           await dialog(page).locator('.icon-button[aria-label="Refresh"]:not(:disabled)').waitFor();
           await floors(page, view);
           await shot(page, view, "open");
           // the focus trap: opened while its first read is out, the sheet takes the focus at Close (Refresh rests);
-          // Tab walks Refresh, Close and the transcript in reading order and wraps, Shift+Tab wraps back, and the focus never leaves it
+          // Tab walks the transcript and its rows after Close, Shift+Tab walks back to Refresh and wraps, and the focus never leaves it
           const walk = async (key: string, presses: number): Promise<string[]> => {
             const seen: string[] = [];
             for (let press = 0; press < presses; press++) {
@@ -248,10 +259,13 @@ try {
             return seen;
           };
           assert.equal(opened, "Close details", "the sheet takes the focus at Close while Refresh rests");
-          const forward = await walk("Tab", 4);
-          assert.deepEqual(forward, ["transcript", "Refresh", "Close details", "transcript"], "Tab walks the sheet in order and wraps");
-          const backward = await walk("Shift+Tab", 3);
-          assert.deepEqual(backward, ["Close details", "Refresh", "transcript"], "Shift+Tab walks back and wraps");
+          // the row opened and closed above holds the focus: the walk starts again at Close
+          await dialog(page).getByRole("button", { name: "Close details", exact: true }).focus();
+          const forward = await walk("Tab", 2);
+          assert.deepEqual(forward, ["transcript", "BUTTON"], "Tab walks from Close into the transcript and its rows");
+          await dialog(page).getByRole("button", { name: "Close details", exact: true }).focus();
+          const backward = await walk("Shift+Tab", 2);
+          assert.deepEqual(backward, ["Refresh", "BUTTON"], "Shift+Tab walks back to Refresh and wraps to the last row");
           focusTrace.push({ view: name(view), initial: opened, tab: forward, shiftTab: backward });
           await dialog(page).getByRole("button", { name: "Close details", exact: true }).focus();
           assert.equal(await page.evaluate(() => document.activeElement?.matches(":focus-visible")), true, "Close shows its focus ring");
@@ -268,7 +282,7 @@ try {
           assert.ok(geometry.docW <= geometry.viewportW && !geometry.bodyWider, `nothing scrolls sideways: ${JSON.stringify(geometry)}`);
           // a touch target on a phone: the row, Refresh and Close are at least 44pt tall
           if (mobile) {
-            const heights = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".bg-agent-detail-header .icon-button, .bg-task-open")].map((node) => node.getBoundingClientRect().height));
+            const heights = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".bg-agent-detail-header .icon-button, .bg-task-open")].filter((node) => node.offsetParent !== null).map((node) => node.getBoundingClientRect().height));
             assert.ok(heights.every((height) => height >= 44), `44pt targets: ${JSON.stringify(heights)}`);
           }
           // Refresh reads again: the agent wrote one more record meanwhile, and the button rests while the read is out
@@ -308,18 +322,21 @@ try {
             await dialog(page).waitFor({ state: "detached" });
             assert.equal(await list(page).isVisible(), true, "a press on the scrim closes the sheet alone");
           }
-          // the command's row: this PC reads no transcript of it, and asks for none
+          // the command's row: its output, streaming, in the terminal's colours; it reads no transcript
           const before = await detailReads(page);
           await openDetail(page, 1);
-          await note(page, "This PC can't show details for this task").waitFor();
-          await dialog(page).locator(".bg-agent-note-line", { hasText: "Only a running Claude Code or OpenCode subagent's work can be opened here." }).waitFor();
-          assert.equal(await dialog(page).locator(".bg-agent-section").count(), 0, "no empty transcript stands in for the command's");
-          assert.equal(await dialog(page).getByRole("button", { name: "Refresh", exact: true }).count(), 0, "nothing to read again");
-          assert.equal(await detailReads(page), before, "a command's row asks the PC for nothing");
-          await shot(page, view, "unsupported");
+          await dialog(page).locator(".bg-output-line").first().waitFor();
+          assert.match(await dialog(page).locator(".bg-output-text").textContent() ?? "", /run 1 of 20 passed/);
+          assert.ok(await dialog(page).locator(".bg-output-text .ansi-fg-2").count() > 0, "the passing marks are green");
+          assert.equal(await dialog(page).locator(CONTENT).count(), 0, "no transcript stands in for the command's output");
+          assert.equal(await dialog(page).getByRole("button", { name: "Refresh", exact: true }).count(), 0, "the output streams: nothing to read again by hand");
+          assert.equal(await detailReads(page), before, "a command's row reads no subagent transcript");
+          const lines = await dialog(page).locator(".bg-output-line").count();
+          await page.waitForFunction((count) => document.querySelectorAll(".bg-output-line").length > count, lines);
+          await shot(page, view, "output");
           await page.keyboard.press("Escape");
           await dialog(page).waitFor({ state: "detached" });
-          pass(`${view.width}px ${view.theme}: a command's row says details are unsupported`);
+          pass(`${view.width}px ${view.theme}: a command's row opens its streaming output`);
           // an answer that lands after the sheet closed is dropped; so is one that lands after the pane changed
           await page.evaluate(() => { window.bgHold = true; });
           await openDetail(page);
@@ -421,7 +438,7 @@ try {
             const refreshed = state === "refresh-error" || state === "refresh-changed" || state === "session-swap";
             if (refreshed) {
               // the first read lands, then Refresh fails or answers for another session
-              await dialog(page).locator(".bg-agent-section").first().waitFor();
+              await dialog(page).locator(CONTENT).first().waitFor();
               await dialog(page).locator(".bg-agent-detail-header .icon-button").first().click();
             }
             if (text !== null) await note(page, say(view, text)).waitFor();
@@ -429,20 +446,20 @@ try {
             if (next !== null) await dialog(page).locator(".bg-agent-note-line", { hasText: say(view, next) }).waitFor();
             if (state === "refresh-error") {
               await note(page, view.language === "ko" ? "새로 고치지 못했습니다. 마지막으로\u00a0읽은\u00a0내용입니다" : "Couldn't refresh: this is what it last read").waitFor();
-              assert.equal(await dialog(page).locator(".bg-agent-section").count(), 2, "refresh-error: the content as it last read stays");
+              assert.equal(await dialog(page).locator(CONTENT).count(), 2, "refresh-error: the content as it last read stays");
             }
             if (state === "refresh-changed" || state === "session-swap") {
               // the sheet showed the first session's agent: nothing of it stays, and nothing of the other session's is shown
-              assert.equal(await dialog(page).locator(".bg-agent-section").count(), 0, `${state}: the first session's content is gone`);
+              assert.equal(await dialog(page).locator(CONTENT).count(), 0, `${state}: the first session's content is gone`);
               assert.equal(await dialog(page).getByText("another session's", { exact: false }).count(), 0, `${state}: the other session's agent is not shown`);
               assert.equal(await dialog(page).locator(".bg-agent-detail-title").textContent(), "Review the retry test for timing assumptions", `${state}: the title is the task's own`);
             }
-            if (state === "error") assert.equal(await dialog(page).locator(".bg-agent-section").count(), 0, "error: no transcript stands in for what was not read");
+            if (state === "error") assert.equal(await dialog(page).locator(CONTENT).count(), 0, "error: no transcript stands in for what was not read");
             if (state === "loading") assert.equal(await dialog(page).locator('.icon-button[aria-label="Refresh"]:disabled, .icon-button[aria-label="새로 고침"]:disabled').count(), 1, "Refresh rests while the first read is out");
             if (state === "truncated") await note(page, view.language === "ko" ? "일부 기록은 읽지 못해 빠졌습니다" : "Some records couldn't be read and are left out").waitFor();
             if (state === "older-rows") assert.equal(await detailReads(page), before, "rows without detail_kind ask the PC for nothing");
             if (state === "empty" || state === "missing" || state === "changed" || state === "offline" || state === "unavailable" || state === "older" || state === "older-rows") {
-              assert.equal(await dialog(page).locator(".bg-agent-section").count(), 0, `${state}: no transcript stands in for what was not read`);
+              assert.equal(await dialog(page).locator(CONTENT).count(), 0, `${state}: no transcript stands in for what was not read`);
             }
             await floors(page, view);
             frames[state] = await page.evaluate(() => {
@@ -452,7 +469,7 @@ try {
             });
             if (state === "many") {
               const body = dialog(page).locator(".bg-agent-detail-body");
-              assert.equal(await dialog(page).locator(".bg-agent-event").count(), 128, "the cap's worth of events");
+              assert.equal(await dialog(page).locator(EVENTS).count(), 128, "the cap's worth of events");
               assert.equal(await body.evaluate((node) => node.scrollHeight > node.clientHeight + 1), true, "the body scrolls");
               assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 0.5 && document.documentElement.scrollWidth <= innerWidth), true, "the page does not");
               await body.evaluate((node) => { node.scrollTop = node.scrollHeight; });
@@ -476,15 +493,16 @@ try {
             await openList(page);
             await shot(page, view, "list");
             await openDetail(page);
-            await dialog(page).getByText("프롬프트", { exact: true }).waitFor();
-            await dialog(page).getByText("지금까지의 작업", { exact: true }).waitFor();
+            await dialog(page).locator(".bg-agent-prompt .chat-bubble-body").waitFor();
+            await dialog(page).locator('.bg-agent-turn[aria-label="지금까지의 작업"]').waitFor();
             assert.equal(await dialog(page).getByRole("button", { name: "자세한 내용 닫기", exact: true }).count(), 1);
             await shot(page, view, "open");
             await page.keyboard.press("Escape");
             await dialog(page).waitFor({ state: "detached" });
             await openDetail(page, 1);
-            await note(page, "이 PC에서는 이 작업을 자세히 볼\u00a0수\u00a0없습니다").waitFor();
-            await shot(page, view, "unsupported");
+            await dialog(page).locator(".bg-output-line").first().waitFor();
+            await dialog(page).getByText("백그라운드 명령", { exact: false }).first().waitFor();
+            await shot(page, view, "output");
           } finally { await context.close(); }
         }
         pass(`${view.width}px ${view.theme}${view.language === "ko" ? " ko" : ""}: every read state says what it is`);

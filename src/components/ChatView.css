@@ -11,12 +11,13 @@
    tokens by --chat-scale (lib/settings.ts) and the transcript uses the scaled ones under
    the same names, so every message and code block grows together. The prompt card is outside
    this view, over the message box, and grows with them: its dock does the same (Composer.css).
-   A file viewer's Markdown preview is the same rendering, so it takes the chat's font too, and its size
+   A file viewer's Markdown preview and a subagent's conversation use the same rendering, so it takes the chat's font too, and its size
    until Settings → File text size gives files one of their own (--file-scale, lib/settings.ts) */
 .file-viewer-content { --chat-scale: var(--file-scale, 1); }
 
 .chat-view,
-.file-viewer-content {
+.file-viewer-content,
+.bg-agent-detail {
   --chat-fs-2xs: calc(var(--fs-2xs) * var(--chat-scale, 1));
   --chat-fs-xs: calc(var(--fs-xs) * var(--chat-scale, 1));
   --chat-fs-sm: calc(var(--fs-sm) * var(--chat-scale, 1));
@@ -1558,6 +1559,49 @@ ol.markdown-list {
 }
 
 /* a finished command's exit status, as the terminal prints it: the code is mono, a nonzero one the failure's color */
+/* a call that started a background task: where the task stands, and the way to it, at the row's end */
+.work-row-task {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+}
+
+.work-row-state.is-task {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-dim);
+}
+
+.work-row-state.is-task.is-running {
+  color: var(--status-working);
+}
+
+.work-row-state.is-task.is-running::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
+}
+
+.work-row-state.is-task.is-completed {
+  color: var(--status-done);
+}
+
+.work-row-state.is-task.is-failed {
+  color: var(--status-blocked);
+}
+
+.work-row-task-open {
+  min-height: var(--chip-h);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-sm);
+}
+
 .work-row-state.is-exit {
   font-family: var(--font-mono);
   font-weight: var(--fw-regular);
