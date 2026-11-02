@@ -1,6 +1,6 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
-import type { HerdrPane, OmoTask, PaneBackgroundAgentDetail } from "../shared/protocol.ts";
+import type { BackgroundTaskKind, HerdrPane, OmoTask, PaneBackgroundAgentDetail } from "../shared/protocol.ts";
 
 /**
  * The subagents one Claude Code session started (the `Agent` tool), for the status line's list,
@@ -79,7 +79,14 @@ export interface TaskNotification {
   result: string;
   /** whether it is a subagent's: a background command and a monitor use the same block */
   agent: boolean;
+  /** what kind of task the summary names (`Agent "…"`, `Background command "…"`, `Monitor "…"`, `Workflow "…"`), null for another */
+  kind: BackgroundTaskKind | null;
+  /** the exit code the summary gives (`… failed with exit code 2`), null when it gives none */
+  exitCode: number | null;
 }
+
+const exitCodeOf = (summary: string): number | null => { const code = /\bexit code (\d+)\b/.exec(summary)?.[1]; return code === undefined ? null : Number(code); };
+const SUMMARY_KINDS: [string, BackgroundTaskKind][] = [['Agent "', "subagent"], ['Background command "', "command"], ['Monitor "', "monitor"], ['Workflow "', "workflow"]];
 
 export function taskNotification(content: string): TaskNotification | null {
   const block = content.trim();
@@ -99,6 +106,8 @@ export function taskNotification(content: string): TaskNotification | null {
     summary,
     result: from !== -1 && to > from ? block.slice(from + "<result>".length, to).trim() : "",
     agent: summary.startsWith('Agent "'),
+    kind: SUMMARY_KINDS.find(([prefix]) => summary.startsWith(prefix))?.[1] ?? null,
+    exitCode: exitCodeOf(summary),
   };
 }
 
@@ -175,39 +184,48 @@ export function plain(path: string, max = Infinity): { size: number; mtimeMs: nu
 
 /** What one transcript says of background commands: those it started, by task id, and how those it heard of ended. */
 interface Commands {
-  /** the title of each `Bash` call not answered yet: its description, else its command */
-  calls: Map<string, string>;
-  launches: Map<string, { at: number; title: string }>;
-  ends: Map<string, { at: number; status: OmoTask["status"] }>;
+  /** each `Bash`, `Monitor` or `Workflow` call not answered yet: its title (description, else command), what it runs, and its kind */
+  calls: Map<string, { title: string; command: string | null; kind: BackgroundTaskKind }>;
+  launches: Map<string, { at: number; title: string; command: string | null; kind: BackgroundTaskKind; toolUseId: string | null }>;
+  ends: Map<string, { at: number; status: OmoTask["status"]; exitCode: number | null }>;
 }
 const noCommands = (): Commands => ({ calls: new Map(), launches: new Map(), ends: new Map() });
 const TITLE_LENGTH = 120;
 
 /** Whether a line may say something of a background command, before it is parsed: the answers of every other call are passed over. */
-const commandLine = (line: string): boolean => line.includes('"name":"Bash"') || line.includes('"backgroundTaskId"') || line.includes('"task_id"') || line.includes('"shell_id"');
+const commandLine = (line: string): boolean => line.includes('"name":"Bash"') || line.includes('"name":"Monitor"') || line.includes('"name":"Workflow"') || line.includes('"backgroundTaskId"') || line.includes('"taskId"') || line.includes('"task_id"') || line.includes('"shell_id"');
+
+/** The kind of task a call starts in the background, by its tool: a `Bash` call only when its answer says so. */
+const LAUNCHING_TOOLS: Record<string, BackgroundTaskKind> = { Bash: "command", Monitor: "monitor", Workflow: "workflow" };
 
 function scanCommands(commands: Commands, entry: Row, at: number | null, notices: readonly TaskNotification[]): void {
   if (at === null) return;
   const content = row(entry["message"])?.["content"];
   const blocks = (Array.isArray(content) ? content : []).flatMap((value): Row[] => { const block = row(value); return block === null ? [] : [block]; });
   for (const block of blocks) {
-    if (block["type"] !== "tool_use" || block["name"] !== "Bash" || typeof block["id"] !== "string") continue;
+    const kind = typeof block["name"] === "string" ? LAUNCHING_TOOLS[block["name"]] : undefined;
+    if (block["type"] !== "tool_use" || kind === undefined || typeof block["id"] !== "string") continue;
     const input = row(block["input"]);
-    const title = text(input?.["description"]) ?? text(input?.["command"]);
-    if (title !== null) remember(commands.calls, block["id"], title.slice(0, TITLE_LENGTH), 512);
+    // a Workflow runs a script: its name says which, else its file
+    const command = text(input?.["command"]) ?? text(input?.["name"]) ?? text(input?.["scriptPath"]);
+    const title = text(input?.["description"]) ?? command;
+    remember(commands.calls, block["id"], { title: (title ?? "").slice(0, TITLE_LENGTH), command: command === null ? null : command.slice(0, 2000), kind }, 512);
   }
   const failed = blocks.some((block) => block["type"] === "tool_result" && block["is_error"] === true);
   const result = failed ? null : row(entry["toolUseResult"]);
-  const launched = result?.["backgroundTaskId"];
+  const callId = blocks.find((block) => block["type"] === "tool_result" && typeof block["tool_use_id"] === "string")?.["tool_use_id"] as string | undefined;
+  const call = callId === undefined ? undefined : commands.calls.get(callId);
+  // a Bash call says it went to the background with `backgroundTaskId`; a Monitor or a Workflow always runs there, with `taskId`
+  const launched = result?.["backgroundTaskId"] ?? (call !== undefined && call.kind !== "command" ? result?.["taskId"] : undefined);
   if (typeof launched === "string" && AGENT_ID.test(launched)) {
-    const call = blocks.find((block) => block["type"] === "tool_result" && typeof block["tool_use_id"] === "string")?.["tool_use_id"] as string | undefined;
-    remember(commands.launches, launched, { at, title: (call === undefined ? undefined : commands.calls.get(call)) ?? "Background command" }, MAX_NAMES);
-    if (call !== undefined) commands.calls.delete(call);
+    const fallback = call?.kind === "monitor" ? "Monitor" : call?.kind === "workflow" ? "Workflow" : "Background command";
+    remember(commands.launches, launched, { at, title: call?.title || fallback, command: call?.command ?? null, kind: call?.kind ?? "command", toolUseId: callId ?? null }, MAX_NAMES);
   }
+  if (callId !== undefined && blocks.some((block) => block["type"] === "tool_result")) commands.calls.delete(callId);
   // TaskStop answers with the task it stopped, KillShell with the shell
   const stopped = typeof result?.["task_type"] === "string" ? result["task_id"] : result?.["shell_id"];
-  if (typeof stopped === "string" && !commands.ends.has(stopped)) remember(commands.ends, stopped, { at, status: "cancelled" }, MAX_NAMES);
-  for (const notice of notices) if (!notice.agent && !commands.ends.has(notice.taskId)) remember(commands.ends, notice.taskId, { at, status: notice.status }, MAX_NAMES);
+  if (typeof stopped === "string" && !commands.ends.has(stopped)) remember(commands.ends, stopped, { at, status: "cancelled", exitCode: null }, MAX_NAMES);
+  for (const notice of notices) if (!notice.agent && !commands.ends.has(notice.taskId)) remember(commands.ends, notice.taskId, { at, status: notice.status, exitCode: notice.exitCode }, MAX_NAMES);
 }
 
 /**
@@ -1155,22 +1173,29 @@ export function claudeSubagentState(parentPath: string, live: boolean, now = Dat
       turns: counted ? work.turns : null,
       tool_calls: counted ? work.toolCalls : null,
       tokens: counted ? work.tokens : null,
-      // its own transcript can be opened (backgroundAgentDetail); a command's output is a screen's, which is never read
+      // its own transcript can be opened (backgroundAgentDetail)
       detail_kind: "claude-subagent",
+      kind: "subagent",
+      tool_use_id: meta.toolUseId,
     };
     keep(task, Math.max(tail.dispatchAt ?? 0, work.dispatchAt ?? 0, firstAt ?? 0));
   }
   // a command ends once, in whichever transcript was told first
-  const ends = new Map<string, { at: number; status: OmoTask["status"] }>();
+  const ends = new Map<string, { at: number; status: OmoTask["status"]; exitCode: number | null }>();
   for (const source of sources) for (const [id, end] of source.ends) if ((ends.get(id)?.at ?? Infinity) > end.at) ends.set(id, end);
   for (const source of sources) {
     for (const [id, launch] of source.launches) {
       if (all.has(id)) continue;
       const halt = halts.get(source);
       // a command an agent left running stops with the agent
-      const end = ends.get(id) ?? (halt !== undefined && launch.at <= halt ? { at: halt, status: "cancelled" as const } : undefined);
+      const end = ends.get(id) ?? (halt !== undefined && launch.at <= halt ? { at: halt, status: "cancelled" as const, exitCode: null } : undefined);
       const lost = !live || (since !== null && launch.at < since - START_SLACK_MS);
-      keep({ id, title: launch.title, category: "shell", model: null, status: end?.status ?? (lost ? "lost" : "running"), started_at: iso(launch.at), ended_at: iso(end?.at ?? null), turns: null, tool_calls: null, tokens: null, detail_kind: null });
+      keep({
+        id, title: launch.title, category: launch.kind === "command" ? "shell" : launch.kind, model: null, status: end?.status ?? (lost ? "lost" : "running"),
+        started_at: iso(launch.at), ended_at: iso(end?.at ?? null), turns: null, tool_calls: null, tokens: null,
+        // its output is the file Claude streams it to (GET /api/pane/background-output)
+        detail_kind: "output", kind: launch.kind, command: launch.command, exit_code: end?.exitCode ?? null, tool_use_id: launch.toolUseId,
+      });
     }
   }
   remember(previous, parentPath, all, 256);

@@ -529,6 +529,12 @@ export type ConversationPart =
      * unknown). Absent for other agents and older servers.
      */
     state?: "pending" | "ok" | "error";
+    /**
+     * The background task the call started (Claude's `run_in_background` Bash, Monitor, Workflow,
+     * Agent): its id in GET /api/pane/omo-tasks, and how it ended once its notification is in.
+     * Absent from calls that started none and from older servers.
+     */
+    background?: { task_id: string; kind: import("./tasks.ts").BackgroundTaskKind; status?: "completed" | "failed" | "cancelled"; exit_code?: number | null };
   }
   /** A native Claude/Codex user image, addressed by an opaque ref and fetched on demand: GET /api/pane/conversation/image?pane_id=…&ref=… */
   | { kind: "image"; media_type: string; ref: string }
@@ -574,7 +580,7 @@ export interface ConversationMetadata {
   context?: { used: number; window: number | null };
 }
 
-export type { OmoTask, OmoRunNode, OmoRun, OmoActivity, PaneBackgroundAgentDetail } from "./tasks.ts";
+export type { BackgroundTaskKind, OmoTask, OmoRunNode, OmoRun, OmoActivity, PaneBackgroundAgentDetail, PaneBackgroundOutput } from "./tasks.ts";
 
 export type { PlanStep, PanePlan } from "./plans.ts";
 

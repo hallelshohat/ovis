@@ -75,7 +75,7 @@ describe("claudeSubagents", () => {
       started_at: at(1), ended_at: null, turns: 2, tool_calls: 2,
       // the last request held 2 + 100 + 5 + 30 tokens: not the sum of both requests
       tokens: 137,
-      detail_kind: "claude-subagent",
+      detail_kind: "claude-subagent", kind: "subagent", tool_use_id: "toolu_a1",
     }]);
   });
 
@@ -292,9 +292,9 @@ describe("backgroundAgentDetail", () => {
       ],
       truncated: false, incomplete: false, limits: DETAIL_LIMITS,
     });
-    // the list says which rows can be opened: a subagent, not a command
+    // the list says how each row opens: a subagent's transcript, a command's output
     s.bash("b1", 4, { description: "Run the suite" });
-    expect(claudeSubagents(s.path, true, NOW).map((task) => [task.id, task.detail_kind])).toEqual([["a1", "claude-subagent"], ["b1", null]]);
+    expect(claudeSubagents(s.path, true, NOW).map((task) => [task.id, task.detail_kind])).toEqual([["a1", "claude-subagent"], ["b1", "output"]]);
     // a file not written yet says so with nothing in it, not with an activity it does not know
     s.agent("a2", { steps: [] });
     expect(detailOf(s.path, "a2")).toMatchObject({ prompt: null, events: [], truncated: false, incomplete: false });
@@ -570,7 +570,7 @@ describe("backgroundAgentDetail", () => {
     expect(detail.events.length).toBeGreaterThan(0);
     // the chat's card and the list keep what they had: no prompt, no event, no argument
     expect([...subagentDetails(s.path, ["a1"])]).toEqual(before);
-    expect(Object.keys(claudeSubagents(s.path, true, NOW)[0]!).sort()).toEqual(["category", "detail_kind", "ended_at", "id", "model", "started_at", "status", "title", "tokens", "tool_calls", "turns"]);
+    expect(Object.keys(claudeSubagents(s.path, true, NOW)[0]!).sort()).toEqual(["category", "detail_kind", "ended_at", "id", "kind", "model", "started_at", "status", "title", "tokens", "tool_calls", "tool_use_id", "turns"]);
   });
 });
 
@@ -581,7 +581,7 @@ describe("taskNotification", () => {
 
   it("reads a block, its result to the last closing tag", () => {
     expect(taskNotification('<task-notification>\n<task-id>a</task-id>\n<status>stopped</status>\n<summary>Agent "x" was stopped by Claude</summary>\n<result>see </result> here</result>\n</task-notification>')).toEqual({
-      taskId: "a", toolUseId: null, status: "cancelled", summary: 'Agent "x" was stopped by Claude', result: "see </result> here", agent: true,
+      taskId: "a", toolUseId: null, status: "cancelled", summary: 'Agent "x" was stopped by Claude', result: "see </result> here", agent: true, kind: "subagent", exitCode: null,
     });
     expect(taskNotification("hello")).toBeNull();
   });
@@ -1498,8 +1498,8 @@ describe("claudeSubagents, background commands", () => {
     s.bash("b1", 2, { description: "Run the full suite", command: "bun run test" });
     s.bash("b2", 3, { command: "sleep 30" });
     expect(claudeSubagents(s.path, true, NOW)).toEqual([
-      { id: "b1", title: "Run the full suite", category: "shell", model: null, status: "running", started_at: at(2), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: null },
-      { id: "b2", title: "sleep 30", category: "shell", model: null, status: "running", started_at: at(3), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: null },
+      { id: "b1", title: "Run the full suite", category: "shell", model: null, status: "running", started_at: at(2), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: "output", kind: "command", command: "bun run test", exit_code: null, tool_use_id: "toolu_b1" },
+      { id: "b2", title: "sleep 30", category: "shell", model: null, status: "running", started_at: at(3), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: "output", kind: "command", command: "sleep 30", exit_code: null, tool_use_id: "toolu_b2" },
     ]);
   });
 

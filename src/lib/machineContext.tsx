@@ -42,6 +42,7 @@ export function useMachineApi() {
     scrollPane: (pane: string, offset: number) => api.scrollPane(pane, offset, id),
     fetchPaneOmoActivity: (pane: string) => api.fetchPaneOmoActivity(pane, id),
     fetchPaneBackgroundAgent: (pane: string, agent: string) => api.fetchPaneBackgroundAgent(pane, agent, id),
+    fetchPaneBackgroundOutput: (pane: string, task: string, offset: number | null) => api.fetchPaneBackgroundOutput(pane, task, offset, id),
     fetchPanePlan: (pane: string) => api.fetchPanePlan(pane, id),
     fetchPaneArtifacts: (pane: string) => api.fetchPaneArtifacts(pane, id),
     closePane: (pane: string) => api.closePane(pane, id),
