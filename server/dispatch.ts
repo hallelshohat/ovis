@@ -17,7 +17,7 @@ import { remoteAccess } from "./tailscale.ts";
 import { badRequest, errorResponse, jsonResponse, setRequestRoute } from "./http.ts";
 import { requestOrigin, serveStatic } from "./static.ts";
 import { compressResponse } from "./compress.ts";
-import { handleTasksRequest } from "./tasks-routes.ts";
+import { codexPaneOutput, handleTasksRequest } from "./tasks-routes.ts";
 import { handlePlanRequest } from "./plan-routes.ts";
 import { handleArtifactsRequest } from "./claude-artifacts.ts";
 import type { ShellAgentLocator } from "./shell-agent.ts";
@@ -494,7 +494,7 @@ export async function handleRequest(request: Request, ctx: ServerContext): Promi
 
   // a background command's output, as the terminal printed it: what the live conversation already shows of it while it runs
   if (pathname === BACKGROUND_OUTPUT_PATH) {
-    return handleBackgroundOutputRequest(request, url, { claudeFolder: paneClaudeTempFolder });
+    return handleBackgroundOutputRequest(request, url, { claudeFolder: paneClaudeTempFolder, codexOutput: codexPaneOutput });
   }
 
   const planResponse = await handlePlanRequest(request, url, pathname, { omo, claudeAgents, plans });

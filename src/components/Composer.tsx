@@ -1412,7 +1412,7 @@ export function Composer({
               <MessageSquarePlus aria-hidden="true" />
             </button>
           )}
-          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} subagents={agent === "claude" || agent === "opencode"} plan={plan} />
+          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} subagents={agent === "claude" || agent === "opencode" || agent === "codex"} plan={plan} />
           {agent === "claude" && <Artifacts paneId={paneId} status={agentStatus} />}
         </div>
         {/* between the two control groups of the card's last row. The agent's name, its separator and the
