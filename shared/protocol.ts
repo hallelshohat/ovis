@@ -221,6 +221,9 @@ export type { DevicePairedEvent, Machine, MachineEvent, MachineRoster, PaneTarge
  *         as 1e3, non-finite) or a larger value is 400 invalid_lines before any RPC, whatever the
  *         pane; 400 missing_pane_id / invalid_source / invalid_format; an unknown pane is herdr's
  *         pane_not_found)
+ *  GET    /api/pane/background-output?pane_id=&task_id=&offset= -> PaneBackgroundOutput (a
+ *         background task's output from `offset`, at most 64 KiB; no offset reads its tail. 400
+ *         missing or invalid ids, 503 when the pane keeps no task output)
  *  GET    /api/pane/live-output?pane_id=&since=  -> PaneLiveOutputResponse (a running Claude
  *         Code command's output so far, from the files Claude streams it to while it runs: every
  *         one born from `since`, an ISO time, on, oldest first, each its task id and last 40 lines. `outputs`
