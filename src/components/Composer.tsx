@@ -1466,7 +1466,7 @@ export function Composer({
             </button>
           )}
           {dictation.shown && <MicButton dictation={dictation} disabled={viewOnly} />}
-          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={kind === "omo"} subagents={kind === "claude" || kind === "opencode"} plan={plan} />
+          <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={kind === "omo"} subagents={kind === "claude" || kind === "opencode" || agent === "codex"} plan={plan} />
           {agent === "claude" && <Artifacts paneId={paneId} status={agentStatus} />}
           {agent === "omp" && <OmpBtw paneId={paneId} />}
         </div>

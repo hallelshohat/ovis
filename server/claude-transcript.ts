@@ -427,8 +427,28 @@ export interface TranscriptEntry {
   attachment?: { type?: unknown; prompt?: unknown; commandMode?: unknown; origin?: { kind?: unknown }; envelopes?: unknown };
   /** a call a Code Mode script made, and its answer: written after the script, not by the model (claude-code-mode.ts) */
   isVirtual?: unknown;
-  /** what Claude Code kept of a tool's result: the only place a script's call has its output */
+  /** Claude Code tool result metadata, including script output and background task IDs */
   toolUseResult?: unknown;
+}
+
+const LAUNCH_KINDS: Record<string, "monitor" | "workflow"> = { Monitor: "monitor", Workflow: "workflow" };
+
+/**
+ * The background task a call started, from its answer's `toolUseResult`: a Bash call's
+ * `backgroundTaskId`, a Monitor's or a Workflow's `taskId`, an `Agent` call's `agentId` once it
+ * went to the background (`isAsync`). Null for a call that started none.
+ */
+export function claudeLaunchedTask(name: string, result: unknown): { task_id: string; kind: "command" | "monitor" | "workflow" | "subagent" } | null {
+  if (typeof result !== "object" || result === null) return null;
+  const fields = result as Record<string, unknown>;
+  const id = (value: unknown): string | null => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : null;
+  const command = id(fields["backgroundTaskId"]);
+  if (command !== null) return { task_id: command, kind: "command" };
+  const kind = LAUNCH_KINDS[name];
+  const task = kind === undefined ? null : id(fields["taskId"]);
+  if (kind !== undefined && task !== null) return { task_id: task, kind };
+  const agent = (name === "Agent" || name === "Task") && fields["isAsync"] === true ? id(fields["agentId"]) : null;
+  return agent === null ? null : { task_id: agent, kind: "subagent" };
 }
 
 export function claudeResultText(output: unknown): string {
@@ -547,6 +567,16 @@ function claudeParseState(options: ClaudeTranscriptOptions): ClaudeParseState {
   };
 }
 
+/**
+ * Incrementally splits one transcript file's contents into turns. Adjacent assistant entries
+ * merge into a single turn (text parts + tool parts); each tool_use is followed
+ * by a user tool_result entry, which is folded into the tool part it answers.
+ *
+ * A subagent that ended (its `<task-notification>`) is drawn as a task_result in the user's seat,
+ * once however many records carry it; `options.subagents` holds what the subagents' own files say
+ * of them, by agent id, since the parser reads no files. A background command's, a monitor's or a
+ * workflow's end is a notice line, and settles the card of the call that started it; others stay hidden.
+ */
 export function createClaudeTranscriptParser(options: ClaudeTranscriptOptions = {}): TranscriptParser {
   return claudeTranscriptParser(options, claudeParseState(options));
 }
@@ -578,9 +608,20 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
   const notified = (block: string, ts: string | null): boolean => {
     const notice = taskNotification(block);
     if (notice === null) return false;
+    // the card of the call that started it settles: how it ended, and with what exit code
+    const launcher = notice.toolUseId === null ? undefined : calls.get(notice.toolUseId);
+    if (launcher?.background !== undefined && launcher.background.task_id === notice.taskId) {
+      launcher.background = { ...launcher.background, status: notice.status, ...(notice.exitCode === null ? {} : { exit_code: notice.exitCode }) };
+    }
     const key = `${notice.taskId}\0${notice.toolUseId ?? ""}`;
-    if (notice.agent && !noticed.has(key)) {
+    // a subagent's end is its result card; a command's, a monitor's or a workflow's is a line in the
+    // timeline; a notice of a kind not known stays hidden
+    if (!noticed.has(key) && (notice.agent || notice.kind !== null)) {
       noticed.add(key);
+      if (!notice.agent) {
+        turns.splice(noticeAt(), 0, { role: "user", ts, parts: [{ kind: "notice", text: notice.summary, source: "task-notification" }] });
+        return true;
+      }
       const card = agentTaskResult(notice, options.subagents?.get(notice.taskId));
       const turn: ConversationTurn = { role: "user", ts, parts: [{ kind: "task_result", tasks: [card] }] };
       const pointed = CLAUDE_HANDBACK_POINTER.exec(card.result)?.[1];
@@ -823,6 +864,8 @@ function claudeTranscriptParser(options: ClaudeTranscriptOptions, state: ClaudeP
         if (result.is_error === true) tool.error = true;
         // the result's flag, and only it, says how the call went: an empty result is still a success
         if (tool.call_id !== undefined) tool.state = result.is_error === true ? "error" : "ok";
+        const launched = result.is_error === true ? null : claudeLaunchedTask(tool.name, entry.toolUseResult);
+        if (launched !== null) tool.background = launched;
         if (tool.skill) tool.skill.status = result.is_error === true ? "failed" : "loaded";
         // a picture the tool returned (a Read of an image file) sits inside its result
         const pictures = Array.isArray(result.content) ? claudeImages(entry.uuid, result.content, index) : [];

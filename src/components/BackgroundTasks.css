@@ -246,6 +246,15 @@ a.bg-task-open {
   color: var(--text-dim);
 }
 
+/* what kind of task it is (a subagent, a command, a monitor, a workflow), quietly before the caret */
+.bg-task-kind {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  align-self: center;
+  color: var(--text-dim);
+}
+
 .bg-task-icon {
   width: var(--icon-size-sm);
   height: var(--icon-size-sm);
