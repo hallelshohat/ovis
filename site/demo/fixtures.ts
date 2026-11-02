@@ -120,7 +120,8 @@ export function agentSkillRows(agent: string): SlashCommand[] {
   }
 }
 
-const tool = (name: string, summary: string, input: unknown, output: string): ConversationTurn["parts"][number] => ({ kind: "tool", name, summary, input: typeof input === "string" ? input : JSON.stringify(input, null, 2), output });
+type ToolPart = Extract<ConversationTurn["parts"][number], { kind: "tool" }>;
+const tool = (name: string, summary: string, input: unknown, output: string, background?: ToolPart["background"]): ToolPart => ({ ...(background === undefined ? {} : { background }), kind: "tool", name, summary, input: typeof input === "string" ? input : JSON.stringify(input, null, 2), output });
 
 export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { model: string; reasoning_effort: string } }> = {
   api: {
@@ -171,6 +172,14 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
         tool("Bash", "bun test retry --rerun-each 50", { command: "bun test retry --rerun-each 50" }, " 50 pass\n 0 fail"),
         { kind: "text" as const, text: "The test waited on the real clock, so a slow run let the backoff timer fire before the second attempt was counted. It now drives the timer with a fake clock: 50 runs out of 50 pass." },
       ] },
+      { role: "user" as const, ts: t(10), parts: [{ kind: "text" as const, text: "Lint it, run it twenty more times in the background, and watch CI." }] },
+      { role: "assistant" as const, ts: t(10, 4), end_ts: t(10, 30), parts: [
+        tool("Bash", "Lint the retry helper", { command: "bun run lint src/retry.ts", description: "Lint the retry helper", run_in_background: true }, "Command running in background with ID: demo-lint.", { task_id: "demo-lint", kind: "command" as const, status: "failed" as const, exit_code: 1 }),
+        tool("Bash", "Run the retry test twenty times", { command: "for i in $(seq 20); do bun test test/retry.test.ts || exit 1; done", description: "Run the retry test twenty times", run_in_background: true }, "Command running in background with ID: demo-flaky-run.", { task_id: "demo-flaky-run", kind: "command" as const }),
+        tool("Monitor", "CI finishes on the retry branch", { description: "CI finishes on the retry branch", command: "gh run watch --exit-status" }, "Monitor started (task demo-ci-watch, expires in 30m).", { task_id: "demo-ci-watch", kind: "monitor" as const }),
+        { kind: "text" as const, text: "Twenty runs and a CI watch are going in the background; I'll report when they finish." },
+      ] },
+      { role: "user" as const, ts: t(10, 20), parts: [{ kind: "notice" as const, text: 'Background command "Lint the retry helper" failed with exit code 1', source: "task-notification" }] },
     ],
   },
   omp: {

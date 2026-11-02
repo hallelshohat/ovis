@@ -4,7 +4,7 @@ import { commandTerminals } from "./claude-subagents.ts";
 import { TranscriptBusyError, transcriptReader, type TranscriptFile } from "./transcript-reader.ts";
 
 /** Terminal metadata only: historical reads never replay prompt/turn evidence. */
-export interface CommandEnd { id: string; at: number; status: "completed" | "failed" | "cancelled"; /** the Bash call the notice names (`<tool-use-id>`), when it names one */ call: string | null }
+export interface CommandEnd { exitCode?: number | null; id: string; at: number; status: "completed" | "failed" | "cancelled"; /** the Bash call the notice names (`<tool-use-id>`), when it names one */ call: string | null }
 export interface HistoryVersion { id: string; size: number; mtimeMs: number }
 /**
  * How the commands told of in a transcript's first `through` bytes ended. `complete`: nothing more

@@ -10,6 +10,24 @@ import { badRequest, jsonResponse, setRequestRoute } from "./http.ts";
 import { processAlive, type OmoStatus } from "./omo-status.ts";
 import { omoRuns, omoTasks } from "./omo-tasks.ts";
 import type { OpencodeSubagentStatus } from "./opencode-subagents.ts";
+import { codexTranscriptPath, paneCodexHome } from "./codex.ts";
+import { codexBackgroundTasks, codexSessionOutput, paneCodexBackground } from "./codex-background.ts";
+import type { OutputSlice } from "./background-output.ts";
+import { resolveAgent } from "./pane-context.ts";
+
+/** The rollout of the Codex session a pane runs now, null for a pane that runs none. */
+export async function codexPaneRollout(paneId: string): Promise<string | null> {
+  const pane = await paneGet(paneId);
+  const cwd = pane.foreground_cwd ?? pane.cwd;
+  if (resolveAgent(pane).agent !== "codex" || !cwd) return null;
+  return await codexTranscriptPath(paneId, cwd, await paneCodexHome(paneId));
+}
+
+/** GET /api/pane/background-output's read of a Codex pane's exec session. */
+export async function codexPaneOutput(paneId: string, taskId: string, from: number | null): Promise<OutputSlice | null> {
+  const state = await paneCodexBackground(paneId, codexPaneRollout);
+  return state === null ? null : codexSessionOutput(state, taskId, from);
+}
 
 /** The core's own trackers: the route reads them and never makes its own. */
 export type TaskTrackers = {
@@ -54,7 +72,11 @@ export async function handleTasksRequest(request: Request, url: URL, pathname: s
       const opencode = opencodeAgents.sessionOf(paneId);
       if (opencode === null || (!opencode.live && claudeAgents.sessionOf(paneId)?.live === true)) {
         const claude = claudeAgents.sessionOf(paneId);
-        if (claude === null) return jsonResponse({ tasks: [], runs: [], server_time });
+        if (claude === null) {
+          // a Codex pane's background terminals, from its rollout: it runs only while the pane runs that session
+          const codex = await paneCodexBackground(paneId, codexPaneRollout);
+          return jsonResponse({ tasks: codex === null ? [] : codexBackgroundTasks(codex, true), runs: [], server_time });
+        }
         const tasks = await scanClaudeTasks(claude, request.signal);
         const current = claudeAgents.sessionOf(paneId);
         const codeNow = opencodeAgents.sessionOf(paneId);
