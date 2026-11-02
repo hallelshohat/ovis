@@ -1510,6 +1510,49 @@ ol.markdown-list {
 }
 
 /* a finished command's exit status, as the terminal prints it: the code is mono, a nonzero one the failure's color */
+/* a call that started a background task: where the task stands, and the way to it, at the row's end */
+.work-row-task {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+}
+
+.work-row-state.is-task {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-dim);
+}
+
+.work-row-state.is-task.is-running {
+  color: var(--status-working);
+}
+
+.work-row-state.is-task.is-running::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
+}
+
+.work-row-state.is-task.is-completed {
+  color: var(--status-done);
+}
+
+.work-row-state.is-task.is-failed {
+  color: var(--status-blocked);
+}
+
+.work-row-task-open {
+  min-height: var(--chip-h);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-sm);
+}
+
 .work-row-state.is-exit {
   font-family: var(--font-mono);
   font-weight: var(--fw-regular);
