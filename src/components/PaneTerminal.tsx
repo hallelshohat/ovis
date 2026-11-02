@@ -1353,6 +1353,7 @@ export function PaneTerminal({
             agent={agent}
             agentStatus={agentStatus}
             agentSession={agentSession}
+            backgroundTasks={backgroundTasks}
             onMetadata={onChatMetadata}
             onRead={onChatRead}
             greeted={greeted || sending}

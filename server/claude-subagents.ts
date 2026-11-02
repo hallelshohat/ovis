@@ -1,7 +1,7 @@
 import { closeSync, constants, type Dir, fstatSync, lstatSync, opendirSync, openSync, readlinkSync, readSync, realpathSync } from "node:fs";
 import { basename, dirname, join, sep } from "node:path";
 import { commandHistory, resetCommandHistory, sameHistory, vouchedEnds, watchCommandHistory, type CommandEnd, type HistoryEvidence, type HistoryVersion } from "./claude-command-history.ts";
-import type { HerdrPane, OmoTask, PaneBackgroundAgentDetail } from "../shared/protocol.ts";
+import type { BackgroundTaskKind, HerdrPane, OmoTask, PaneBackgroundAgentDetail } from "../shared/protocol.ts";
 
 /**
  * The subagents one Claude Code session started (the `Agent` tool), for the status line's list,
@@ -82,7 +82,14 @@ export interface TaskNotification {
   result: string;
   /** whether it is a subagent's: a background command and a monitor use the same block */
   agent: boolean;
+  /** what kind of task the summary names (`Agent "…"`, `Background command "…"`, `Monitor "…"`, `Workflow "…"`), null for another */
+  kind: BackgroundTaskKind | null;
+  /** the exit code the summary gives (`… failed with exit code 2`), null when it gives none */
+  exitCode: number | null;
 }
+
+const exitCodeOf = (summary: string): number | null => { const code = /\bexit code (\d+)\b/.exec(summary)?.[1]; return code === undefined ? null : Number(code); };
+const SUMMARY_KINDS: [string, BackgroundTaskKind][] = [['Agent "', "subagent"], ['Background command "', "command"], ['Monitor "', "monitor"], ['Workflow "', "workflow"]];
 
 export function taskNotification(content: string): TaskNotification | null {
   const block = content.trim();
@@ -102,6 +109,8 @@ export function taskNotification(content: string): TaskNotification | null {
     summary,
     result: from !== -1 && to > from ? block.slice(from + "<result>".length, to).trim() : "",
     agent: summary.startsWith('Agent "'),
+    kind: SUMMARY_KINDS.find(([prefix]) => summary.startsWith(prefix))?.[1] ?? null,
+    exitCode: exitCodeOf(summary),
   };
 }
 
@@ -206,9 +215,9 @@ function openPlain(path: string, exact: string, max = Infinity): { fd: number; s
 /** What one transcript says of background commands: those it started, by task id, and how those it heard of ended. */
 interface Commands {
   /** the title of each `Bash` call not answered yet: its description, else its command */
-  calls: Map<string, string>;
+  calls: Map<string, { title: string; command: string | null; kind: BackgroundTaskKind }>;
   /** `call`: the `Bash` call that started it, when its answer names one */
-  launches: Map<string, { at: number; title: string; call: string | null; seq: number }>;
+  launches: Map<string, { at: number; title: string; command: string | null; kind: BackgroundTaskKind; call: string | null; seq: number }>;
   /** rows read so far: where in the transcript a launch or an end was written (`seq`) */
   seq: number;
   /** the last few ends of each id, oldest first: an id used again ends once in each lifetime (claudeSubagentState) */
@@ -217,14 +226,17 @@ interface Commands {
   wakeup?: string;
 }
 /** An end a transcript told of: `call`, the `Bash` call its notice names (none for a stop) */
-type CommandTold = { at: number; status: OmoTask["status"]; call: string | null; seq?: number; source?: Commands };
+type CommandTold = { at: number; status: OmoTask["status"]; call: string | null; seq?: number; source?: Commands; exitCode?: number | null };
 const ENDS_PER_ID = 4;
 const noCommands = (): Commands => ({ calls: new Map(), launches: new Map(), ends: new Map(), seq: 0 });
 const TITLE_LENGTH = 120;
 
-const BACKGROUND_TOOLS = ["Bash", "Monitor", "ScheduleWakeup"];
+const BACKGROUND_TOOLS = ["Bash", "Monitor", "ScheduleWakeup", "Workflow"];
 /** Whether a line may say something of a background command, before it is parsed: the answers of every other call are passed over. */
-const commandLine = (line: string): boolean => BACKGROUND_TOOLS.some((name) => line.includes(`"name":"${name}"`)) || line.includes('"backgroundTaskId"') || line.includes('"local_workflow"') || line.includes('"timeoutMs"') || line.includes('"scheduledFor"') || line.includes('"scheduled_task_fire"') || line.includes('"task_id"') || line.includes('"shell_id"');
+const commandLine = (line: string): boolean => BACKGROUND_TOOLS.some((name) => line.includes(`"name":"${name}"`)) || line.includes('"backgroundTaskId"') || line.includes('"taskId"') || line.includes('"local_workflow"') || line.includes('"timeoutMs"') || line.includes('"scheduledFor"') || line.includes('"scheduled_task_fire"') || line.includes('"task_id"') || line.includes('"shell_id"');
+
+/** The kind of task a call starts in the background, by its tool: a `Bash` call only when its answer says so. */
+const LAUNCHING_TOOLS: Record<string, BackgroundTaskKind> = { Bash: "command", Monitor: "monitor", Workflow: "workflow", ScheduleWakeup: "command" };
 
 function commandEnds(result: Row | null, at: number, notices: readonly TaskNotification[]): CommandEnd[] {
   const ends: CommandEnd[] = [];
@@ -232,7 +244,7 @@ function commandEnds(result: Row | null, at: number, notices: readonly TaskNotif
   // TaskStop answers with the task it stopped, KillShell with the shell.
   const stopped = typeof result?.["task_type"] === "string" ? result["task_id"] : result?.["shell_id"];
   if (typeof stopped === "string") { ids.add(stopped); ends.push({ id: stopped, at, status: "cancelled", call: null }); }
-  for (const notice of notices) if (!notice.agent && !ids.has(notice.taskId)) { ids.add(notice.taskId); ends.push({ id: notice.taskId, at, status: notice.status, call: notice.toolUseId }); }
+  for (const notice of notices) if (!notice.agent && !ids.has(notice.taskId)) { ids.add(notice.taskId); ends.push({ id: notice.taskId, at, status: notice.status, call: notice.toolUseId, ...(notice.exitCode === null ? {} : { exitCode: notice.exitCode }) }); }
   return ends;
 }
 
@@ -242,22 +254,26 @@ function scanCommands(commands: Commands, entry: Row, at: number | null, notices
   const content = row(entry["message"])?.["content"];
   const blocks = (Array.isArray(content) ? content : []).flatMap((value): Row[] => { const block = row(value); return block === null ? [] : [block]; });
   for (const block of blocks) {
-    if (block["type"] !== "tool_use" || !BACKGROUND_TOOLS.includes(block["name"] as string) || typeof block["id"] !== "string") continue;
+    const kind = typeof block["name"] === "string" ? LAUNCHING_TOOLS[block["name"]] : undefined;
+    if (block["type"] !== "tool_use" || kind === undefined || typeof block["id"] !== "string") continue;
     const input = row(block["input"]);
-    const title = text(input?.["description"]) ?? text(input?.["command"]) ?? text(input?.["reason"]);
-    if (title !== null) remember(commands.calls, block["id"], title.slice(0, TITLE_LENGTH), 512);
+    // a Workflow runs a script: its name says which, else its file
+    const command = text(input?.["command"]) ?? text(input?.["name"]) ?? text(input?.["scriptPath"]);
+    const title = text(input?.["description"]) ?? command ?? text(input?.["reason"]);
+    remember(commands.calls, block["id"], { title: (title ?? "").slice(0, TITLE_LENGTH), command: command === null ? null : command.slice(0, 2000), kind }, 512);
   }
   const failed = blocks.some((block) => block["type"] === "tool_result" && block["is_error"] === true);
   const result = failed ? null : row(entry["toolUseResult"]);
+  const callId = blocks.find((block) => block["type"] === "tool_result" && typeof block["tool_use_id"] === "string")?.["tool_use_id"] as string | undefined;
+  const call = callId === undefined ? undefined : commands.calls.get(callId);
+  // a Bash call says it went to the background with `backgroundTaskId`; a Monitor or a Workflow always runs there, with `taskId`
   const workflow = result?.["taskType"] === "local_workflow" && result["status"] === "async_launched";
   // a Monitor's answer names its task and carries its `timeoutMs`
   const monitor = typeof result?.["timeoutMs"] === "number";
-  const launched = workflow || monitor ? result?.["taskId"] : result?.["backgroundTaskId"];
+  const launched = workflow || monitor ? result?.["taskId"] : result?.["backgroundTaskId"] ?? (call !== undefined && call.kind !== "command" ? result?.["taskId"] : undefined);
   if (typeof launched === "string" && AGENT_ID.test(launched)) {
-    const call = blocks.find((block) => block["type"] === "tool_result" && typeof block["tool_use_id"] === "string")?.["tool_use_id"] as string | undefined;
-    const title = workflow ? text(result["workflowName"]) : call === undefined ? undefined : commands.calls.get(call);
-    remember(commands.launches, launched, { at, title: title ?? "Background command", call: call ?? null, seq }, MAX_NAMES);
-    if (call !== undefined) commands.calls.delete(call);
+    const fallback = call?.kind === "monitor" ? "Monitor" : call?.kind === "workflow" ? "Workflow" : "Background command";
+    remember(commands.launches, launched, { at, title: (workflow ? text(result["workflowName"]) : null) || call?.title || fallback, command: call?.command ?? null, kind: workflow ? "workflow" : monitor ? "monitor" : call?.kind ?? "command", call: callId ?? null, seq }, MAX_NAMES);
   }
   // a /loop wakeup starts the next turn by itself when due: its fire, a newer one and a stop end the one set before
   const scheduled = result?.["scheduledFor"];
@@ -269,16 +285,17 @@ function scanCommands(commands: Commands, entry: Row, at: number | null, notices
   }
   const wakeupCall = blocks.find((block) => block["type"] === "tool_result")?.["tool_use_id"];
   if (typeof scheduled === "number" && scheduled > 0 && typeof wakeupCall === "string" && AGENT_ID.test(wakeupCall)) {
-    remember(commands.launches, wakeupCall, { at, title: commands.calls.get(wakeupCall) ?? "Wakeup", call: wakeupCall, seq }, MAX_NAMES);
+    remember(commands.launches, wakeupCall, { at, title: commands.calls.get(wakeupCall)?.title || "Wakeup", command: null, kind: "command", call: wakeupCall, seq }, MAX_NAMES);
     commands.calls.delete(wakeupCall);
     commands.wakeup = wakeupCall;
   }
+  if (callId !== undefined) commands.calls.delete(callId);
   for (const end of ends) {
-    const told = commands.ends.get(end.id) ?? [];
-    // the same notice comes in more than one carrier: once is enough
-    if (told.some((known) => known.at === end.at && known.status === end.status && known.call === end.call)) continue;
-    remember(commands.ends, end.id, [...told, { at: end.at, status: end.status, call: end.call, seq }].slice(-ENDS_PER_ID), MAX_NAMES);
-  }
+  const told = commands.ends.get(end.id) ?? [];
+  // the same notice comes in more than one carrier: once is enough
+  if (told.some((known) => known.at === end.at && known.status === end.status && known.call === end.call)) continue;
+  remember(commands.ends, end.id, [...told, { at: end.at, status: end.status, call: end.call, exitCode: end.exitCode, seq }].slice(-ENDS_PER_ID), MAX_NAMES);
+}
 }
 
 /**
@@ -1363,8 +1380,10 @@ export function claudeSubagentState(parentPath: string, live: boolean, now = Dat
       turns: counted ? work.turns : null,
       tool_calls: counted ? work.toolCalls : null,
       tokens: counted ? work.tokens : null,
-      // its own transcript can be opened (backgroundAgentDetail); a command's output is a screen's, which is never read
+      // its own transcript can be opened (backgroundAgentDetail)
       detail_kind: "claude-subagent",
+      kind: "subagent",
+      tool_use_id: meta.toolUseId,
     };
     keep(task, Math.max(tail.dispatchAt ?? 0, work.dispatchAt ?? 0, firstAt ?? 0));
   }
@@ -1414,9 +1433,14 @@ export function claudeSubagentState(parentPath: string, live: boolean, now = Dat
       if (all.has(id)) continue;
       const halt = halts.get(source);
       // a command an agent left running stops with the agent
-      const end = endOf(id, launch, source) ?? (halt !== undefined && launch.at <= halt ? { at: halt, status: "cancelled" as const } : undefined);
+      const end = endOf(id, launch, source) ?? (halt !== undefined && launch.at <= halt ? { at: halt, status: "cancelled" as const, exitCode: null } : undefined);
       const lost = !live || (since !== null && launch.at < since - START_SLACK_MS);
-      keep({ id, title: launch.title, category: "shell", model: null, status: end?.status ?? (lost ? "lost" : "running"), started_at: iso(launch.at), ended_at: iso(end?.at ?? null), turns: null, tool_calls: null, tokens: null, detail_kind: null });
+      keep({
+        id, title: launch.title, category: launch.kind === "command" ? "shell" : launch.kind, model: null, status: end?.status ?? (lost ? "lost" : "running"),
+        started_at: iso(launch.at), ended_at: iso(end?.at ?? null), turns: null, tool_calls: null, tokens: null,
+        // its output is the file Claude streams it to (GET /api/pane/background-output)
+        detail_kind: "output", kind: launch.kind, command: launch.command, exit_code: end?.exitCode ?? null, tool_use_id: launch.call,
+      });
     }
   }
   remember(previous, parentPath, all, 256);

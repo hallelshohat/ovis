@@ -59,6 +59,8 @@ import { useFacesArrived } from "../lib/fontFaces.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
 import { foldToolOutput } from "../../shared/markdown.ts";
 import { FileNameLookupContext, useFileNameLookup } from "../lib/fileNameLookup.ts";
+import { BackgroundRunningContext, openBackgroundTask } from "../lib/backgroundTaskLink.ts";
+import { codexChunks, codexInputSessions } from "../../shared/codex-chunks.ts";
 import { toolPathLabel, toolPathRoot } from "../lib/workspacePath.ts";
 import { linkFilePaths } from "./FilePathLink.tsx";
 import { patchText } from "../../shared/patch.ts";
@@ -216,6 +218,8 @@ const keptPrompt = (kept: { session: string | null; prompt: InteractivePrompt } 
 const LOAD_OLDER_PX = 400;
 
 export interface ChatViewProps {
+  /** the pane's running background tasks, as pushed: a card's task still told as running reads as ended once none runs */
+  backgroundTasks?: number;
   /** A fresh successful read for this displayed finish may acknowledge it. */
   presentationKey?: string;
   finishEpoch?: string;
@@ -750,6 +754,37 @@ function LiveOutput({ paneId, part, parts, since }: { paneId: string; part: Tool
   return <section className="chat-tool-output is-live"><h4>{t("Live output (terminal)")}</h4><pre className="chat-tool-io">{text}</pre></section>;
 }
 
+/** The background task a call started: the transcript's link (Claude), or a Codex exec session its answer left running. */
+function useBackgroundTask(part: ToolPartType): NonNullable<ToolPartType["background"]> | null {
+  return useMemo(() => {
+    if (part.background !== undefined) return part.background;
+    if (part.state === "pending" || !isCommandTool(part.name) || part.name === "write_stdin") return null;
+    // a Codex command that outlived its first wait answers with its session, and no exit code yet
+    // a poll of a session already running names it too: only a session this call started is its task
+    const polled = new Set(codexInputSessions(part.input));
+    const session = codexChunks(part.output).find((chunk) => chunk.session !== null && chunk.exitCode === null && !polled.has(chunk.session))?.session;
+    return session === undefined || session === null ? null : { task_id: `exec-${session}`, kind: "exec" };
+  }, [part]);
+}
+
+/**
+ * Where a call's background task stands, and the way to it: `running` with its dot while it runs,
+ * then how it ended as its notification tells (done, failed with its exit code, stopped). A task
+ * that never said it ended reads `ended` once the pane runs none, never a spinner left behind.
+ * The button opens the task in the composer's background-task list.
+ */
+function BackgroundTaskChip({ background }: { background: NonNullable<ToolPartType["background"]> }) {
+  const t = useT();
+  const paneId = useContext(ChatPaneContext);
+  const runningCount = useContext(BackgroundRunningContext);
+  const status = background.status ?? (background.kind === "exec" ? null : runningCount > 0 ? "running" : "ended");
+  const words: Record<string, string> = { running: t("running"), ended: t("ended"), completed: t("done"), failed: t("failed"), cancelled: t("stopped") };
+  return <span className="work-row-task">
+    {status !== null && <span className={`work-row-state is-task is-${status}`}>{words[status]}{background.exit_code !== undefined && background.exit_code !== null && background.exit_code !== 0 ? ` · ${t("exit {n}", { n: background.exit_code })}` : ""}</span>}
+    {paneId !== null && <button type="button" className="btn btn-ghost work-row-task-open" onClick={() => openBackgroundTask(paneId, background.task_id)}>{t("Open task")}</button>}
+  </span>;
+}
+
 /**
  * A call's output in its opened row. A long one folds to its head with a "Show all" row, as a code
  * block does (Markdown.tsx), so the chat stays the only scroller.
@@ -839,7 +874,9 @@ function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], sinc
     : state === "ok" ? t("succeeded") : state === "pending" ? t("pending") : state === "error" ? t("failed") : t("outcome not recorded");
   const images = useMemo(() => linePictures([part]), [part]);
   // what the terminal prints under a finished command
-  const exitCode = commandExitCode(part);
+  const background = useBackgroundTask(part);
+  // a call that started a background task answered at once: its task's chip says how the task ended
+  const exitCode = background === null ? commandExitCode(part) : null;
   return <div className={`work-row${part.error ? " is-error" : ""}`}>
   <div className="work-row-line">
     <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)} {...focus}>
@@ -854,6 +891,7 @@ function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], sinc
       {exitCode !== null && <>{" "}<span className={`work-row-state is-exit${exitCode === 0 ? "" : " is-error"}`}>{t("exit {n}", { n: exitCode })}</span></>}
       {running && state === undefined && <>{" "}<span className="work-row-state is-running">{t("running")}</span></>}
     </button>
+    {background !== null && <BackgroundTaskChip background={background} />}
     {/* opened, the row shows its pictures larger in its detail */}
     {!open && <LineImages paneId={paneId} images={images} />}
   </div>
@@ -1610,7 +1648,7 @@ function TerminalFallback({ paneId, visible, explained = false }: { paneId: stri
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, unsentKey = 0, pendingRows = NO_ROWS, localSend, navigation, connected, ended, agent, agentStatus, agentSession = null, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, quotable = false, cwd = null, promptContext = null, searchRequest = 0 }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, unsentKey = 0, pendingRows = NO_ROWS, localSend, navigation, connected, ended, agent, agentStatus, agentSession = null, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, quotable = false, cwd = null, promptContext = null, searchRequest = 0, backgroundTasks = 0 }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -3061,7 +3099,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   </>;
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>
     : away && <button type="button" className="btn chat-new-messages chat-virtual-jump is-icon" aria-label={t("Jump to latest")} title={t("Jump to latest")} onClick={scrollToBottom}><ArrowDown aria-hidden="true" /></button>;
-  return <ChatMarkdownImages paneId={paneId} cwd={cwd} connected={connected} onOpen={openMarkdownImage}><FileNameLookupContext.Provider value={fileNames}><ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}><ToolPathRootContext.Provider value={toolPathRoot(cwd)}>
+  return <ChatMarkdownImages paneId={paneId} cwd={cwd} connected={connected} onOpen={openMarkdownImage}><FileNameLookupContext.Provider value={fileNames}><ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}><ToolPathRootContext.Provider value={toolPathRoot(cwd)}><BackgroundRunningContext.Provider value={backgroundTasks}>
     {/* a reader away from the end has not seen the answer a finish lands there: presented only at the end */}
     <div className="chat-frame" data-pane-content={active && visible && !covered && connected && !ended && loaded && error === null && !away && !newMessages
       && endPresentation?.state === state && endPresentation.key === presentationKey
@@ -3128,5 +3166,5 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     }} />, promptDock)}
   {viewer !== null && <ImageLightbox images={viewer.images} index={viewer.index} onClose={closeViewer} />}
   {searching && <ConversationSearch paneId={paneId} agent={agent} historyId={historyId} title={title} onClose={closeSearch} onPick={revealTurn} />}
-  </ToolPathRootContext.Provider></ImageViewerContext.Provider></ChatHistoryContext.Provider></ChatPaneContext.Provider></FileNameLookupContext.Provider></ChatMarkdownImages>;
+  </BackgroundRunningContext.Provider></ToolPathRootContext.Provider></ImageViewerContext.Provider></ChatHistoryContext.Provider></ChatPaneContext.Provider></FileNameLookupContext.Provider></ChatMarkdownImages>;
 });

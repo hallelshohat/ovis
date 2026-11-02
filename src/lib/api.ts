@@ -42,6 +42,7 @@ import type {
   ClaudeArtifact,
   OmpBtwHistory,
   PaneBackgroundAgentDetail,
+PaneBackgroundOutput,
   OpenWorktreeRequest,
   PairedDevice,
   PairingCode,
@@ -1541,6 +1542,15 @@ export async function fetchPaneOmoActivity(paneId: string, machineId = "local"):
 export async function fetchPaneBackgroundAgent(paneId: string, agentId: string, machineId = "local"): Promise<PaneBackgroundAgentDetail> {
   const query = new URLSearchParams({ pane_id: paneId, agent_id: agentId });
   return await getJson<PaneBackgroundAgentDetail>(machinePath(machineId, `pane/background-agent?${query.toString()}`));
+}
+
+/**
+ * GET /api/pane/background-output: a background command's output from `offset` on (null: its
+ * last 64 KiB), for the task sheet's live view. The PC resolves the file from the pane and the id.
+ */
+export async function fetchPaneBackgroundOutput(paneId: string, taskId: string, offset: number | null, machineId = "local"): Promise<PaneBackgroundOutput> {
+  const query = new URLSearchParams({ pane_id: paneId, task_id: taskId, ...(offset === null ? {} : { offset: String(offset) }) });
+  return await getJson<PaneBackgroundOutput>(machinePath(machineId, `pane/background-output?${query.toString()}`));
 }
 
 /** GET /api/pane/artifacts: the pages the pane's Claude Code session published, newest first. */
