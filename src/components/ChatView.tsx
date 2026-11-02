@@ -724,8 +724,9 @@ function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], sinc
     : state === "ok" ? t("succeeded") : state === "pending" ? t("pending") : state === "error" ? t("failed") : t("outcome not recorded");
   const images = useMemo(() => linePictures([part]), [part]);
   // what the terminal prints under a finished command
-  const exitCode = commandExitCode(part);
   const background = useBackgroundTask(part);
+  // a call that started a background task answered at once: its task's chip says how the task ended
+  const exitCode = background === null ? commandExitCode(part) : null;
   return <div className={`work-row${part.error ? " is-error" : ""}`}>
   <div className="work-row-line">
     <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)} {...focus}>

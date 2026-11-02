@@ -159,19 +159,19 @@
 .bg-agent-status.is-running { color: var(--status-working); }
 .bg-agent-status.is-completed { color: var(--status-done); }
 .bg-agent-status.is-failed,
-.bg-agent-status.is-lost { color: var(--danger-text); }
+.bg-agent-status.is-lost { color: var(--status-blocked); }
 
 .bg-agent-exit {
   font-family: var(--font-mono);
 }
 
 .bg-agent-exit.is-error {
-  color: var(--danger-text);
+  color: var(--status-blocked);
 }
 
 .bg-agent-detail-icon.is-completed { color: var(--status-done); }
 .bg-agent-detail-icon.is-failed,
-.bg-agent-detail-icon.is-lost { color: var(--danger-text); }
+.bg-agent-detail-icon.is-lost { color: var(--status-blocked); }
 .bg-agent-detail-icon.is-cancelled { color: var(--text-dim); }
 
 /* what the task runs, when its title is a description of it */

@@ -15,7 +15,7 @@
  * What does not: files, images, push and remote PCs, which need a real machine.
  */
 import { NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
-import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, DevicePairedEvent, DevicesRevokedAll, HealthAuth, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PairedDevice, PairingCode, PaneBackgroundAgentDetail, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, RelayStatus, SecuritySummary, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, TabMovedToWorkspace, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
+import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, ConversationTurn, DevicePairedEvent, DevicesRevokedAll, HealthAuth, IntegrationsResponse, Machine, MachineEvent, OmoActivity, OmoTask, PairedDevice, PairingCode, PaneBackgroundAgentDetail, PaneBackgroundOutput, PaneDirection, PaneFindMatch, PaneFindRequest, PanePlan, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, PendingMessage, PlanStep, PluginActionResult, PluginActions, PluginActionsResponse, PortalStatus, RelayStatus, SecuritySummary, ServerMessage, SessionSnapshot, SlashCommand, TabMoved, TabMovedToWorkspace, UsageReport, WorkspaceCreated, WorkspaceInfo, WorktreeEntry, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../../shared/protocol.ts";
 import type { PushSubscriptionStatus, RepoBranchComparison, RepoDiffFile, RepoDiffFileContents, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRefs, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse, SessionResumeResponse } from "../../shared/protocol.ts";
 import { nextTabLabels, normalizeThemeChange, sharedPreferencesBody, type SharedPreferences } from "../../shared/preferences.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
@@ -269,17 +269,29 @@ for (const pane of snapshot().panes) if (keyOfPane.get(pane.pane_id) === "api") 
 
 /**
  * The flaky-retry pane's background work (GET /api/pane/omo-tasks): a Claude subagent still
- * reviewing, a background command, and a subagent that ended. The subagent's own transcript
- * (GET /api/pane/background-agent) grows by one fictional record each time it is read, so Refresh
- * has something new to show; the command has no transcript to open, as on a real PC.
+ * reviewing, a background command still running, a Monitor watch, a command that failed and a
+ * subagent that ended. The subagent's own transcript (GET /api/pane/background-agent) grows by one
+ * fictional record each time it is read, so Refresh has something new to show; the running
+ * command's output (GET /api/pane/background-output) grows by a line each read, in colour, as
+ * Claude Code streams it to its task file.
  */
 const minutesAgo = (minutes: number, seconds = 0): string => new Date(Date.now() - minutes * 60_000 - seconds * 1000).toISOString();
 const BACKGROUND_TASKS: OmoTask[] = [
   { id: "demo-review", title: "Review the retry test for timing assumptions", category: "reviewer", model: "claude-opus-5-5", status: "running", started_at: minutesAgo(4), ended_at: null, turns: 3, tool_calls: 4, tokens: 48_120, detail_kind: "claude-subagent" },
-  { id: "demo-flaky-run", title: "Run the retry test twenty times", category: "shell", model: null, status: "running", started_at: minutesAgo(1, 30), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: null },
+  { id: "demo-flaky-run", title: "Run the retry test twenty times", category: "shell", model: null, status: "running", started_at: minutesAgo(1, 30), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: "output", kind: "command", command: "for i in $(seq 20); do bun test test/retry.test.ts || exit 1; done", exit_code: null, tool_use_id: "toolu_demo_flaky" },
+  { id: "demo-ci-watch", title: "CI finishes on the retry branch", category: "monitor", model: null, status: "running", started_at: minutesAgo(6), ended_at: null, turns: null, tool_calls: null, tokens: null, detail_kind: "output", kind: "monitor", command: "gh run watch --exit-status", exit_code: null, tool_use_id: "toolu_demo_watch" },
+  { id: "demo-lint", title: "Lint the retry helper", category: "shell", model: null, status: "failed", started_at: minutesAgo(12), ended_at: minutesAgo(11, 40), turns: null, tool_calls: null, tokens: null, detail_kind: "output", kind: "command", command: "bun run lint src/retry.ts", exit_code: 1, tool_use_id: "toolu_demo_lint" },
   { id: "demo-lexer", title: "Check the lexer for the same race", category: "explorer", model: "claude-opus-5-5", status: "completed", started_at: minutesAgo(25), ended_at: minutesAgo(20), turns: 2, tool_calls: 3, tokens: 21_400, detail_kind: "claude-subagent" },
 ];
-for (const pane of snapshot().panes) if (keyOfPane.get(pane.pane_id) === "flaky") Object.assign(pane, { background_tasks: 2 });
+for (const pane of snapshot().panes) if (keyOfPane.get(pane.pane_id) === "flaky") Object.assign(pane, { background_tasks: 3 });
+/** each task's output as its file holds it; the running command's grows by a run each read */
+const ESC = "\u001b";
+const runLine = (run: number): string => `${ESC}[2mbun test v1.4.4${ESC}[0m\n test/retry.test.ts:\n ${ESC}[32m✓${ESC}[0m retries once after a transient failure ${ESC}[2m[${40 + (run * 7) % 13}ms]${ESC}[0m\n ${ESC}[32m✓${ESC}[0m gives up after five attempts ${ESC}[2m[${210 + (run * 11) % 30}ms]${ESC}[0m\n\n ${ESC}[32m2 pass${ESC}[0m\n ${ESC}[2m0 fail${ESC}[0m\n${ESC}[1mrun ${run} of 20 passed${ESC}[0m\n`;
+const DEMO_OUTPUTS: Record<string, string> = {
+  "demo-ci-watch": `Refreshing run status every 3 seconds. Press Ctrl+C to quit.\n\n${ESC}[33m*${ESC}[0m retry-deterministic ${ESC}[2m·${ESC}[0m 41304601449\nTriggered via push about 6 minutes ago\n\n${ESC}[1mJOBS${ESC}[0m\n${ESC}[32m✓${ESC}[0m Fast checks in 2m14s\n${ESC}[33m*${ESC}[0m Integration and browser\n${ESC}[33m*${ESC}[0m Native Windows install\n`,
+  "demo-lint": `$ eslint src/retry.ts\n\n${ESC}[4msrc/retry.ts${ESC}[24m\n  ${ESC}[2m14:9${ESC}[22m  ${ESC}[31merror${ESC}[39m  'random' is defined but never used  ${ESC}[2m@typescript-eslint/no-unused-vars${ESC}[22m\n\n${ESC}[31m${ESC}[1m✖ 1 problem (1 error, 0 warnings)${ESC}[22m${ESC}[39m\n${ESC}[31merror${ESC}[39m: script "lint" exited with code 1\n`,
+};
+let outputReads = 0;
 const BACKGROUND_PROMPT = "Review test/retry.test.ts for assumptions about timing: the test fails one run in ten on CI. Report what races, and propose the smallest change that makes it deterministic.";
 const BACKGROUND_EVENTS: PaneBackgroundAgentDetail["events"] = [
   { kind: "text", text: "Reading the test and the retry helper it exercises first.", at: minutesAgo(3, 55) },
@@ -1600,6 +1612,18 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   // the demo's sessions publish no pages: the artifacts chip stays away
   if (path === "/api/pane/artifacts") return json({ artifacts: [] });
   if (path === "/api/pane/omo-tasks") return json({ tasks: keyOfPane.get(paneId) === "flaky" ? BACKGROUND_TASKS : [], runs: [], server_time: new Date().toISOString() } satisfies OmoActivity);
+  if (path === "/api/pane/background-output") {
+    const taskId = query.get("task_id") ?? "";
+    if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(taskId)) return error("invalid_task_id", "task_id must be a word of letters, digits, - and _, at most 128 characters", 400);
+    if (keyOfPane.get(paneId) !== "flaky") return error("background_store_unavailable", "the pane's session keeps no task output that can be read", 503);
+    if (taskId === "demo-flaky-run") outputReads += 1;
+    const text = taskId === "demo-flaky-run" ? Array.from({ length: Math.min(4 + outputReads, 20) }, (_, run) => runLine(run + 1)).join("") : DEMO_OUTPUTS[taskId];
+    const bytes = new TextEncoder().encode(text ?? "");
+    const raw = query.get("offset");
+    const from = raw === null || Number(raw) > bytes.length ? 0 : Number(raw);
+    return json({ task_id: taskId, text: new TextDecoder().decode(bytes.slice(from)), start: from, offset: bytes.length, size: bytes.length, reset: raw === null || Number(raw) > bytes.length, gone: text === undefined, server_time: new Date().toISOString() } satisfies PaneBackgroundOutput);
+  }
   if (path === "/api/pane/background-agent") {
     if (method !== "GET") return error("method_not_allowed", "use GET", 400);
     if (!paneId) return error("missing_pane_id", "pane_id query parameter is required", 400);
