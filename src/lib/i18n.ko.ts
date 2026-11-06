@@ -500,6 +500,7 @@ const BASE: Record<string, string> = {
   "Removes this PC here. To end its access too, revoke it under Phone & devices on that PC.": "이 PC에서만 지웁니다. 접근까지 끊으려면 그 PC의 폰 및 기기에서 취소하세요.",
   "Added": "추가됨",
   "Sign in to Ovis": "Ovis에 로그인",
+  "Squash and merge": "스쿼시 후 머지",
 };
 
 /** The parts KO is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
