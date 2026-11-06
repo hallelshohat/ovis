@@ -45,7 +45,7 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
   let requested: string[];
 
   beforeEach(() => {
-    for (const key of ["window", "document", "navigator", "getComputedStyle", "localStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    for (const key of ["window", "document", "navigator", "getComputedStyle", "localStorage", "HTMLElement", "NodeFilter", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     stored.clear();
     requested = [];
     const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); }, removeItem: (key: string) => { stored.delete(key); } };
@@ -54,11 +54,12 @@ describe("the sidebar on a PC the Herdr app lays out", () => {
     const define = (key: string, value: unknown) => Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
     define("IS_REACT_ACT_ENVIRONMENT", true);
     define("HTMLElement", class HTMLElement {});
+    define("NodeFilter", { SHOW_ELEMENT: 1 });
     define("localStorage", storage);
     define("navigator", { languages: ["en-US"], platform: "Linux" });
     define("window", { localStorage: storage, matchMedia: () => media, innerWidth: 1280, innerHeight: 800, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), requestAnimationFrame: () => 1, cancelAnimationFrame() {}, setTimeout, clearTimeout });
     // the portal RowMenu draws into needs an element (nodeType 1) the test renderer can append to, with the node mock its refs read
-    define("document", { visibilityState: "visible", activeElement: null, querySelectorAll: () => [], body: { nodeType: 1, children: [], createNodeMock: node }, documentElement: { dataset: {}, style: { setProperty() {}, removeProperty() {} } }, querySelector: () => null, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events) });
+    define("document", { createTreeWalker: () => ({ nextNode: () => null }), visibilityState: "visible", activeElement: null, querySelectorAll: () => [], body: { nodeType: 1, children: [], createNodeMock: node }, documentElement: { dataset: {}, style: { setProperty() {}, removeProperty() {} } }, querySelector: () => null, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events) });
     define("getComputedStyle", () => ({ getPropertyValue: () => "" }));
     pinsBefore = currentSidebarPins();
     setSidebarPins([]);

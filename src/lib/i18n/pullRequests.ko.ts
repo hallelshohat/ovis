@@ -25,7 +25,6 @@ export const PULL_REQUESTS_KO: Record<string, string> = {
   "Pull requests show again on the next try.": "다음 시도 때 풀 리퀘스트가 다시 표시됩니다.",
   "Run gh auth login on this PC.": "이 PC에서 gh auth login을 실행하세요.",
   "Show pull requests": "풀 리퀘스트 보기",
-  "Squash and merge": "스쿼시 후 병합",
   "Squash and merge {title} into {base}.": "{title}을(를) {base}에 스쿼시 후 병합합니다.",
   "This folder's repository is not on GitHub.": "이 폴더의 저장소는 GitHub에 없습니다.",
   "passed": "통과",

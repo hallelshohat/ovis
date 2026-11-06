@@ -23,7 +23,7 @@ const paneMenu = async (page: Page, width: number): Promise<void> => {
   await page.getByText("Close pane", { exact: true }).first().waitFor();
 };
 const paletteActions = async (page: Page): Promise<string[]> => {
-  await page.keyboard.press("Control+Shift+K");
+  await page.keyboard.press("ControlOrMeta+Shift+K");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await palette.getByRole("searchbox").fill(">search");
   await palette.getByRole("option").first().waitFor();

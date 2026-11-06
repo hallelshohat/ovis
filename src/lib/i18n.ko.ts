@@ -500,6 +500,7 @@ const BASE: Record<string, string> = {
   "Conversation": "대화",
   "Off": "끄기",
   "Not now": "나중에",
+  "Squash and merge": "스쿼시 후 머지",
 };
 
 /** The parts KO is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */

@@ -504,6 +504,7 @@ const BASE: Record<string, string> = {
   "Conversation": "对话",
   "Off": "关闭",
   "Not now": "暂不",
+  "Squash and merge": "压缩并合并",
 };
 
 /** The parts ZH is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
