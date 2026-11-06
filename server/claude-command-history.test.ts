@@ -47,6 +47,14 @@ it("reuses complete all-ID coverage for newly discovered IDs and scans only appe
   expect(next!.ends.map((end) => end.id)).toEqual(["first", "discovered_later", "next"]);
 });
 
+it("keeps the task's exit code when its end is recovered from history", async () => {
+  const s = fixture();
+  writeFileSync(s.path, notice("build", "failed").replace("Background command finished", "Background command failed with exit code 2") + filler);
+  const history = await waitCommandHistory(s.path, s.limit());
+  expect(history!.ends).toHaveLength(1);
+  expect(history!.ends[0]).toMatchObject({ id: "build", status: "failed", exitCode: 2 });
+});
+
 it("invalidates completion authority on replacement, truncation and same-size rewrites", async () => {
   const s = fixture();
   writeFileSync(s.path, notice("old"));

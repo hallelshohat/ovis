@@ -31,7 +31,7 @@ const record = (page: Page, pane: string): Promise<void> => page.evaluate((id) =
   let last = "";
   const tick = (): void => {
     const root = document.querySelector(`.pane-frame[data-layout-pane="${id}"]`);
-    const rows = root === null ? [] : [...root.querySelectorAll("[data-chat-row]")].filter(shown);
+    const rows = root === null ? [] : [...root.querySelectorAll("[data-chat-row]")].filter((row) => shown(row) && row.querySelector(".chat-turn") !== null);
     const frame: Frame = {
       loading: root !== null && [...root.querySelectorAll(".chat-inline-state")].some((node) => shown(node) && node.textContent === "Loading conversation…"),
       footer: root === null ? [] : [...root.querySelectorAll(".chat-activity")].filter((node) => shown(node) && node.closest("[data-chat-row]") === null).map((node) => node.textContent ?? ""),
@@ -150,7 +150,7 @@ try {
       // transcript has the new turn. The finished turn stays finished; the Working head is the new one's.
       await page.goto(url(panes.flaky));
       const flaky = page.locator(`.pane-frame[data-layout-pane="${panes.flaky}"]`);
-      await flaky.locator("[data-chat-row] .work-block-title", { hasText: "Worked for" }).last().waitFor();
+      await flaky.locator("[data-chat-row] .chat-turn-duration", { hasText: "Worked for" }).last().waitFor();
       await painted(page);
       await record(page, panes.flaky);
       await status(page, panes.flaky, "working");
@@ -161,17 +161,17 @@ try {
       await painted(page);
       const reopened = await stop(page);
       const before = reopened[0]!.lastBlocks;
-      assert.ok(before.length > 0 && before.every((block) => block.startsWith("done/folded:Worked for")), `the finished turn is folded: ${JSON.stringify(before)}`);
+      assert.ok(before.length > 0 && before.every((block) => block.startsWith("done/folded:") && !block.includes("Working…")), `the finished turn is folded: ${JSON.stringify(before)}`);
       assert.deepEqual(reopened.filter((frame) => JSON.stringify(frame.lastBlocks) !== JSON.stringify(before)).map((frame) => frame.lastBlocks), [],
         "the finished turn is never titled Working… or opened again");
-      assert.ok(reopened.some((frame) => frame.footer.includes("Working…")), "the turn the agent began has its Working head under the rows");
+      assert.ok(reopened.some((frame) => frame.footer.some((text) => text.startsWith("Working…"))), "the turn the agent began has its Working head under the rows");
       console.log("PASS a turn the agent begins by itself leaves the finished turn folded, with the Working head under it");
 
       // A turn ends: its answer is drawn while herdr still says working, and the pane rests 300 ms
       // later, as herdr's status trails the transcript (100–400 ms at the turn ends measured). No
       // head of a next turn shows under the answer in that time.
       await page.goto(url(panes.flaky));
-      await flaky.locator("[data-chat-row] .work-block-title", { hasText: "Worked for" }).last().waitFor();
+      await flaky.locator("[data-chat-row] .chat-turn-duration", { hasText: "Worked for" }).last().waitFor();
       // Claude stamps a turn by its first entry; two turns read in one poll can share that stamp
       const answeredAt = "2026-11-04T09:00:00.000Z";
       const asked: ConversationTurn = { role: "user", ts: null, parts: [{ kind: "text", text: "Count the shelves." }] };
