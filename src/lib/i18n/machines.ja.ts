@@ -157,4 +157,5 @@ export const MACHINES_JA: Record<string, string> = {
   "Disk {value}": "ディスク {value}",
   "PC load in the status bar": "ステータスバーに PC の負荷を表示",
   "The selected PC's CPU, memory and fullest disk in the status bar, on this device only.": "選択中の PC の CPU、メモリ、最も使用率の高いディスクをステータスバーに表示します。この端末だけに適用されます。",
+  "Rename": "名前を変更",
 };

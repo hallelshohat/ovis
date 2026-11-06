@@ -157,4 +157,5 @@ export const MACHINES_KO: Record<string, string> = {
   "Disk {value}": "디스크 {value}",
   "PC load in the status bar": "상태 표시줄에 PC 부하 표시",
   "The selected PC's CPU, memory and fullest disk in the status bar, on this device only.": "선택한 PC의 CPU, 메모리, 가장 찬 디스크를 상태 표시줄에 보여 줍니다. 이 기기에서만 적용됩니다.",
+  "Rename": "이름 바꾸기",
 };
