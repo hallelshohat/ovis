@@ -25,7 +25,6 @@ export const PULL_REQUESTS_JA: Record<string, string> = {
   "Pull requests show again on the next try.": "次の試行でプルリクエストが再び表示されます。",
   "Run gh auth login on this PC.": "この PC で gh auth login を実行してください。",
   "Show pull requests": "プルリクエストを表示",
-  "Squash and merge": "スカッシュしてマージ",
   "Squash and merge {title} into {base}.": "{title} を {base} にスカッシュしてマージします。",
   "This folder's repository is not on GitHub.": "このフォルダーのリポジトリは GitHub にありません。",
   "passed": "成功",

@@ -629,6 +629,7 @@ const BASE: Record<string, string> = {
   "From every workspace.": "来自所有工作区。",
   "Pick a folder to start in.": "选择要启动的文件夹。",
   "Show QR code": "显示二维码",
+  "Squash and merge": "压缩并合并",
 };
 
 export const ZH_PARTS: Record<string, Record<string, string>> = {

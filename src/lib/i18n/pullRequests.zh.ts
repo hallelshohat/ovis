@@ -25,7 +25,6 @@ export const PULL_REQUESTS_ZH: Record<string, string> = {
   "Pull requests show again on the next try.": "下次尝试时会重新显示拉取请求。",
   "Run gh auth login on this PC.": "请在这台电脑上运行 gh auth login。",
   "Show pull requests": "显示拉取请求",
-  "Squash and merge": "压缩并合并",
   "Squash and merge {title} into {base}.": "将 {title} 压缩并合并到 {base}。",
   "This folder's repository is not on GitHub.": "此文件夹的仓库不在 GitHub 上。",
   "passed": "通过",
