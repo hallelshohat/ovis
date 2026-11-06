@@ -180,4 +180,5 @@ export const MACHINES_JA: Record<string, string> = {
   "Ovis was not installed on that PC": "その PC に Ovis をインストールできませんでした",
   "Installing Ovis on that PC…": "その PC に Ovis をインストールしています…",
   "Install Ovis there": "その PC に Ovis をインストール",
+  "Rename": "名前を変更",
 };

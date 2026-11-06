@@ -180,4 +180,5 @@ export const MACHINES_ZH: Record<string, string> = {
   "Ovis was not installed on that PC": "未能在那台电脑上安装 Ovis",
   "Installing Ovis on that PC…": "正在那台电脑上安装 Ovis…",
   "Install Ovis there": "在那台电脑上安装 Ovis",
+  "Rename": "重命名",
 };

@@ -846,6 +846,7 @@ const BASE: Record<string, string> = {
   "Note": "메모",
   "Memory|notes": "메모리",
   "Stopped by you. The agent that called it cannot give it new work.": "직접 멈춤 · 이 에이전트를 부른 에이전트는 새 일을 줄 수 없습니다.",
+  "Squash and merge": "스쿼시 후 머지",
 };
 
 export const KO_PARTS: Record<string, Record<string, string>> = {

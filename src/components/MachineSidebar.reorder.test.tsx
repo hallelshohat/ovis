@@ -70,7 +70,7 @@ describe("a PC dragged by its header in the sidebar", () => {
       renderer = create(<SettingsProvider>
         <MachineSidebar machines={machines} selectedMachineId="local" selectedPaneId={null} activity={{} as never} actions={actions}
           onSelect={() => {}} onNew={() => {}} onSetup={() => {}} onUsageLogin={() => {}} onMove={onMove} />
-      </SettingsProvider>, { createNodeMock: () => ({ getBoundingClientRect: () => box, contains: () => false, focus() {} }) });
+      </SettingsProvider>, { createNodeMock: () => ({ getBoundingClientRect: () => box, querySelector: () => null, contains: () => false, focus() {} }) });
     });
     const mounted = renderer!;
     const group = (name: string): ReactTestInstance => mounted.root.find((node) => node.type === "section" && node.props["aria-label"] === `PC ${name}`);

@@ -180,4 +180,5 @@ export const MACHINES_KO: Record<string, string> = {
   "Ovis was not installed on that PC": "그 PC에 Ovis를 설치하지 못했습니다",
   "Installing Ovis on that PC…": "그 PC에 Ovis를 설치하는 중…",
   "Install Ovis there": "그 PC에 Ovis 설치",
+  "Rename": "이름 바꾸기",
 };
