@@ -594,6 +594,7 @@ const BASE: Record<string, string> = {
   "Plan · {plan}": "プラン · {plan}",
   "{used}/{max} PCs": "PC {used}/{max}台",
   "{used} / {cap} relay data": "リレーデータ {used} / {cap}",
+  "Squash and merge": "スカッシュしてマージ",
 };
 
 /** The parts JA is made of; src/lib/i18n.test.ts fails when a key is in two parts, since a spread keeps only the last. */
