@@ -55,6 +55,19 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     assert.match(await button.innerText(), /client-sdk#88\s*Checks failed/, `${theme}: the header leads with the failing PR`);
     const inspector = page.locator("#pull-requests");
     await inspector.waitFor();
+    const openingFits = await inspector.evaluate((node) => {
+      node.style.animation = "none";
+      node.getBoundingClientRect();
+      node.style.animation = "";
+      const opening = node.getAnimations()[0];
+      if (!opening) throw new Error("The inspector opening animation is missing");
+      opening.pause();
+      opening.currentTime = 0;
+      const fits = document.documentElement.scrollWidth <= window.innerWidth;
+      opening.finish();
+      return fits;
+    });
+    assert.equal(openingFits, true, `${theme}: the inspector's opening frame stays inside the viewport`);
     assert.equal(await button.getAttribute("aria-expanded"), "true");
     assert.equal(await inspector.getByText("Open · 2", { exact: true }).count(), 1);
     assert.equal(await inspector.getByText("Earlier in this chat", { exact: true }).count(), 1);
@@ -247,7 +260,8 @@ async function reducedMotion(browser: Browser, origin: string): Promise<void> {
     await page.locator("#pull-requests").waitFor();
     await page.locator(".machine-new-row").click();
     await page.locator(".new-session-modal").waitFor();
-    const moving = await page.evaluate(() => document.getAnimations().filter((animation) => animation.playState === "running" && !(animation instanceof CSSAnimation && /pulse|breathe|spin/.test(animation.animationName))).length);
+    // A hover color change does not move or fade any of these surfaces.
+    const moving = await page.evaluate(() => document.getAnimations().filter((animation) => animation.playState === "running" && !(animation instanceof CSSAnimation && /pulse|breathe|spin/.test(animation.animationName)) && !(animation instanceof CSSTransition && animation.transitionProperty === "background-color")).length);
     if (moving !== 0) console.log(await page.evaluate(() => document.getAnimations().map((a) => `${a instanceof CSSAnimation ? a.animationName : a instanceof CSSTransition ? a.transitionProperty : "web"} ${a.playState} ${(a.effect as KeyframeEffect | null)?.target?.className}`)));
     assert.equal(moving, 0, "reduced motion: the side sheet, the inspector and the badges do not move");
     console.log("PASS reduced motion: nothing slides, pops or fades");
