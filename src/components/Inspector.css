@@ -33,7 +33,7 @@
 }
 
 @keyframes inspector-in {
-  from { opacity: 0; transform: translateX(16px); }
+  from { opacity: 0; transform: translateX(-16px); }
 }
 
 @media (prefers-reduced-motion: reduce) {
