@@ -133,6 +133,7 @@ run_script scripts/chat-scroll-padding-regression.ts
 run_script scripts/chat-selection-copy-regression.ts
 run_script scripts/chat-fallback-browser-qa.ts
 run_script scripts/grok-chat-browser-qa.ts
+run_script scripts/codex-chat-parity-browser-qa.ts
 run_script scripts/devin-chat-browser-regression.ts
 run_script scripts/copilot-chat-browser-qa.ts
 run_script scripts/omo-chat-browser-qa.ts

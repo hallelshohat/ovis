@@ -46,10 +46,11 @@ export function SentWaitingList({ sends }: { sends: readonly WaitingSend[] }) {
       return <div key={send.id} className="chat-turn chat-turn-user chat-turn-waiting">
         <div className="chat-user-row">
           <div className={capped ? "chat-bubble is-capped" : "chat-bubble"}><div className="chat-bubble-body">{send.text}</div></div>
-          {now - send.at >= WAITING_HINT_MS && <div className="chat-turn-meta">
+          {send.native === undefined && now - send.at >= WAITING_HINT_MS && <div className="chat-turn-meta">
             <span className="chat-sent-late" role="img" aria-label={late} title={late}><Clock aria-hidden="true" /></span>
           </div>}
         </div>
+        {send.native && <p className="chat-input-kind">{t(send.native === "steering" ? "Steering · current turn" : "Queued · next turn")}</p>}
       </div>;
     })}
   </div>;

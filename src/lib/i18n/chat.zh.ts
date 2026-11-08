@@ -262,4 +262,7 @@ export const CHAT_ZH: Record<string, string> = {
   "ended": "已结束",
   "started {time}": "{time} 开始",
   "stopped": "已停止",
+  "Steering · current turn": "追加指示 · 当前轮次",
+  "Queued · next turn": "已排队 · 下一轮次",
+  "Codex status": "Codex 状态",
 };
