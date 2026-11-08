@@ -180,6 +180,7 @@ export function isCommandTool(name: string): boolean {
  * code into the output. Null when the call is no command, still runs, or records no code.
  */
 export function commandExitCode(part: ToolPart): number | null {
+  if (part.exit_code !== undefined) return part.exit_code;
   if (!isCommandTool(part.name) || part.state === "pending") return null;
   const head = part.output.slice(0, 2000);
   const code = /^(?:Process exited with code|Exit code:?) (\d+)$/m.exec(head) ?? /"exit_code":\s*(\d+)/.exec(head);
@@ -194,7 +195,7 @@ export function commandExitCode(part: ToolPart): number | null {
 export function workSummary(parts: readonly ConversationPart[]): string {
   const counts: Record<WorkCategory, number> = { edit: 0, read: 0, command: 0, other: 0 };
   for (const part of parts) {
-    if (part.kind !== "tool") continue;
+    if (part.kind !== "tool" || (part.native_wrapper && !part.error)) continue;
     // a todo update is the plan, pinned under the chat, not an edit: TodoWrite would match /write/
     if (!part.skill && !isTodoTool(part.name)) counts[categorize(part.name)] += 1;
   }
@@ -460,7 +461,8 @@ export function todoGroups(parts: readonly ConversationPart[], rowKey: string): 
 
 /** The rows a work block draws: skills are chips beside the prompt, thinking only when shown. */
 export function visibleWorkParts(parts: ConversationPart[], showThinking: boolean): ConversationPart[] {
-  return parts.filter((part) => part.kind !== "skill" && (showThinking || part.kind !== "thinking"));
+  return parts.filter((part) => part.kind !== "skill" && (showThinking || part.kind !== "thinking" || part.native)
+    && !(part.kind === "tool" && part.native_wrapper && !part.error));
 }
 
 /**

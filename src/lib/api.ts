@@ -15,6 +15,7 @@ import type { BoardActionRequest, BoardActionResult, BoardTask } from "../../sha
 import { machinePath, type BridgeHealth, type HerdrCoreFacts, type HerdrIdentity, type HerdrRuntimeFacts, type Machine, type MachineRoster, type SetupAction, type SetupJob, type SetupRequest } from "../../shared/machines.ts";
 import type {
   WorkspaceMoved,
+  CodexDisplay,
   HerdrPane,
   AgentKind,
   AgentRenameRequest,
@@ -1550,13 +1551,14 @@ export async function fetchPanePrompt(paneId: string, machineId = "local"): Prom
 }
 
 /** The waiting prompt, and with none, the next prompt the agent suggests; restored is a send the agent put back in its input box when it was cancelled; outcomes are the pane's tracked command sends (older servers send none of the three). */
-export async function fetchPanePromptState(paneId: string, machineId = "local"): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[] }> {
+export async function fetchPanePromptState(paneId: string, machineId = "local"): Promise<{ prompt: InteractivePrompt | null; suggestion: string | null; restored: string | null; outcomes: CommandOutcome[]; codex_display: CodexDisplay | null }> {
   const body = await getJson<PanePromptResponse>(machinePath(machineId, `pane/prompt?pane_id=${encodeURIComponent(paneId)}`));
   return {
     prompt: body.prompt,
     suggestion: typeof body.suggestion === "string" && body.suggestion !== "" ? body.suggestion : null,
     restored: typeof body.restored === "string" && body.restored !== "" ? body.restored : null,
     outcomes: Array.isArray(body.outcomes) ? body.outcomes : [],
+    codex_display: body.codex_display ?? null,
   };
 }
 
