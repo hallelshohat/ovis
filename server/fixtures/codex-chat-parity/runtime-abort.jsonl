@@ -1,0 +1,5 @@
+{"type":"event_msg","timestamp":"2026-11-08T10:48:00Z","payload":{"type":"task_started","turn_id":"runtime-failure"}}
+{"type":"event_msg","timestamp":"2026-11-08T10:48:00Z","payload":{"type":"user_message","message":"Show runtime failures."}}
+{"type":"event_msg","timestamp":"2026-11-08T10:48:01Z","payload":{"type":"warning","message":"Connection interrupted; retrying"}}
+{"type":"event_msg","timestamp":"2026-11-08T10:48:02Z","payload":{"type":"error","message":"Retry limit reached"}}
+{"type":"event_msg","timestamp":"2026-11-08T10:48:04Z","payload":{"type":"turn_aborted"}}

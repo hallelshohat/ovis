@@ -166,7 +166,7 @@
 }
 
 /* the sentence and condition under a name start where the name does, not under its picture */
-.settings-row-text:has(> .settings-label-line > .settings-row-icon) > :not(.settings-label-line) {
+.settings-row-text[data-icon] > :not(.settings-label-line) {
   padding-inline-start: var(--settings-icon-column);
 }
 
@@ -850,7 +850,7 @@
   }
 
   /* a row's drawing stays on its name's line, at the end; the control takes the line under both */
-  .settings-row.is-wide:has(> .settings-row-preview) {
+  .settings-row.is-wide[data-preview] {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -861,7 +861,7 @@
     grid-column: 2;
   }
 
-  .settings-row.is-wide:has(> .settings-row-preview) > :not(.settings-row-text, .settings-row-preview) {
+  .settings-row.is-wide[data-preview] > :not(.settings-row-text, .settings-row-preview) {
     grid-column: 1 / -1;
   }
 

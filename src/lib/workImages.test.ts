@@ -31,6 +31,7 @@ describe("cachedImageRef", () => {
   const claude = "6f1c2a9e-4b7d-4e2a-9c1f-0a2b3c4d5e6f:3:1";
   const codex = `codex-${"ab".repeat(32)}`;
   const opencode = "opencode:msg_01HZY8K2:0";
+  const codexTool = "codex-tool:call_image:0";
 
   it("keeps Claude's, pi's, Grok's and Copilot's pictures, which are served immutable", () => {
     expect(cachedImageRef(`grok-image:${"cd".repeat(32)}`)).toBe(true);
@@ -41,17 +42,19 @@ describe("cachedImageRef", () => {
     expect(cachedImageRef("pi-prompt:entry-12:1")).toBe(true);
   });
 
-  it("leaves Codex's, OpenCode's and any other agent's to their opened row", () => {
+  it("marks Codex, OpenCode and unknown refs as uncached", () => {
     expect(cachedImageRef(codex)).toBe(false);
+    expect(cachedImageRef(codexTool)).toBe(false);
     expect(cachedImageRef(opencode)).toBe(false);
     expect(cachedImageRef("grok:turn-3:0")).toBe(false);
     expect(cachedImageRef("")).toBe(false);
   });
 
-  it("puts only kept pictures on a line, in the work's order", () => {
-    const parts = [tool("Read", [claude]), tool("view_image", [codex]), tool("read", ["pi:call_7:0", opencode])];
-    expect(linePictures(parts).map((image) => image.ref)).toEqual([claude, "pi:call_7:0"]);
-    expect(linePictures([tool("view_image", [codex, opencode])])).toEqual([]);
+  it("puts Codex and cached pictures on a line, in the work's order", () => {
+    const parts = [tool("Read", [claude]), tool("view_image", [codex, codexTool]), tool("read", ["pi:call_7:0", opencode])];
+    expect(linePictures(parts).map((image) => image.ref)).toEqual([claude, codex, codexTool, "pi:call_7:0"]);
+    expect(linePictures([tool("view_image", [codex, opencode])]).map((image) => image.ref)).toEqual([codex]);
+    expect(linePictures([tool("view_image", ["codex-bad", `codex-${"ab".repeat(32)}extra`, "codex-tool:../file:0", "codex-tool:call_image:1000"])])).toEqual([]);
   });
 });
 
