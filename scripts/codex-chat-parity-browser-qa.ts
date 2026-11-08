@@ -73,7 +73,7 @@ try {
   assert.match(await log.innerText(), /OVS24_CURRENT_STDERR/);
   assert.match(await log.innerText(), /exit 9/);
   assert.equal(await log.locator('.work-block-head[aria-expanded="false"]').count(), 0, "native work remains visible");
-  assert.equal(await log.locator('.work-row-head[aria-expanded="false"]').count(), 0, "pending commands remain visible before Codex records their native completion");
+  assert.equal(await log.locator('.work-row-line > .work-row-head[aria-expanded="true"]').count(), 0, "native and pending tool arguments start collapsed while their results remain visible");
   assert.equal(await log.locator(".chat-turn-duration").count(), 0, "steering does not end its native task");
   const capture = async (name: string) => {
     if (!evidence) return;
@@ -81,6 +81,14 @@ try {
     await page.screenshot({ path: join(evidence, `${name}.png`), animations: "disabled" });
   };
   await capture("steering-pending");
+  const edit = log.locator(".work-row").filter({ has: page.locator(".chat-diff-add").filter({ hasText: "+gamma=4" }) });
+  for (const expanded of [true, false]) {
+    await edit.locator(".work-row-head").click();
+    assert.equal(await edit.locator(".work-row-head").getAttribute("aria-expanded"), String(expanded));
+    assert.equal(await edit.locator(".chat-diff-add").filter({ hasText: "+gamma=4" }).count(), 1, "toggling arguments keeps one visible diff");
+  }
+  await page.locator(".composer-text").focus();
+  await log.evaluate((node) => { node.scrollTop = node.scrollHeight; });
   console.log("PASS recorded reads, edits, outputs, exit status and pending steering");
 
   // Variations of the recording cover message contents and a second unsent terminal draft.
@@ -150,6 +158,18 @@ try {
     return image !== null && image.complete && image.naturalWidth === 192;
   });
   assert.equal(await picture.count(), 1, "the exec wrapper retains one loaded image beside its native command and image-view action");
+  const imageRow = log.locator(".work-row").filter({ has: page.locator(".chat-tool-images img") });
+  const imageHead = imageRow.locator(".work-row-head");
+  const rawInput = imageRow.locator(".work-row-detail > pre.chat-tool-io");
+  assert.equal(await imageHead.getAttribute("aria-expanded"), "false");
+  assert.equal(await rawInput.count(), 0, "the wrapper's JavaScript is hidden by default");
+  await imageHead.click();
+  await rawInput.waitFor();
+  assert.match(await rawInput.innerText(), /tools\.view_image/);
+  await imageHead.click();
+  assert.equal(await rawInput.count(), 0);
+  assert.equal(await picture.isVisible(), true, "closing arguments keeps the returned image visible");
+  assert.equal(await log.locator(".chat-tool-output pre").filter({ hasText: /^IMAGE_COMMAND$/ }).isVisible(), true);
   await picture.scrollIntoViewIfNeeded();
   await capture("mixed-image");
   console.log("PASS recorded mixed command/image output and native Viewed image action");

@@ -364,21 +364,22 @@ function PatchView({ patch }: { patch: string }) {
   </div>)}</div>;
 }
 
-function ToolInputView({ part }: { part: ToolPartType }) {
+function ToolInputView({ part, expanded = true }: { part: ToolPartType; expanded?: boolean }) {
   const open = useContext(OpenFileContext);
   const t = useT();
   if (part.edits?.length) return <div className="chat-tool-io">{part.edits.map((edit, index) => <div key={index}>
     <ToolFile path={edit.path} /><EditDiff before={edit.before} after={edit.after} />
   </div>)}</div>;
-  if (part.arguments_omitted) return <pre className="chat-tool-io">{t("Arguments omitted (too large)")}</pre>;
+  const raw = expanded ? <pre className="chat-tool-io">{part.input}</pre> : null;
+  if (part.arguments_omitted) return expanded ? <pre className="chat-tool-io">{t("Arguments omitted (too large)")}</pre> : null;
   const after = isTodoTool(part.name) ? parseTodoAnswer(part.output) ?? todoSnapshot(part) : null;
   if (after !== null && after.length > 0) return <TodoList items={after} />;
   const patch = patchText(part.input);
   if (patch !== null) return <PatchView patch={patch} />;
   let parsed: Record<string, unknown>;
   try { parsed = JSON.parse(part.input) as Record<string, unknown>; }
-  catch { return <pre className="chat-tool-io">{part.input}</pre>; }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return <pre className="chat-tool-io">{part.input}</pre>;
+  catch { return raw; }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return raw;
   const asked = askedQuestions(part.name, parsed);
   if (asked !== null) return <ol className="chat-ask-questions">{asked.map((question, index) => <li key={index} className="chat-ask-question">
     {question.header !== null && <p className="chat-ask-header">{question.header}</p>}
@@ -397,7 +398,7 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   </li>)}</ol>;
   const str = (key: string): string | undefined => typeof parsed[key] === "string" ? parsed[key] : undefined;
   const command = str("command") ?? str("cmd");
-  if (command !== undefined) return <div className="chat-tool-io"><pre>{linkFilePaths(command, open)}</pre>{(str("cwd") ?? str("description")) !== undefined && <p className="chat-tool-io-meta">{str("cwd") ?? str("description")}</p>}</div>;
+  if (command !== undefined) return expanded ? <div className="chat-tool-io"><pre>{linkFilePaths(command, open)}</pre>{(str("cwd") ?? str("description")) !== undefined && <p className="chat-tool-io-meta">{str("cwd") ?? str("description")}</p>}</div> : null;
   const oldString = str("old_string");
   const newString = str("new_string");
   if (oldString !== undefined || newString !== undefined) return <div className="chat-tool-io">{str("file_path") !== undefined && <ToolFile path={str("file_path")!} />}<EditDiff before={oldString ?? ""} after={newString ?? ""} /></div>;
@@ -412,11 +413,14 @@ function ToolInputView({ part }: { part: ToolPartType }) {
     {sendUserFile.files.map((file, index) => <ToolFile key={`${index}:${file}`} path={file} />)}
   </div>;
   const editScript = str("input");
-  if (editScript !== undefined) return <pre className="chat-tool-io chat-diff">{editScript.split("\n").map((line, index) => <span key={index} className={ompEditLineClass(line)}>{line}{"\n"}</span>)}</pre>;
+  if (editScript !== undefined) return expanded ? <pre className="chat-tool-io chat-diff">{editScript.split("\n").map((line, index) => <span key={index} className={ompEditLineClass(line)}>{line}{"\n"}</span>)}</pre> : null;
   const content = str("content");
   if (content !== undefined) return <div className="chat-tool-io">{(str("file_path") ?? str("path")) !== undefined && <ToolFile path={(str("file_path") ?? str("path"))!} />}<pre>{content}</pre></div>;
   const path = str("file_path") ?? str("path");
-  if (path !== undefined) return <div className="chat-tool-io"><ToolFile path={path} suffix={str("pattern") !== undefined ? ` — /${str("pattern")}/` : undefined} /></div>;
+  if (path !== undefined) {
+    if (!expanded) return null;
+    return <div className="chat-tool-io"><ToolFile path={path} suffix={str("pattern") !== undefined ? ` — /${str("pattern")}/` : undefined} /></div>;
+  }
   for (const [key, toRows] of [["list", phaseRows], ["todos", todoRows], ["plan", planRows], ["tasks", taskRows]] as const) {
     const value = parsed[key];
     if (Array.isArray(value)) {
@@ -424,7 +428,7 @@ function ToolInputView({ part }: { part: ToolPartType }) {
       if (rows.length > 0) return <ChecklistView rows={rows} />;
     }
   }
-  return <pre className="chat-tool-io">{part.input}</pre>;
+  return raw;
 }
 
 function RawToolInput({ part }: { part: ToolPartType }) {
@@ -728,10 +732,12 @@ function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], sinc
   const t = useT();
   // a call of the running turn that has not answered: it runs now, as the terminal's spinner says
   const running = live && part.state === "pending";
-  // a running command opens on its live output, as the terminal shows it; once it ends it folds
+  // Codex keeps results visible independently of its optional argument detail.
   const watching = running && isCommandTool(part.name);
+  const terminalResult = terminal || part.native === true;
   const [chosen, setOpen] = useChatRowToggle(stateKey, null);
-  const open = chosen ?? (terminal || part.native === true || watching);
+  const open = chosen ?? (!terminalResult && watching);
+  const showResult = terminalResult || open;
   const focus = useRowFocus<HTMLButtonElement>(stateKey);
   const attempt = state !== undefined;
   const whole = useWholeOutput(part.output_ref);
@@ -768,9 +774,9 @@ function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], sinc
     </button>
     {background !== null && <BackgroundTaskChip background={background} />}
     {/* opened, the row shows its pictures larger in its detail */}
-    {!open && <LineImages paneId={paneId} images={images} />}
+    {!showResult && <LineImages paneId={paneId} images={images} />}
   </div>
-  {open && <div className="work-row-detail">{(verb !== null || name !== part.name) && <p className="work-row-tool">{part.name}</p>}{attempt ? <RawToolInput part={part} /> : <ToolInputView part={part} />}<ToolImages paneId={paneId} part={part} />{watching && <LiveOutput paneId={paneId} part={part} parts={parts} since={since} />}{(output.length > 0 || (clippedEdit && canLoad)) && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4>{/* each whole output folds on its own, whatever the preview or an earlier one was: another element, another key */}
+  {showResult && <div className="work-row-detail">{open && (verb !== null || name !== part.name) && <p className="work-row-tool">{part.name}</p>}{attempt ? open && <RawToolInput part={part} /> : <ToolInputView part={part} expanded={open} />}<ToolImages paneId={paneId} part={part} />{watching && <LiveOutput paneId={paneId} part={part} parts={parts} since={since} />}{(output.length > 0 || (clippedEdit && canLoad)) && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4>{/* each whole output folds on its own, whatever the preview or an earlier one was: another element, another key */}
     {output.length > 0 && <ToolOutputText key={whole.text !== null ? `whole:${part.output_ref ?? ""}` : "preview"} stateKey={`${stateKey}:${whole.text !== null ? `whole:${part.output_ref ?? ""}` : "output"}`} output={output} whole={whole.text !== null} />}
     {canLoad && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
       {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
