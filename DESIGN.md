@@ -4730,6 +4730,10 @@ headless choice; sign-in waits continue reconnecting automatically.
 
 ## Codex terminal parity
 
+Settings rows record their icon and preview presence in data attributes. This preserves the existing
+Ovis Settings layout without broad relational selectors making Chrome restyle the chat on typing.
+It changes no visual pattern from the Codex-style chat: tool results stay visible and input stays immediate.
+
 Codex Chat follows the Codex CLI 0.167 terminal: native command, read and file-change items stay
 visible in their original order, with output, exit status and diffs. Tool arguments start collapsed;
 opening a row reveals its input without hiding results, plans or images when it closes again.

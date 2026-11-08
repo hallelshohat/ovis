@@ -5,7 +5,10 @@ import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "playwright-core";
+import { chromium, type Page } from "playwright-core";
+import { z } from "zod";
+import type { ConversationResponse } from "../shared/protocol.ts";
+import { parseCodexTranscript } from "../server/codex.ts";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { shellQuote } from "../server/machine-security.ts";
@@ -56,7 +59,7 @@ try {
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "working" });
   server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), codexHome, tailscaleOwner: null });
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: "en-US" });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: "en-US", serviceWorkers: "block" });
   page.setDefaultTimeout(15_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -179,9 +182,65 @@ try {
   await capture("mobile");
   assert.deepEqual(errors, []);
   console.log("PASS mobile layout and no browser errors");
+  await checkTyping({ page, paneId });
+  await capture("typing");
+  assert.deepEqual(errors, []);
 } finally {
   await browser?.close();
   server?.stop(true);
   if (workspaceId) await workspaceClose(workspaceId);
   rmSync(root, { recursive: true, force: true });
+}
+
+/** Style work, rather than wall-clock speed: unrelated Settings CSS must not restyle a long turn on each key. */
+async function checkTyping({ page, paneId }: { page: Page; paneId: string }): Promise<void> {
+  const command = parseCodexTranscript(fixture("0.167.0.jsonl")).flatMap((turn) => turn.parts)
+    .find((part) => part.kind === "tool" && part.native && part.name === "exec_command" && part.output.length > 10);
+  assert(command?.kind === "tool", "the recording provides a native command for the typing load");
+  const count = 1_000;
+  const response: ConversationResponse = {
+    source: "codex-transcript", history_id: "typing", turns: [
+      { role: "user", ts: null, parts: [{ kind: "text", text: "Check the long tool history." }] },
+      { role: "assistant", ts: null, native_turn_id: "typing", parts: [
+        ...Array.from({ length: count }, (_, index) => ({ ...command, call_id: `typing-${index}`, output: `${command.output}\n`.repeat(30) })),
+        { kind: "text", text: "TYPING_PROBE_END", phase: "final_answer" },
+      ] },
+    ],
+  };
+  await page.route("**/api/pane/conversation?**", (route) => route.fulfill({ json: response }));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.reload();
+  await page.getByText("TYPING_PROBE_END", { exact: true }).waitFor();
+  assert.equal(await page.locator(".work-row").count(), count, "the results stay rendered during typing");
+  const input = page.locator(`.pane-frame[data-layout-pane="${paneId}"] .composer-text`);
+  await input.fill("");
+  await input.focus();
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  const cdp = await page.context().newCDPSession(page);
+  const trace: unknown[] = [];
+  cdp.on("Tracing.dataCollected", ({ value }: { value: unknown[] }) => trace.push(...value));
+  const text = "This is a short typing check with a few words to see whether the input stays responsive. ";
+  try {
+    await cdp.send("Tracing.start", { categories: "devtools.timeline", transferMode: "ReportEvents" });
+    try { await input.pressSequentially(text); }
+    finally {
+      const done = new Promise<void>((resolve) => cdp.once("Tracing.tracingComplete", () => resolve()));
+      await cdp.send("Tracing.end");
+      await done;
+    }
+  } finally { await cdp.detach(); }
+  assert.equal(await input.inputValue(), text, "typing retains every character");
+  const parsed = z.array(z.object({ name: z.string(), args: z.object({ elementCount: z.number().optional() }).optional(), dur: z.number().optional() })).safeParse(trace);
+  assert(parsed.success, "Chrome returned valid trace events");
+  const updates = parsed.data.filter((event) => event.name === "UpdateLayoutTree");
+  assert(updates.some((event) => (event.args?.elementCount ?? 0) > 0), "the trace captured style recalculation");
+  const styled = updates.reduce((sum, event) => sum + (event.args?.elementCount ?? 0), 0);
+  const perKey = styled / text.length;
+  const styleMs = updates.reduce((sum, event) => sum + (event.dur ?? 0), 0) / 1_000;
+  console.log(`Typing ${count} tool rows: ${perKey.toFixed(1)} styled elements/key, ${styleMs.toFixed(1)} ms style work for ${text.length} keys`);
+  if (evidence) writeFileSync(join(evidence, "typing.json"), JSON.stringify({ tools: count, keys: text.length, styled, perKey, styleMs }, null, 2));
+  // The old selectors restyle ~15,000 elements/key; allow unrelated rendering without a timing-dependent limit.
+  assert(perKey < count * 2, `typing restyled the pane subtree: ${perKey.toFixed(1)} elements/key`);
+  console.log("PASS long Chat typing avoids full-pane style recalculation and retains the draft");
 }
