@@ -854,7 +854,8 @@
     align-self: flex-end;
   }
 
-  .settings-row.is-wide:has(> .settings-row-preview) {
+  /* a row's drawing stays on its name's line, at the end; the control takes the line under both */
+  .settings-row.is-wide[data-preview] {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
