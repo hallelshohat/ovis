@@ -5596,8 +5596,10 @@ recorded order among its tools. Runtime errors count in the summary's failure ba
 
 Native queued and steering messages use the existing sent-message store. Each transcript receipt
 replaces one waiting bubble; steering keeps the native task identity and does not add a completion
-divider before the continued reply. Live footer details, update notices and `/status` output sit near
-the composer. Plan confirmation uses the existing prompt card and guarded answer route.
+divider before the continued reply. Chat uses its existing Claude-style activity and metadata UI
+instead of copying the terminal's Working timer, tips, model/path and keyboard shortcuts. Actual
+warnings, update notices and explicit `/status` output remain near the composer. Plan confirmation
+uses the existing prompt card and guarded answer route.
 
 ## Local Markdown images in Chat
 

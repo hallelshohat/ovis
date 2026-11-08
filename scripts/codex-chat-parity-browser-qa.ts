@@ -16,6 +16,7 @@ import { chromePath } from "./chrome-path.ts";
 
 const root = mkdtempSync(join(tmpdir(), "codex-parity-"));
 const fixture = (name: string) => readFileSync(join(import.meta.dir, "../server/fixtures/codex-chat-parity", name), "utf8");
+const steeringScreen = fixture("0.167.0-steering.txt").replace("• Messages to be submitted", "  └ Tip: NEW: Prevent sleep while running is now available in /experimental.\n\n• Messages to be submitted");
 const lines = fixture("0.167.0.jsonl").trimEnd().split("\n");
 const retry = lines.findIndex((line) => line.includes("The missing codex-code-mode-host is now installed"));
 const start = lines.slice(0, retry).map((line, index) => line.includes('"type":"task_started"') ? index : -1).filter((index) => index >= 0).at(-1)!;
@@ -34,7 +35,7 @@ try {
   const header = JSON.stringify({ type: "session_meta", payload: { id: "01a1ba42-c8a1-73f0-a727-5b7ad14ddc2f", cwd: root } });
   const persist = (end: number) => writeFileSync(rollout, [header, ...lines.slice(start, end)].join("\n") + "\n");
   persist(steering);
-  writeFileSync(screen, fixture("0.167.0-steering.txt"));
+  writeFileSync(screen, steeringScreen);
   const db = new Database(join(codexHome, "state_5.sqlite"));
   db.exec("CREATE TABLE threads (rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, updated_at INTEGER)");
   db.query("INSERT INTO threads VALUES (?, ?, 0, NULL, 1)").run(rollout, root);
@@ -81,6 +82,8 @@ try {
   assert(await log.locator(".work-block-failed").count() > 0, "folded summaries retain failures");
   assert.equal(await log.locator(".chat-turn-duration").count(), 0, "steering does not end its native task");
   await capture("steering-compact");
+  assert.equal(await log.locator(".chat-codex-status").count(), 0, "terminal chrome does not add a duplicate status block");
+  assert(await log.locator(".work-block.is-live").count() > 0, "Ovis retains its own live work indicator");
   await log.locator('.work-block-head[aria-expanded="false"]').evaluateAll((buttons) => {
     for (const button of buttons) if (button instanceof HTMLButtonElement) button.click();
   });
@@ -105,12 +108,12 @@ try {
   console.log("PASS recorded reads, edits, outputs, exit status and pending steering");
 
   // Variations of the recording cover message contents and a second unsent terminal draft.
-  const bullets = fixture("0.167.0-steering.txt").replace(/  ↳ OVS24_CURRENT_STEER:[^\n]+/, "  ↳ OVS24_BULLETS:\n    • alpha\n    • beta");
-  for (const [name, frame] of [["pending-bullets", bullets], ["pending-draft", bullets.replace("› Ask Codex to do anything", "› Another unsent draft\n  with a second line").replace("Working (29s", "Working (30s")]]) {
+  const bullets = steeringScreen.replace(/  ↳ OVS24_CURRENT_STEER:[^\n]+/, "  ↳ OVS24_BULLETS:\n    • alpha\n    • beta");
+  for (const [name, frame] of [["pending-bullets", bullets], ["pending-draft", bullets.replace("OVS24_BULLETS:", "OVS24_DRAFT:").replace("› Ask Codex to do anything", "› Another unsent draft\n  with a second line")]]) {
     await showScreen(frame!);
-    const pending = log.locator(".chat-turn-waiting").filter({ hasText: "OVS24_BULLETS:" });
+    const pending = log.locator(".chat-turn-waiting").filter({ hasText: name === "pending-draft" ? "OVS24_DRAFT:" : "OVS24_BULLETS:" });
     await pending.waitFor();
-    await page.locator(".chat-codex-status").filter({ hasText: name === "pending-draft" ? "Working (30s" : "Working (29s" }).waitFor();
+    assert.equal(await log.locator(".chat-codex-status").count(), 0);
     assert.match(await pending.innerText(), /• alpha/);
     assert.match(await pending.innerText(), /• beta/);
     assert.equal(await log.locator(".chat-turn-waiting").count(), 1);
