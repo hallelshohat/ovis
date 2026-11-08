@@ -375,7 +375,7 @@ export function todoGroups(parts: readonly ConversationPart[], rowKey: string): 
 
 export function visibleWorkParts(parts: ConversationPart[], showThinking: boolean): ConversationPart[] {
   return parts.filter((part) => part.kind !== "skill" && (showThinking || part.kind !== "thinking" || part.native)
-    && !(part.kind === "tool" && part.native_wrapper && !part.error));
+    && !(part.kind === "tool" && part.native_wrapper && !part.error && !part.images?.length));
 }
 
 /**
