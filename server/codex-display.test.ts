@@ -16,7 +16,7 @@ it("offers the recorded plan confirmation through the prompt card, with an expli
   expect(parseInteractivePrompt("codex", `${recording("0.167.0-plan.txt")}\n› Ask Codex to do anything\nGPT-6-Luna medium · /project`)).toBeNull();
 });
 
-it("shows the recorded 0.166 and 0.167 steering panel beside the live status", () => {
+it("shows the recorded 0.166 and 0.167 steering panel without copying terminal status", () => {
   for (const version of ["0.166.0", "0.167.0"]) {
     const screen = recording(`${version}-steering.txt`);
     const display = readCodexDisplay({ screen });
@@ -24,14 +24,14 @@ it("shows the recorded 0.166 and 0.167 steering panel beside the live status", (
     expect(display?.pending_inputs[0]?.kind).toBe("steering");
     expect(display?.pending_inputs[0]?.text).toContain(version === "0.166.0" ? "OVS24_STEER:" : "OVS24_CURRENT_STEER:");
     expect(codexSteeringPending(screen, display!.pending_inputs[0]!.text)).toBe(true);
-    expect(display?.status_lines.some((line) => line.includes("background terminal running"))).toBe(true);
+    expect(display?.status_lines).toEqual([]);
   }
 });
 
 it("shows native Tab-queued input without adding its edit shortcut to the user's words", () => {
   const display = readCodexDisplay({ screen: recording("0.167.0-queued.txt") });
   expect(display?.pending_inputs).toEqual([{ kind: "queued", text: "OVS24_NATIVE_QUEUED: reply with turquoise after the current turn." }]);
-  expect(display?.status_lines.some((line) => line.includes("Waiting for background terminal"))).toBe(true);
+  expect(display?.status_lines).toEqual([]);
   expect(codexSteeringPending(recording("0.167.0-queued.txt"), display!.pending_inputs[0]!.text)).toBe(false);
 });
 
@@ -47,16 +47,25 @@ it("shows pending input beside another terminal draft without authorizing Escape
     const screen = recording("0.167.0-steering.txt").replace("› Ask Codex to do anything", draft);
     const display = readCodexDisplay({ screen });
     expect(display?.pending_inputs).toHaveLength(1);
-    expect(display?.status_lines.some((line) => line.includes("Working"))).toBe(true);
+    expect(display?.status_lines).toEqual([]);
     expect(codexSteeringPending(screen, display?.pending_inputs[0]?.text ?? "")).toBe(false);
   }
 });
 
-it("shows the real update notice, startup warning and model footer", () => {
+it("omits the duplicate timer, command, tip, model/path and shortcut dump", () => {
+  const recorded = recording("0.167.0-steering.txt");
+  const screen = recorded.replace("• Messages to be submitted", "  └ printf command-already-in-transcript\n  └ Tip: NEW: Prevent sleep while running is now available in /experimental.\n\n• Messages to be submitted")
+    .replace(/  GPT-6-Luna default[^\n]+/, "  GPT-6-Astra high · /workspace/codex-parity · Fix Codex chat parity\n  ? for shortcuts                         ⚠ 3 warnings · f2 to view");
+  const display = readCodexDisplay({ screen });
+  expect(display?.pending_inputs).toEqual(readCodexDisplay({ screen: recorded })?.pending_inputs);
+  expect(display?.status_lines).toEqual([]);
+});
+
+it("shows the real update notice and startup warning without the model footer", () => {
   const display = readCodexDisplay({ screen: recording("0.166.0-update.ansi") });
   expect(display?.status_lines.join("\n")).toContain("Update available! 0.166.0 -> 0.167.0");
   expect(display?.status_lines.join("\n")).toContain("WARNING: proceeding");
-  expect(display?.status_lines.join("\n")).toContain("GPT-6-Luna default");
+  expect(display?.status_lines.join("\n")).not.toContain("GPT-6-Luna default");
   expect(display?.pending_inputs).toEqual([]);
 });
 
