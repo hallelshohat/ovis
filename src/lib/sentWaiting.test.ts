@@ -1,14 +1,104 @@
 import { describe, expect, it } from "bun:test";
 
-import { clearMachineWaitingSends, currentWaitingSends, expireWaitingSends, forgetMachineWaitingSends, forgetWaitingBaseline, forgetWaitingSends, observeWaitingClock, pruneWaitingSends, rememberWaitingSend, settleWaitingSends, stampedBaseline, WAITING_SEND_MS, waitingBaseline, waitingKey } from "./sentWaiting.ts";
-import type { ConversationTurn } from "../../shared/protocol.ts";
+import { clearMachineWaitingSends, currentWaitingSends, expireWaitingSends, forgetMachineWaitingSends, forgetWaitingBaseline, forgetWaitingSends, nativeWaitingSends, observeNativeWaiting, observeWaitingClock, pruneWaitingSends, rememberWaitingSend, settleWaitingSends, stampedBaseline, WAITING_SEND_MS, waitingBaseline, waitingKey } from "./sentWaiting.ts";
+import type { CodexDisplay, ConversationTurn } from "../../shared/protocol.ts";
 import type { Machine } from "../../shared/machines.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 
 const user = (text: string, at = 2): ConversationTurn => ({ role: "user", ts: new Date(at).toISOString(), parts: [{ kind: "text", text }] });
 const assistant = (text: string): ConversationTurn => ({ ...user(text), role: "assistant" });
 
+it("keeps a native Codex receipt beyond a minute, then replaces it with its transcript turn", () => {
+  const key = waitingKey("local", "native-long");
+  const now = Date.now();
+  try {
+    rememberWaitingSend(key, "keep waiting", now);
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [{ text: "keep\nwaiting", kind: "steering" }], now: now + WAITING_SEND_MS });
+    expireWaitingSends(key, now + WAITING_SEND_MS + 1);
+    expect(currentWaitingSends(key)).toHaveLength(1);
+    expect(currentWaitingSends(key)[0]?.native).toBe("steering");
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [], now: now + WAITING_SEND_MS + 2 });
+    expect(currentWaitingSends(key)[0]?.native).toBeUndefined();
+    settleWaitingSends(key, [user("keep waiting", now + WAITING_SEND_MS)]);
+    expect(currentWaitingSends(key)).toHaveLength(0);
+  } finally { forgetWaitingSends(key); }
+});
+
+it("matches native pending occurrences one-to-one and keeps messages sent in the terminal", () => {
+  const sends = [1, 2].map((id) => ({ id, pane: "local:repeat", text: "same", at: 1, after: null }));
+  const rows = nativeWaitingSends({ sends, pending: [{ text: "same", kind: "steering" }, { text: "terminal message", kind: "queued" }] });
+  expect(rows).toHaveLength(3);
+  expect(rows.filter((row) => row.native === "steering")).toHaveLength(1);
+  expect(rows.filter((row) => row.text === "same")).toHaveLength(2);
+  expect(rows.at(-1)).toMatchObject({ text: "terminal message", native: "queued" });
+});
+
+it("replaces a terminal-only native receipt before another screen poll arrives", () => {
+  const key = waitingKey("local", "native-terminal");
+  const now = Date.now();
+  try {
+    settleWaitingSends(key, [user("earlier", now - 1000)], now);
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [{ text: "from terminal", kind: "steering" }], now });
+    expect(currentWaitingSends(key)).toHaveLength(1);
+    settleWaitingSends(key, [user("earlier", now - 1000), user("from terminal", now + 1)], now + 2);
+    expect(currentWaitingSends(key)).toHaveLength(0);
+  } finally { forgetWaitingSends(key); }
+});
+
+it("rejects a pending-screen response started before its transcript receipt arrived", () => {
+  const key = waitingKey("local", "native-late-screen");
+  const now = Date.now();
+  try {
+    const earlier = user("earlier", now - 1000);
+    settleWaitingSends(key, [earlier], now);
+    const pending: CodexDisplay["pending_inputs"] = [{ text: "from terminal", kind: "steering" }];
+    const baseline = waitingBaseline(key);
+    observeNativeWaiting({ key, pending, baseline, now });
+    settleWaitingSends(key, [earlier, user("from terminal", now + 1)], now + 2);
+    expect(currentWaitingSends(key)).toHaveLength(0);
+    observeNativeWaiting({ key, pending, baseline, now: now + 3 });
+    expect(currentWaitingSends(key)).toHaveLength(0);
+    observeNativeWaiting({ key, pending: [], baseline: waitingBaseline(key), now: now + 4 });
+    expect(currentWaitingSends(key)).toHaveLength(0);
+    // The same text really submitted again after that receipt is a new send.
+    observeNativeWaiting({ key, pending, baseline: waitingBaseline(key), now: now + 5 });
+    expect(currentWaitingSends(key)).toHaveLength(1);
+  } finally { forgetWaitingSends(key); }
+});
+
+it("removes terminal-only previews when the terminal removes them, keeping browser send receipts", () => {
+  const key = waitingKey("local", "native-removed");
+  const now = Date.now();
+  try {
+    settleWaitingSends(key, [], now, true);
+    rememberWaitingSend(key, "from browser", now, waitingBaseline(key));
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [{ text: "from browser", kind: "steering" }, { text: "from terminal", kind: "queued" }], now });
+    expect(currentWaitingSends(key)).toHaveLength(2);
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [], now: now + 1 });
+    expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["from browser"]);
+  } finally { forgetWaitingSends(key); }
+});
+
 // through the store, as ChatView settles it: a send the chat had shown no turns for
+it("reconciles wrapped and truncated terminal previews against full turns once each", () => {
+  const key = waitingKey("local", "native-preview");
+  const now = Date.now();
+  try {
+    const pending: CodexDisplay["pending_inputs"] = [{ text: "repeat this\nlong", kind: "queued", truncated: true }, { text: "an unbro\nken word", kind: "steering" }];
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending, now });
+    expect(currentWaitingSends(key)).toHaveLength(0);
+    const old = user("repeat this long message", now - 1000);
+    settleWaitingSends(key, [old], now);
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending, now });
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending, now: now + 1 });
+    expect(currentWaitingSends(key)).toHaveLength(2);
+    settleWaitingSends(key, [old, user("an unbroken word", now + 2)], now + 3);
+    expect(currentWaitingSends(key)).toHaveLength(1);
+    settleWaitingSends(key, [old, user("an unbroken word", now + 2), user("repeat this long message", now + 4)], now + 5);
+    expect(currentWaitingSends(key)).toHaveLength(0);
+  } finally { forgetWaitingSends(key); }
+});
+
 let probes = 0;
 function transcriptHolds(send: { text: string; at: number }, turns: readonly ConversationTurn[]): boolean {
   const key = waitingKey("local", `probe-${++probes}`);

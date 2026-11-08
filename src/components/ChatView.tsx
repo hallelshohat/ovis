@@ -49,7 +49,7 @@ import { dropPendingListScroll, listEndPadded } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
 import { askedQuestions } from "../../shared/askQuestions.ts";
-import { forgetWaitingBaseline, settleWaitingSends, waitingKey } from "../lib/sentWaiting.ts";
+import { forgetWaitingBaseline, observeNativeWaiting, settleWaitingSends, waitingBaseline, waitingKey } from "../lib/sentWaiting.ts";
 import { SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
@@ -110,7 +110,7 @@ import { CARD_TEXT_PREFIX, paneLifetimes } from "../lib/paneLifetime.ts";
 import { composerDraftKey, composerDrafts } from "../lib/composerDraft.ts";
 import type { ConversationSearchMatch } from "../../shared/conversation-search.ts";
 import { pickAhead, pickedTurn, pickSettled } from "../../shared/conversation-search.ts";
-import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, PendingMessage, SlashCommand } from "../../shared/protocol.ts";
+import type { AgentStatus, CodexDisplay, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, PendingMessage, SlashCommand } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { currentLocale, useT } from "../lib/i18n.ts";
@@ -850,14 +850,14 @@ function ToolOutputText({ stateKey, output, whole }: { stateKey: string; output:
  * verb table knows reads as verb + object, and its id moves to the title and the opened detail;
  * any other keeps its id in front, as the agent names it.
  */
-function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], since = null }: { paneId: string; part: ToolPartType; stateKey: string; state?: TodoAttempt["state"]; live?: boolean; parts?: readonly ConversationPart[]; since?: string | null }) {
+function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], since = null, terminal = false }: { paneId: string; part: ToolPartType; stateKey: string; state?: TodoAttempt["state"]; live?: boolean; parts?: readonly ConversationPart[]; since?: string | null; terminal?: boolean }) {
   const t = useT();
   // a call of the running turn that has not answered: it runs now, as the terminal's spinner says
   const running = live && part.state === "pending";
   // a running command opens on its live output, as the terminal shows it; once it ends it folds
   const watching = running && isCommandTool(part.name);
   const [chosen, setOpen] = useChatRowToggle(stateKey, null);
-  const open = chosen ?? watching;
+  const open = chosen ?? (terminal || part.native === true || watching);
   const focus = useRowFocus<HTMLButtonElement>(stateKey);
   // an update inside a todo run: the run already shows the list it left, so the update shows what it sent and got back
   const attempt = state !== undefined;
@@ -1001,12 +1001,12 @@ function turnWork(parts: ConversationPart[], rowKey: string): TurnWork {
   };
 }
 
-function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThinking, expandThinking, foldWork, since }: { paneId: string; parts: ConversationPart[]; work: TurnWork; memoryKey: string; since: string | null; live: boolean; waiting: boolean; showThinking: boolean; expandThinking: boolean; foldWork: boolean }) {
+function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThinking, expandThinking, foldWork, since, terminal = false }: { paneId: string; parts: ConversationPart[]; work: TurnWork; memoryKey: string; since: string | null; live: boolean; waiting: boolean; showThinking: boolean; expandThinking: boolean; foldWork: boolean; terminal?: boolean }) {
   const t = useT();
   // named by its first part's place in the turn: appended parts never rename it
   const [chosenOpen, setOpen] = useChatRowToggle(memoryKey, null);
   // only the run the agent is in now is open; a run it left reads as the terminal's one folded line
-  const open = chosenOpen ?? workBlockStartsOpen({ live, waiting, last: false }, parts, foldWork);
+  const open = chosenOpen ?? (terminal || workBlockStartsOpen({ live, waiting, last: false }, parts, foldWork));
   // reading or working inside the block is a choice to keep it: the fold at the end of the turn
   // must not take the rows from under the reader's focus or close the row they opened
   const keepOpen = () => { if (chosenOpen === null) setOpen(true); };
@@ -1036,10 +1036,11 @@ function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThin
     {/* the rows open and fold at the block's measured height; folded and settled, they are not drawn */}
     <AnimatedHeight open={open} animateContent={false}>
       <div className="work-block-rows" onFocus={keepOpen} onPointerDown={keepOpen}>{visible.map((part) =>
-        part.kind === "thinking" ? <ThinkingRow key={`thinking:${at.get(part)}`} stateKey={`thinking:${at.get(part)}`} text={part.text} defaultOpen={expandThinking} />
+        part.kind === "thinking" ? <ThinkingRow key={`thinking:${at.get(part)}`} stateKey={`thinking:${at.get(part)}`} text={part.text} defaultOpen={terminal || expandThinking} />
           : part.kind === "text" ? <div key={`text:${at.get(part)}`} className="work-narration"><Markdown>{part.text}</Markdown></div>
+            : part.kind === "notice" ? <pre key={`notice:${at.get(part)}`} className="chat-inline-state chat-native-notice">{part.text}</pre>
             : part.kind === "tool" ? groups.has(part) ? <TodoGroupRow key={groups.get(part)!.id} paneId={paneId} group={groups.get(part)!} stateKeyOf={toolKey} />
-              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} parts={work.parts} since={since} /> : null)}
+              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} parts={work.parts} since={since} terminal={terminal} /> : null)}
       </div>
     </AnimatedHeight>
   </section>;
@@ -1425,7 +1426,7 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
   }
   // the runtime spoke, not the user: a quiet divider like a compaction, the text on request
   const notice = turn.parts.find((part): part is Extract<ConversationPart, { kind: "notice" }> => part.kind === "notice");
-  if (notice !== undefined) {
+  if (notice !== undefined && turn.parts.length === 1 && !notice.native && !turn.native_turn_id) {
     return <ChatDetails memoryKey="notice" className="chat-compact chat-notice">
       <summary><span className="chat-notice-label">{noticeLabel(t, notice)}</span>{time !== null && <> · {time}</>}</summary>
       <pre className="chat-compact-text chat-notice-text">{notice.text}</pre>
@@ -1461,6 +1462,7 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
         {text.length > 0 && <UserMessage text={text} skills={userSkills} />}
         <div className="chat-turn-meta">{time}{text.length > 0 && <CopyButton text={text} label={t("Copy message")} onResult={copied} />}</div>
       </div>
+      {turn.input_kind && <p className="chat-input-kind">{t(turn.input_kind === "steering" ? "Steering · current turn" : "Queued · next turn")}</p>}
       {copyError}
       {outcome !== null && <OutcomeChip outcome={outcome} actions={outcomeActions} />}
       {/* the skill this message invoked (omp, omo, pi): the runtime recorded its instructions with it */}
@@ -1473,7 +1475,7 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
   const goal = turnGoal(turn.parts);
   // the turn as the terminal draws it: words and runs of tool calls in the order they happened
   const segments = turnSegments(turn.parts);
-  const duration = live ? null : formatWorkDuration(turn.ts, turn.end_ts ?? null);
+  const duration = live || (turn.native_turn_id && !turn.turn_complete) ? null : formatWorkDuration(turn.ts, turn.end_ts ?? null);
   const work = turnWork(turn.parts, rowKey);
   const runs = segments.flatMap((segment) => segment.kind === "work" ? [segment] : []);
   // a run keeps its block and fold while its parts change (runNames); the stand-in is named by the
@@ -1493,7 +1495,7 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
         ? answerItems(segment.parts, requestDetails).map((item) => item.kind === "text"
           ? <Markdown key={`text:${work.at.get(item.part)}`} skills={skills} visualizations>{item.part.text}</Markdown>
           : <FailedRequests key={`failed:${work.at.get(item.parts[0]!)}`} at={work.at.get(item.parts[0]!)!} parts={item.parts} followed={work.at.get(item.parts.at(-1)!)! < turn.parts.length - 1} />)
-        : <WorkBlockView key={names[runs.indexOf(segment)]!} paneId={paneId} parts={segment.parts} work={work} memoryKey={names[runs.indexOf(segment)]!} live={live && last} waiting={waiting && last} showThinking={showThinking} expandThinking={expandThinking} foldWork={foldWork} since={turn.ts} />;
+        : <WorkBlockView key={names[runs.indexOf(segment)]!} paneId={paneId} parts={segment.parts} work={work} memoryKey={names[runs.indexOf(segment)]!} live={live && last} waiting={waiting && last} showThinking={showThinking} expandThinking={expandThinking} foldWork={foldWork} since={turn.ts} terminal={turn.native_turn_id !== undefined || segment.parts.some((part) => "native" in part && part.native)} />;
     })}
     {/* a running turn that has written nothing yet: the head stands where its first run will be */}
     {live && !waiting && segments.length === 0 && <PendingWorkHead title={t("Working…")} since={turn.ts} />}
@@ -1697,6 +1699,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const [readPresentation, setReadPresentation] = useState<string>();
   const [endPresentation, setEndPresentation] = useState<{ state: ChatState; key: string | undefined } | null>(null);
   const [prompt, setPrompt] = useState<InteractivePrompt | null>(null);
+  const [codexDisplay, setCodexDisplay] = useState<CodexDisplay | null>(null);
   // the prompt whose answer went out, by its id: its card waits for the next read of the screen
   const [answeredPrompt, setAnsweredPrompt] = useState<string | null>(null);
   // what the user typed into the card's own answer field, and for which prompt
@@ -1916,7 +1919,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     stopRestore.current?.();
     restoring.current = readChatPosition(paneStorageId(machineId, paneId)) ?? null;
     history.current = undefined; setHistoryId(undefined); enteredMoves.current = null; shownAt.current = Date.now();
-    pagingAway.current = false; stickToBottom.current = true; lastRowOffset.current = null; lastScrollHeight.current = 0; signature.current = ""; setState(EMPTY_STATE); setNewMessages(false); setAway(false); setLoaded(false); setError(null); setErrorStatus(null); setFailures(0); setPrompt(agentStatus === "blocked" ? keptPrompt(lastPrompts.get(paneStorageId(machineId, paneId)), agentSession) : null); setAbandoned(null); setRestored(null); setOutcomes([]); setScreenRead(false);
+    pagingAway.current = false; stickToBottom.current = true; lastRowOffset.current = null; lastScrollHeight.current = 0; signature.current = ""; setState(EMPTY_STATE); setNewMessages(false); setAway(false); setLoaded(false); setError(null); setErrorStatus(null); setFailures(0); setCodexDisplay(null); setPrompt(agentStatus === "blocked" ? keptPrompt(lastPrompts.get(paneStorageId(machineId, paneId)), agentSession) : null); setAbandoned(null); setRestored(null); setOutcomes([]); setScreenRead(false);
     dropOlder();
     lastAnswer.current = null;
     setSentOver(null);
@@ -1970,7 +1973,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const seen = seenSession.current;
     seenSession.current = { pane: paneId, session: agentSession };
     // and the card it shows is that session's question: it goes, and the screen is read again now
-    if (seen.pane === paneId && seen.session !== agentSession) { setPrompt(null); setPromptPollKey((key) => key + 1); }
+    if (seen.pane === paneId && seen.session !== agentSession) { setCodexDisplay(null); setPrompt(null); setPromptPollKey((key) => key + 1); }
     if (seen.pane === paneId && seen.session !== agentSession) setPollKey((key) => key + 1);
   }, [paneId, agentSession]);
 
@@ -2275,7 +2278,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     };
     // a dropped connection says nothing about the screen either: the card stays until a read answers
     if (promptGone) { lastPrompts.delete(promptKey); keepCardText(null, null); setPrompt(null); }
-    if (!pollPrompt) { setPromptStale(false); failedPromptReads.current = 0; setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
+    if (!pollPrompt) { setCodexDisplay(null); setPromptStale(false); failedPromptReads.current = 0; setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
     let cancelled = false;
     let timer = 0;
@@ -2287,6 +2290,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       const sent = sentKeyRef.current;
       const session = sessionRef.current;
       const lifetime = paneLifetimes.generation(machineId);
+      const baseline = waitingBaseline(waitingKey(machineId, paneId));
       let quick = false;
       try {
         const next = await fetchPanePromptState(paneId);
@@ -2295,6 +2299,10 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           setPromptStale(false);
           // a read begun under a herdr that has gone since draws no card and keeps nothing for the new one
           if (paneLifetimes.generation(machineId) === lifetime) {
+            if (sessionRef.current === session) {
+              setCodexDisplay(next.codex_display ?? null);
+              observeNativeWaiting({ key: waitingKey(machineId, paneId), pending: next.codex_display?.pending_inputs ?? [], baseline });
+            }
             keepCardText(next.prompt?.id ?? null, session);
             setPrompt((current) => polledPrompt(current, next.prompt));
             if (next.prompt === null) lastPrompts.delete(promptKey); else lastPrompts.set(promptKey, { machineId, session, prompt: next.prompt });
@@ -3042,7 +3050,10 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
   const footer = <>
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
-      {sentWaiting.length > 0 && state.source === "conversation" && <SentWaitingList sends={sentWaiting} />}
+      {sentWaiting.length > 0 && <SentWaitingList sends={sentWaiting} />}
+      {connected && !promptStale && codexDisplay !== null && <div className="chat-codex-status" aria-label={t("Codex status")}>
+        {codexDisplay.status_lines.map((line, index) => <pre key={index}>{line}</pre>)}
+      </div>}
       {error !== null && !waiting && (errorStatus === 401
         ? <p className="chat-inline-state chat-inline-error" role="alert">{t("locked — the token gate is asking again")}</p>
         : <FailureLine action={t("Couldn't load the conversation")} failure={error} onRetry={retryRead} />)}

@@ -2585,3 +2585,23 @@ ol.markdown-list {
   flex: none;
   white-space: nowrap;
 }
+.chat-input-kind {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  text-align: right;
+  margin: var(--space-1) 0;
+}
+
+.chat-codex-status,
+.chat-native-notice {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  margin-block: var(--space-3);
+}
+
+.chat-codex-status pre,
+.chat-native-notice {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+}

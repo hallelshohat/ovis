@@ -50,8 +50,10 @@
     "qrcode-generator": "^2.0.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "ts-pattern": "^5.9.2",
     "tweetnacl": "1.0.3",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bun": "^1.1.14",

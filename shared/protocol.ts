@@ -677,6 +677,11 @@ export type { PushAction, PushDeliveryFailure, PushKey, PushPayload, PushSubscri
 export interface ConversationTurn {
   role: "user" | "assistant";
   ts: string | null;
+  /** Codex's task spans user steering and the assistant's continuation. */
+  native_turn_id?: string;
+  input_kind?: "steering" | "queued";
+  /** False while the native task runs, including segments before steering input. */
+  turn_complete?: boolean;
   /** Last recorded assistant activity, never the next user's timestamp. */
   end_ts?: string;
   /**
@@ -700,11 +705,16 @@ export type ConversationPart =
    *  A later part of the same turn is a later request; nothing records whether it was an automatic retry. */
   | { kind: "text"; text: string; phase?: "commentary" | "final_answer"; failed?: true }
   /** the agent's reasoning block; the client folds it and shows it only on request */
-  | { kind: "thinking"; text: string }
+  | { kind: "thinking"; text: string; native?: true }
   | { kind: "skill"; skill: SkillActivity }
   /** `error`: the call failed (the agent recorded it so, or its output says a command exited non-zero) */
   | {
     kind: "tool"; name: string; summary: string; input: string; output: string; error?: boolean;
+    /** A Codex terminal display item, separate from the model's tool wrapper. */
+    native?: true;
+    /** The model wrapper is represented by native terminal items; retain it for output lookup. */
+    native_wrapper?: true;
+    exit_code?: number;
     /** Hermes could not load a tool-call list whose arguments exceeded its page limit. */
     arguments_omitted?: true;
     skill?: SkillActivity;
@@ -735,7 +745,7 @@ export type ConversationPart =
   | { kind: "compact"; text: string; tokens_before?: number; tokens_after?: number; tokens_saved?: number }
   /** a message the agent's runtime put in the user's seat (gjc's background-job result): it starts a turn, nobody typed it.
    * `source`: the runtime's name for it (pi's customType, e.g. "async-result", "irc:incoming", "omo-model-profile:unavailable") */
-  | { kind: "notice"; text: string; source?: string }
+  | { kind: "notice"; text: string; source?: string; native?: true }
   /** a shell command the user ran without the model (Claude Code's `!` bash mode), and what it printed: no stdout or
    * stderr until the agent records them */
   | { kind: "shell"; command: string; stdout?: string; stderr?: string }
@@ -1018,6 +1028,13 @@ export interface PanePromptResponse {
   restored?: string | null;
   /** the pane's tracked command outcomes */
   outcomes?: CommandOutcome[];
+  /** Current Codex terminal chrome, which is not persisted in its rollout. */
+  codex_display?: CodexDisplay | null;
+}
+
+export interface CodexDisplay {
+  status_lines: string[];
+  pending_inputs: { text: string; kind: "steering" | "queued"; truncated?: true }[];
 }
 
 /**
