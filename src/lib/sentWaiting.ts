@@ -1,5 +1,5 @@
 import type { Machine } from "../../shared/machines.ts";
-import type { ConversationTurn } from "../../shared/protocol.ts";
+import type { CodexDisplay, ConversationTurn } from "../../shared/protocol.ts";
 import { composerMessage } from "./compose.ts";
 import { paneLifetimes } from "./paneLifetime.ts";
 
@@ -34,6 +34,9 @@ export interface WaitingSend {
   at: number;
   /** what the chat held at send time; null when it had shown no turns, and `at` is the only guard */
   after: WaitingBaseline | null;
+  native?: "steering" | "queued";
+  nativeSeenAt?: number;
+  nativePreview?: "wrapped" | "truncated";
 }
 
 type Turn = Pick<ConversationTurn, "role" | "parts" | "ts">;
@@ -113,7 +116,13 @@ function newerThanSend(send: WaitingSend, at: number, key: string, answeredAt: n
 function turnMatches(send: WaitingSend, turn: Turn, key: string, answeredAt: number, last: boolean): boolean {
   const at = turnTime(turn);
   if (turn.role !== "user" || !Number.isFinite(at) || !newerThanSend(send, at, key, answeredAt, last)) return false;
-  return said(turn.parts.filter((part) => part.kind === "text").map((part) => part.text).join(" ")) === said(send.text);
+  const text = turn.parts.filter((part) => part.kind === "text").map((part) => part.text).join(" ");
+  if (send.nativePreview) {
+    const preview = send.text.replace(/\n…$/, "").replace(/\s/g, "");
+    const full = text.replace(/\s/g, "");
+    return preview.length > 0 && (send.nativePreview === "truncated" ? full.startsWith(preview) : full === preview);
+  }
+  return said(text) === said(send.text);
 }
 
 interface WaitingPane {
@@ -214,9 +223,51 @@ export function rememberWaitingSend(key: string, text: string, at = Date.now(), 
 export function expireWaitingSends(key: string, now = Date.now()): void {
   const pane = waiting.get(key);
   if (!pane) return;
-  const remaining = pane.sends.filter((send) => now - send.at < WAITING_SEND_MS);
+  const remaining = pane.sends.filter((send) => now - (send.nativeSeenAt ?? send.at) < WAITING_SEND_MS);
   if (remaining.length === pane.sends.length) return;
   pane.sends = remaining;
+  announce();
+}
+
+/** Native input previews wrap and truncate text. Match occurrences once, never all identical sends. */
+export function nativeWaitingSends({ sends, pending }: { sends: readonly WaitingSend[]; pending: CodexDisplay["pending_inputs"] }): WaitingSend[] {
+  const remaining = sends.map(({ native: _native, ...send }) => send);
+  const native = pending.map((input, index) => {
+    const preview = input.text.replace(/\s/g, "");
+    const at = remaining.findIndex((send) => {
+      const text = send.text.replace(/\s/g, "");
+      return preview.length > 0 && (input.truncated ? text.startsWith(preview) : text === preview);
+    });
+    const send: WaitingSend = at < 0 ? { id: -index - 1, pane: "", text: input.text + (input.truncated ? "\n…" : ""), at: 0, after: null,
+      nativePreview: input.truncated ? "truncated" : "wrapped" } : remaining.splice(at, 1)[0]!;
+    return { ...send, native: input.kind };
+  });
+  return [...remaining, ...native];
+}
+
+/** Keep a receipt while the live Codex panel confirms it, even after the provisional timeout. */
+export function observeNativeWaiting({ key, pending, baseline, now = Date.now() }: { key: string; pending: CodexDisplay["pending_inputs"]; baseline: WaitingBaseline | null; now?: number }): void {
+  // A transcript received during this screen read supersedes its pending preview.
+  if (baseline?.keys !== shown.get(key)?.keys) return;
+  const pane = waiting.get(key) ?? { sends: empty, claimed: new Set<string>() };
+  if (pane.sends.length === 0 && pending.length === 0) return;
+  const merged = nativeWaitingSends({ sends: pane.sends, pending });
+  // Wait for the first transcript read before adopting terminal-only input: old identical turns need a baseline.
+  pane.sends = merged.filter((send) => (send.id > 0 || shown.has(key)) && (!send.nativePreview || send.native)).map((send) => {
+    if (send.id < 0) {
+      // A terminal send has no browser receipt timestamp; the transcript already shown is its baseline.
+      const baseline = shown.get(key);
+      return { ...send, id: ++nextId, pane: key, at: now, nativeSeenAt: now,
+        after: baseline ? { ...baseline, pcFloor: null } : null };
+    }
+    if (send.native) return { ...send, nativeSeenAt: now };
+    if (pane.sends.find((previous) => previous.id === send.id)?.native) {
+      setTimeout(() => expireWaitingSends(key), Math.max(0, (send.nativeSeenAt ?? send.at) + WAITING_SEND_MS - Date.now()));
+    }
+    return send;
+  });
+  waiting.set(key, pane);
+  expireWaitingSends(key, now);
   announce();
 }
 
