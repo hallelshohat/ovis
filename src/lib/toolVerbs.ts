@@ -1,12 +1,13 @@
 import { patchFiles, patchText } from "../../shared/patch.ts";
 
-export type ToolVerbKind = "read" | "edit" | "write" | "run";
+export type ToolVerbKind = "read" | "edit" | "write" | "run" | "view";
 
 const VERB_LABEL: Record<ToolVerbKind, string> = {
   read: "Read",
   edit: "Edited",
   write: "Wrote",
   run: "Ran",
+  view: "Viewed image",
 };
 
 /**
@@ -18,6 +19,7 @@ const VERB_LABEL: Record<ToolVerbKind, string> = {
  */
 const VERB_OF: Record<string, ToolVerbKind> = {
   read: "read",
+  view_image: "view",
   edit: "edit", multiedit: "edit", notebookedit: "edit", apply_patch: "edit", patch: "edit",
   write: "write",
   bash: "run", exec: "run", exec_command: "run", shell: "run", shell_command: "run", local_shell: "run",
@@ -25,6 +27,7 @@ const VERB_OF: Record<string, ToolVerbKind> = {
 
 const OBJECT_KEYS: Record<ToolVerbKind, readonly string[]> = {
   read: ["file_path", "path"],
+  view: ["path"],
   edit: ["file_path", "notebook_path", "path"],
   write: ["file_path", "path"],
   run: ["cmd", "command"],
