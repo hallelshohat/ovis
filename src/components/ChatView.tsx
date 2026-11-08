@@ -939,12 +939,18 @@ function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThin
       <div className="work-block-rows" onFocus={keepOpen} onClick={keepOpen}>{visible.map((part) =>
         part.kind === "thinking" ? <ThinkingRow key={`thinking:${at.get(part)}`} stateKey={`thinking:${at.get(part)}`} text={part.text} defaultOpen={terminal || expandThinking} />
           : part.kind === "text" ? <div key={`text:${at.get(part)}`} className="work-narration"><Markdown>{part.text}</Markdown></div>
-            : part.kind === "notice" ? <pre key={`notice:${at.get(part)}`} className="chat-inline-state chat-native-notice">{part.text}</pre>
+            : part.kind === "notice" ? (open || !part.native) && <WorkNotice key={`notice:${at.get(part)}`} notice={part} />
             : part.kind === "tool" ? groups.has(part) ? <TodoGroupRow key={groups.get(part)!.id} paneId={paneId} group={groups.get(part)!} stateKeyOf={toolKey} />
               : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} parts={work.parts} since={since} /> : null)}
       </div>
     </AnimatedHeight>
+    {!open && visible.map((part) => part.kind === "notice" && part.native
+      ? <WorkNotice key={`notice:${at.get(part)}`} notice={part} /> : null)}
   </section>;
+}
+
+function WorkNotice({ notice }: { notice: Extract<ConversationPart, { kind: "notice" }> }) {
+  return <pre className="chat-inline-state chat-native-notice">{notice.text}</pre>;
 }
 
 /** Skill evidence stays visible even when the surrounding work block is folded. */

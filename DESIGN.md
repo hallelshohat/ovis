@@ -4742,6 +4742,8 @@ native items do not add duplicate rows; wrapper failures and returned images rem
 Codex images stay visible as thumbnails on folded groups and rows, opening in the existing viewer.
 Native image views keep their `Viewed image` action. Reasoning summaries remain available, while
 private model context is excluded. This adapts the existing Claude presentation without copied code.
+Native runtime notices stay readable beside folded work; opening the group puts them back in their
+recorded order among its tools. Runtime errors count in the summary's failure badge too.
 
 Native queued and steering messages use the existing sent-message store. Each transcript receipt
 replaces one waiting bubble; steering keeps the native task identity and does not add a completion
