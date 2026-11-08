@@ -1,5 +1,6 @@
 import { match } from "ts-pattern";
 import { z } from "zod";
+import { fileUriPath } from "../shared/fileUri.ts";
 import type { ConversationPart } from "../shared/protocol.ts";
 
 /** Only terminal display items cross this boundary; model context and encrypted reasoning do not. */
@@ -30,6 +31,11 @@ function displayPart(item: z.infer<typeof displayItem>): { id: string; part: Con
     .with({ type: "FileChange" }, (edit): ConversationPart => ({ kind: "tool", native: true, call_id: edit.id,
       name: "apply_patch", summary: Object.keys(edit.changes).join(", "), input: filePatch(edit.changes),
       output: [edit.stdout, edit.stderr].filter(Boolean).join("\n"), ...outcome(edit.status) }))
+    .with({ type: "ImageView" }, (image): ConversationPart => {
+      const path = fileUriPath(image.path) ?? image.path;
+      return { kind: "tool", native: true, call_id: image.id, name: "view_image", summary: path,
+        input: JSON.stringify({ path }), output: "", state: "ok" };
+    })
     .with({ type: "Reasoning" }, (reasoning): ConversationPart => ({ kind: "thinking", native: true, text: reasoning.summary_text.join("\n\n") }))
     .exhaustive();
   return { id: item.id, part, ...(item.type === "CommandExecution" && item.process_id ? { processId: item.process_id } : {}) };
@@ -67,6 +73,7 @@ const displayItem = z.discriminatedUnion("type", [
   z.object({ type: z.literal("FileChange"), id: z.string().min(1), changes: changesSchema,
     status: statusSchema.optional(), stdout: z.string().optional(), stderr: z.string().optional() }),
   z.object({ type: z.literal("Reasoning"), id: z.string().min(1), summary_text: z.array(z.string()) }),
+  z.object({ type: z.literal("ImageView"), id: z.string().min(1), path: z.string().min(1) }),
 ]);
 
 const messageSchema = z.discriminatedUnion("type", [

@@ -55,6 +55,7 @@ export const CHAT_ZH: Record<string, string> = {
   "{n} other tool": "{n} 个其他工具",
   "{n} other tools": "{n} 个其他工具",
   "Read": "已读取",
+  "Viewed image": "已查看图片",
   "Edited": "已编辑",
   "Wrote": "已写入",
   "Ran": "已运行",
