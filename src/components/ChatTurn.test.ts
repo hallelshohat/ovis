@@ -113,32 +113,36 @@ describe("the folds Settings → Chat starts a turn with", () => {
 });
 
 describe("Codex tool details", () => {
-  it("starts arguments folded while keeping pending and completed results visible", () => {
-    for (const state of ["pending", "ok"] as const) {
-      const html = render([
-        { kind: "tool", native: true, name: "functions.exec", summary: "Run the probe", input: "RAW_EXEC_ARGUMENTS", output: "probe output", state },
-        { kind: "tool", native: true, name: "exec_command", summary: "Run a command", input: '{"cmd":"RAW_COMMAND_ARGUMENTS"}', output: "command output", state },
-        { kind: "tool", native: true, name: "custom_tool", summary: "Run custom input", input: '{"input":"RAW_WRAPPED_ARGUMENTS"}', output: "custom output", state },
-      ], { live: state === "pending" });
-      expect(expanded(html)).toEqual([true]);
-      expect(html.match(/class="work-row-head" aria-expanded="false"/g)).toHaveLength(3);
-      expect(html).not.toContain("RAW_EXEC_ARGUMENTS");
-      expect(html).not.toContain("RAW_COMMAND_ARGUMENTS");
-      expect(html).not.toContain("RAW_WRAPPED_ARGUMENTS");
-      expect(html).toContain("probe output");
-      expect(html).toContain("command output");
-    }
+  const command: ConversationPart = { kind: "tool", native: true, name: "exec_command", summary: "Run a command", input: '{"cmd":"RAW_COMMAND_ARGUMENTS"}', output: "command output", state: "ok" };
+
+  it("folds completed native work to a summary with its failure count", () => {
+    const html = render([command, { ...command, error: true, exit_code: 9 }], { live: false });
+    expect(expanded(html)).toEqual([false]);
+    expect(titles(html)).toEqual(["2 commands"]);
+    expect(html).toContain("1 failed");
+    expect(html).not.toContain("command output");
   });
 
-  it("keeps diffs and plan updates visible with their tool details folded", () => {
+  it("keeps completed rows compact inside live work and opens only the running command", () => {
+    const html = render([command, { ...command, summary: "Still running", state: "pending", output: "running output" }], { live: true });
+    expect(expanded(html)).toEqual([true]);
+    expect(html.match(/class="work-row-head" aria-expanded="false"/g)).toHaveLength(1);
+    expect(html.match(/class="work-row-head" aria-expanded="true"/g)).toHaveLength(1);
+    expect(html).not.toContain("command output");
+    expect(html).toContain("running output");
+    expect(expanded(render([command], { live: true }, "assistant", { foldWork: true }))).toEqual([false]);
+    expect(expanded(render([command], { live: true, waiting: true }, "assistant", { foldWork: true }))).toEqual([true]);
+  });
+
+  it("keeps edit and plan details behind their row toggle", () => {
     const html = render([
       { kind: "tool", native: true, name: "apply_patch", summary: "notes.txt", input: "*** Begin Patch\n*** Update File: notes.txt\n@@\n-alpha\n+beta\n*** End Patch", output: "Success" },
       { kind: "tool", native: true, name: "update_plan", summary: "Update the plan", input: '{"plan":[{"step":"Check the result","status":"in_progress"}]}', output: "" },
-    ], { live: false });
+    ], { live: true });
     expect(html.match(/class="work-row-head" aria-expanded="false"/g)).toHaveLength(2);
-    expect(html).toContain('class="chat-diff-add">+beta');
-    expect(html).toContain("Check the result");
-    expect(html).toContain("Success");
+    expect(html).not.toContain('class="chat-diff-add"');
+    expect(html).not.toContain("Check the result");
+    expect(html).not.toContain("Success");
   });
 });
 
@@ -259,6 +263,21 @@ describe("an agent turn's folded work, drawn again", () => {
     expect(opened()).toEqual([false]);
     await draw([tool("ls")]);
     expect(opened()).toEqual([true]);
+  });
+
+  it("folds native work after its answer and remembers a reader's choice across remounts", async () => {
+    const command: ConversationPart = { kind: "tool", native: true, name: "exec_command", summary: "ls", input: '{"cmd":"ls"}', output: "", state: "ok" };
+    await draw([command]);
+    expect(opened()).toEqual([true]);
+    const settled = [command, answer("Done.")];
+    await draw(settled);
+    expect(opened()).toEqual([false]);
+    await toggle(0);
+    await remount(settled);
+    expect(opened()).toEqual([true]);
+    await toggle(0);
+    await remount(settled);
+    expect(opened()).toEqual([false]);
   });
 
   it("keeps reasoning as the reader opened or closed it for its message, whatever Expand thinking says", async () => {
