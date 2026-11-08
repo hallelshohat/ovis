@@ -62,6 +62,7 @@ export const CHAT_KO: Record<string, string> = {
   "{n} other tool": "기타 도구 {n}개",
   "{n} other tools": "기타 도구 {n}개",
   "Read": "읽음",
+  "Viewed image": "이미지 확인함",
   "Edited": "편집함",
   "Wrote": "작성함",
   "Ran": "실행함",

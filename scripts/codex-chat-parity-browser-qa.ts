@@ -134,6 +134,26 @@ try {
   await capture("consumed-and-plan");
   console.log("PASS steering consumption, queued reply and native plan prompt");
 
+  writeFileSync(rollout, [header, ...lines.slice(start), fixture("0.167.0-mixed-image.jsonl")].join("\n") + "\n");
+  await showScreen("› Ask Codex to do anything\nGPT-6-Luna medium · /workspace/codex-parity\n");
+  await page.getByText("Implement this plan?", { exact: true }).first().waitFor({ state: "hidden" });
+  await log.getByText("DONE_IMAGE", { exact: true }).waitFor();
+  const viewed = log.locator(".work-row-head").filter({ hasText: "Viewed image" });
+  await viewed.waitFor();
+  assert.equal(await viewed.count(), 1);
+  assert.match(await viewed.innerText(), /probe\.png/);
+  assert.equal(await log.locator(".chat-tool-output pre").filter({ hasText: /^IMAGE_COMMAND$/ }).count(), 1);
+  const picture = log.locator(".chat-tool-images img");
+  await picture.waitFor();
+  await page.waitForFunction(() => {
+    const image = document.querySelector<HTMLImageElement>(".chat-tool-images img");
+    return image !== null && image.complete && image.naturalWidth === 192;
+  });
+  assert.equal(await picture.count(), 1, "the exec wrapper retains one loaded image beside its native command and image-view action");
+  await picture.scrollIntoViewIfNeeded();
+  await capture("mixed-image");
+  console.log("PASS recorded mixed command/image output and native Viewed image action");
+
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await capture("mobile");
