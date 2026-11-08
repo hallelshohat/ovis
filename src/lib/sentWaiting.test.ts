@@ -13,11 +13,11 @@ it("keeps a native Codex receipt beyond a minute, then replaces it with its tran
   const now = Date.now();
   try {
     rememberWaitingSend(key, "keep waiting", now);
-    observeNativeWaiting({ key, pending: [{ text: "keep\nwaiting", kind: "steering" }], now: now + WAITING_SEND_MS });
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [{ text: "keep\nwaiting", kind: "steering" }], now: now + WAITING_SEND_MS });
     expireWaitingSends(key, now + WAITING_SEND_MS + 1);
     expect(currentWaitingSends(key)).toHaveLength(1);
     expect(currentWaitingSends(key)[0]?.native).toBe("steering");
-    observeNativeWaiting({ key, pending: [], now: now + WAITING_SEND_MS + 2 });
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [], now: now + WAITING_SEND_MS + 2 });
     expect(currentWaitingSends(key)[0]?.native).toBeUndefined();
     settleWaitingSends(key, [user("keep waiting", now + WAITING_SEND_MS)]);
     expect(currentWaitingSends(key)).toHaveLength(0);
@@ -38,10 +38,44 @@ it("replaces a terminal-only native receipt before another screen poll arrives",
   const now = Date.now();
   try {
     settleWaitingSends(key, [user("earlier", now - 1000)], now);
-    observeNativeWaiting({ key, pending: [{ text: "from terminal", kind: "steering" }], now });
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [{ text: "from terminal", kind: "steering" }], now });
     expect(currentWaitingSends(key)).toHaveLength(1);
     settleWaitingSends(key, [user("earlier", now - 1000), user("from terminal", now + 1)], now + 2);
     expect(currentWaitingSends(key)).toHaveLength(0);
+  } finally { forgetWaitingSends(key); }
+});
+
+it("rejects a pending-screen response started before its transcript receipt arrived", () => {
+  const key = waitingKey("local", "native-late-screen");
+  const now = Date.now();
+  try {
+    const earlier = user("earlier", now - 1000);
+    settleWaitingSends(key, [earlier], now);
+    const pending: CodexDisplay["pending_inputs"] = [{ text: "from terminal", kind: "steering" }];
+    const baseline = waitingBaseline(key);
+    observeNativeWaiting({ key, pending, baseline, now });
+    settleWaitingSends(key, [earlier, user("from terminal", now + 1)], now + 2);
+    expect(currentWaitingSends(key)).toHaveLength(0);
+    observeNativeWaiting({ key, pending, baseline, now: now + 3 });
+    expect(currentWaitingSends(key)).toHaveLength(0);
+    observeNativeWaiting({ key, pending: [], baseline: waitingBaseline(key), now: now + 4 });
+    expect(currentWaitingSends(key)).toHaveLength(0);
+    // The same text really submitted again after that receipt is a new send.
+    observeNativeWaiting({ key, pending, baseline: waitingBaseline(key), now: now + 5 });
+    expect(currentWaitingSends(key)).toHaveLength(1);
+  } finally { forgetWaitingSends(key); }
+});
+
+it("removes terminal-only previews when the terminal removes them, keeping browser send receipts", () => {
+  const key = waitingKey("local", "native-removed");
+  const now = Date.now();
+  try {
+    settleWaitingSends(key, [], now, true);
+    rememberWaitingSend(key, "from browser", now, waitingBaseline(key));
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [{ text: "from browser", kind: "steering" }, { text: "from terminal", kind: "queued" }], now });
+    expect(currentWaitingSends(key)).toHaveLength(2);
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending: [], now: now + 1 });
+    expect(currentWaitingSends(key).map((send) => send.text)).toEqual(["from browser"]);
   } finally { forgetWaitingSends(key); }
 });
 
@@ -51,12 +85,12 @@ it("reconciles wrapped and truncated terminal previews against full turns once e
   const now = Date.now();
   try {
     const pending: CodexDisplay["pending_inputs"] = [{ text: "repeat this\nlong", kind: "queued", truncated: true }, { text: "an unbro\nken word", kind: "steering" }];
-    observeNativeWaiting({ key, pending, now });
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending, now });
     expect(currentWaitingSends(key)).toHaveLength(0);
     const old = user("repeat this long message", now - 1000);
     settleWaitingSends(key, [old], now);
-    observeNativeWaiting({ key, pending, now });
-    observeNativeWaiting({ key, pending, now: now + 1 });
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending, now });
+    observeNativeWaiting({ key, baseline: waitingBaseline(key), pending, now: now + 1 });
     expect(currentWaitingSends(key)).toHaveLength(2);
     settleWaitingSends(key, [old, user("an unbroken word", now + 2)], now + 3);
     expect(currentWaitingSends(key)).toHaveLength(1);

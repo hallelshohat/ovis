@@ -246,12 +246,14 @@ export function nativeWaitingSends({ sends, pending }: { sends: readonly Waiting
 }
 
 /** Keep a receipt while the live Codex panel confirms it, even after the provisional timeout. */
-export function observeNativeWaiting({ key, pending, now = Date.now() }: { key: string; pending: CodexDisplay["pending_inputs"]; now?: number }): void {
+export function observeNativeWaiting({ key, pending, baseline, now = Date.now() }: { key: string; pending: CodexDisplay["pending_inputs"]; baseline: WaitingBaseline | null; now?: number }): void {
+  // A transcript received during this screen read supersedes its pending preview.
+  if (baseline?.keys !== shown.get(key)?.keys) return;
   const pane = waiting.get(key) ?? { sends: empty, claimed: new Set<string>() };
   if (pane.sends.length === 0 && pending.length === 0) return;
   const merged = nativeWaitingSends({ sends: pane.sends, pending });
   // Wait for the first transcript read before adopting terminal-only input: old identical turns need a baseline.
-  pane.sends = merged.filter((send) => send.id > 0 || shown.has(key)).map((send) => {
+  pane.sends = merged.filter((send) => (send.id > 0 || shown.has(key)) && (!send.nativePreview || send.native)).map((send) => {
     if (send.id < 0) {
       // A terminal send has no browser receipt timestamp; the transcript already shown is its baseline.
       const baseline = shown.get(key);

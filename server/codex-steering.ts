@@ -33,7 +33,7 @@ function workingLine(line: string): boolean {
 }
 
 /** Only the bottom composer with a Codex footer identifies a live input panel. */
-export function codexComposer(screen: string): { rows: { indent: number; text: string }[]; composer: number; status: number; footer: string[] } | null {
+export function codexComposer(screen: string): { rows: { indent: number; text: string }[]; composer: number; empty: boolean; status: number; footer: string[] } | null {
   const rows = stripVTControlCharacters(screen).split(/\r?\n/).map((raw) => {
     const line = raw.replace(/^│/, "").replace(/\s*│\s*$/, "").trimEnd();
     return { indent: line.length - line.trimStart().length, text: line.trim() };
@@ -46,14 +46,20 @@ export function codexComposer(screen: string): { rows: { indent: number; text: s
     if (joined) { row.text = joined; rows.splice(index + 1, 1); }
   }
   const lines = rows.map((row) => row.text);
-  const composer = lastLine(lines, (line) => /^[›»](?:\s+Ask Codex to do anything)?$/.test(line));
+  const promptRow = (row: { text: string }) => /^[›»](?:\s|$)/.test(row.text);
+  const column = Math.min(...rows.filter(promptRow).map((row) => row.indent));
+  const composer = lastLine(rows, (row) => row.indent === column && promptRow(row));
   if (composer < 0) return null;
-  const footer = lines.slice(composer + 1);
+  let footerStart = lines.length;
+  while (footerStart > composer + 1 && FOOTER.test(lines[footerStart - 1]!)) footerStart--;
+  const footer = lines.slice(footerStart);
   if (footer.length === 0 || footer.length > 4 || footer.some((line) => !FOOTER.test(line))) return null;
+  if (rows.slice(composer + 1, footerStart).some((row) => row.indent <= column)) return null;
+  const empty = footerStart === composer + 1 && /^[›»](?:\s+Ask Codex to do anything)?$/.test(lines[composer]!);
   let status = lastLine(lines.slice(0, composer), workingLine);
-  if (lines.slice(status + 1, composer).some((line) => /^[›»]/.test(line)
-    || (/^[•◦]/.test(line) && !/^[•◦]\s*(?:Messages to be submitted|Queued follow-up inputs)/.test(line)))) status = -1;
-  return { rows, composer, status, footer };
+  if (status >= 0 && rows.slice(status + 1, composer).some((row) => row.indent <= rows[status]!.indent && (/^[›»]/.test(row.text)
+    || (/^[•◦]/.test(row.text) && !/^[•◦]\s*(?:Messages to be submitted|Queued follow-up inputs)/.test(row.text))))) status = -1;
+  return { rows, composer, empty, status, footer };
 }
 
 /**
@@ -64,7 +70,7 @@ export function codexComposer(screen: string): { rows: { indent: number; text: s
  */
 export function codexSteeringPending(screen: string, text: string): boolean {
   const live = codexComposer(screen);
-  if (!live) return false;
+  if (!live?.empty) return false;
   const { rows, composer, status } = live;
   if (status < 0) return false;
   const panel = rows.slice(status + 1, composer);
@@ -73,7 +79,7 @@ export function codexSteeringPending(screen: string, text: string): boolean {
   if (first < 1) return false;
   if (compact(panel.slice(0, first).map((row) => row.text).join("").replace(/^[•◦]\s*/, "")) !== compact(STEERING_HINT)) return false;
   // the steering section ends at the next header: Codex lists end-of-turn and rejected inputs under their own
-  const next = panel.findIndex((row, index) => index > first && /^[•◦]/.test(row.text));
+  const next = panel.findIndex((row, index) => index > first && row.indent < panel[first]!.indent && /^[•◦]/.test(row.text));
   const section = panel.slice(first, next < 0 ? panel.length : next);
   // an entry starts at the arrows' indent; a deeper arrow is the message's own text on a continuation row
   const indent = section[0]!.indent;

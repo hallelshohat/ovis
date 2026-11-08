@@ -49,7 +49,7 @@ import { dropPendingListScroll, listEndPadded } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
 import { askedQuestions } from "../../shared/askQuestions.ts";
-import { forgetWaitingBaseline, observeNativeWaiting, settleWaitingSends, waitingKey } from "../lib/sentWaiting.ts";
+import { forgetWaitingBaseline, observeNativeWaiting, settleWaitingSends, waitingBaseline, waitingKey } from "../lib/sentWaiting.ts";
 import { SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
@@ -2179,6 +2179,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       const sent = sentKeyRef.current;
       const session = sessionRef.current;
       const lifetime = paneLifetimes.generation(machineId);
+      const baseline = waitingBaseline(waitingKey(machineId, paneId));
       let quick = false;
       try {
         const next = await fetchPanePromptState(paneId);
@@ -2189,7 +2190,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           if (paneLifetimes.generation(machineId) === lifetime) {
             if (sessionRef.current === session) {
               setCodexDisplay(next.codex_display ?? null);
-              observeNativeWaiting({ key: waitingKey(machineId, paneId), pending: next.codex_display?.pending_inputs ?? [] });
+              observeNativeWaiting({ key: waitingKey(machineId, paneId), pending: next.codex_display?.pending_inputs ?? [], baseline });
             }
             keepCardText(next.prompt?.id ?? null, session);
             setPrompt((current) => polledPrompt(current, next.prompt));

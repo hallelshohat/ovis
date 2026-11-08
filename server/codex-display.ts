@@ -30,7 +30,7 @@ function pendingInputs(panel: NonNullable<ReturnType<typeof codexComposer>>["row
   let indent = -1;
   for (const row of panel) {
     if (/^(?:⇧←|Alt\+Up|alt\+up).*edit last queued message$/.test(row.text)) continue;
-    if (/^[•◦]/.test(row.text)) { header = row.text.replace(/^[•◦]\s*/, ""); kind = null; indent = -1; continue; }
+    if (/^[•◦]/.test(row.text) && (indent < 0 || row.indent < indent)) { header = row.text.replace(/^[•◦]\s*/, ""); kind = null; indent = -1; continue; }
     if (indent < 0 && !row.text.startsWith("↳")) { header += ` ${row.text}`; continue; }
     if (indent < 0) {
       const title = header.replace(/\s/g, "");

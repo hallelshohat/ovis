@@ -35,6 +35,23 @@ it("shows native Tab-queued input without adding its edit shortcut to the user's
   expect(codexSteeringPending(recording("0.167.0-queued.txt"), display!.pending_inputs[0]!.text)).toBe(false);
 });
 
+it("keeps indented bullets and prompt marks inside native pending messages", () => {
+  const text = "Please handle these:\n• alpha\n• beta\n› quoted prompt";
+  const screen = recording("0.167.0-steering.txt").replace(/  ↳ OVS24_CURRENT_STEER:[^\n]+/, "  ↳ Please handle these:\n    • alpha\n    • beta\n    › quoted prompt");
+  expect(readCodexDisplay({ screen })?.pending_inputs).toEqual([{ text, kind: "steering" }]);
+  expect(codexSteeringPending(screen, text)).toBe(true);
+});
+
+it("shows pending input beside another terminal draft without authorizing Escape", () => {
+  for (const draft of ["› A new unsent draft", "› A new unsent draft\n  with a second line"]) {
+    const screen = recording("0.167.0-steering.txt").replace("› Ask Codex to do anything", draft);
+    const display = readCodexDisplay({ screen });
+    expect(display?.pending_inputs).toHaveLength(1);
+    expect(display?.status_lines.some((line) => line.includes("Working"))).toBe(true);
+    expect(codexSteeringPending(screen, display?.pending_inputs[0]?.text ?? "")).toBe(false);
+  }
+});
+
 it("shows the real update notice, startup warning and model footer", () => {
   const display = readCodexDisplay({ screen: recording("0.166.0-update.ansi") });
   expect(display?.status_lines.join("\n")).toContain("Update available! 0.166.0 -> 0.167.0");

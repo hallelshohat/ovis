@@ -43,6 +43,10 @@ try {
   const created = await workspaceCreate({ cwd: root, label: "Codex parity recording" });
   workspaceId = created.workspace.workspace_id;
   const paneId = created.root_pane.pane_id;
+  const showScreen = async (text: string) => {
+    writeFileSync(screen, text);
+    await herdrRpc("pane.send_keys", { pane_id: paneId, keys: ["enter"] });
+  };
   await herdrRpc("pane.send_text", { pane_id: paneId, text: `${shellQuote(executable)} ${shellQuote(rollout)} ${shellQuote(screen)}\n` });
   const deadline = Date.now() + 10_000;
   while ((await sessionSnapshot()).panes.find((pane) => pane.pane_id === paneId)?.agent !== "codex") {
@@ -79,9 +83,22 @@ try {
   await capture("steering-pending");
   console.log("PASS recorded reads, edits, outputs, exit status and pending steering");
 
+  // Variations of the recording cover message contents and a second unsent terminal draft.
+  const bullets = fixture("0.167.0-steering.txt").replace(/  ↳ OVS24_CURRENT_STEER:[^\n]+/, "  ↳ OVS24_BULLETS:\n    • alpha\n    • beta");
+  for (const [name, frame] of [["pending-bullets", bullets], ["pending-draft", bullets.replace("› Ask Codex to do anything", "› Another unsent draft\n  with a second line").replace("Working (29s", "Working (30s")]]) {
+    await showScreen(frame!);
+    const pending = log.locator(".chat-turn-waiting").filter({ hasText: "OVS24_BULLETS:" });
+    await pending.waitFor();
+    await page.locator(".chat-codex-status").filter({ hasText: name === "pending-draft" ? "Working (30s" : "Working (29s" }).waitFor();
+    assert.match(await pending.innerText(), /• alpha/);
+    assert.match(await pending.innerText(), /• beta/);
+    assert.equal(await log.locator(".chat-turn-waiting").count(), 1);
+    await capture(name!);
+  }
+  console.log("PASS pending bullet lists and an additional native draft");
+
   // The native queue is live terminal state; changing it does not invent a transcript message.
-  writeFileSync(screen, fixture("0.167.0-queued.txt"));
-  await herdrRpc("pane.send_keys", { pane_id: paneId, keys: ["enter"] });
+  await showScreen(fixture("0.167.0-queued.txt"));
   try { await log.getByText("Queued · next turn", { exact: true }).waitFor(); }
   catch (error) {
     console.error(await (await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt?pane_id=${encodeURIComponent(paneId)}`)).text());
@@ -90,15 +107,30 @@ try {
     throw error;
   }
   await capture("native-queued");
-  persist(lines.length);
-  writeFileSync(screen, fixture("0.167.0-plan.txt"));
-  await herdrRpc("pane.send_keys", { pane_id: paneId, keys: ["enter"] });
-  await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle" });
-  await log.getByText("turquoise", { exact: true }).waitFor();
+  const held = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), delivered = Promise.withResolvers<void>();
+  let delayed = false;
+  await page.route("**/api/pane/prompt?**", async (route) => {
+    if (delayed) { await route.continue(); return; }
+    delayed = true;
+    const response = await route.fetch();
+    held.resolve();
+    await release.promise;
+    await route.fulfill({ response });
+    delivered.resolve();
+  });
+  await held.promise;
+  try {
+    persist(lines.length);
+    await showScreen(fixture("0.167.0-plan.txt"));
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle" });
+    await log.getByText("turquoise", { exact: true }).waitFor();
+  } finally { release.resolve(); }
+  await delivered.promise;
   assert.equal(await log.getByText(steerText, { exact: true }).count(), 1);
   assert.equal(await log.locator(".chat-turn-waiting").count(), 0);
   assert.equal(await log.getByRole("heading", { name: "Two-step plan: Validate notes.txt", exact: true }).count(), 1);
   await page.getByText("Implement this plan?", { exact: true }).first().waitFor();
+  assert.equal(await log.locator(".chat-turn-waiting").count(), 0, "a late pending response cannot resurrect the accepted message");
   await capture("consumed-and-plan");
   console.log("PASS steering consumption, queued reply and native plan prompt");
 
