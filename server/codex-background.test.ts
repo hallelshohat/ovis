@@ -28,8 +28,113 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 // Recorded with Codex 0.166.0 in an isolated session; local paths and model metadata removed.
 const unpolled = readFileSync(join(import.meta.dir, "fixtures/codex-background/0.166.0-unpolled.jsonl"), "utf8").trimEnd().split("\n");
 const recordedNow = Date.parse("2026-11-08T12:34:00.000Z");
+const recordedSecond = (timestamp: string): number => (Date.parse(timestamp) - Date.parse(at(0))) / 1000;
+// Adapted recording: reuse the foreground ID, move its completion earlier, and add the optional
+// start event. The new command/exit 7 come from the recorded failure; no random collision is claimed.
+const reused = readFileSync(join(import.meta.dir, "fixtures/codex-background/0.166.0-reused-process-id.jsonl"), "utf8").trimEnd().split("\n");
+const reusedLater = reused.map((record) => record.replaceAll("12:31", "12:32").replaceAll("179414107", "179414113"));
 
 describe("Codex background exec sessions", () => {
+  it.each([true, false])("keeps a reused foreground ID running until its own exit 7 (start event: %s)", (withStart) => {
+    const state = feed(reused.slice(0, 4).filter((_record, index) => withStart || index !== 2));
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([
+      { id: "exec-41401", status: "running", exit_code: null, ended_at: null },
+    ]);
+    feedCodexLine(state, reused[0]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)[0]?.status).toBe("running");
+    feedCodexLine(state, reused[4]!);
+    const task = codexBackgroundTasks(state, true, recordedNow)[0]!;
+    expect(task).toMatchObject({ status: "failed", exit_code: 7, ended_at: "2026-11-08T12:31:17.470Z" });
+    expect(Date.parse(task.ended_at!)).toBeGreaterThanOrEqual(Date.parse(task.started_at!));
+    feedCodexLine(state, reused[0]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)[0]).toEqual(task);
+  });
+
+  it.each([true, false])("starts fresh when a completed background process ID is reused (start event: %s)", (withStart) => {
+    const polledAt = recordedSecond("2026-11-08T12:31:20.000Z");
+    const state = feed([...unpolled.slice(0, 3), poll(polledAt, "old-output", 41401), answer(polledAt + 1, "old-output", "Process exited with code 0\nOutput:\nOLD OUTPUT\n")]);
+    expect(codexSessionOutput(state, "exec-41401", null)?.text).toBe("OLD OUTPUT\n");
+    for (const record of reusedLater.slice(1, 4).filter((_record, index) => withStart || index !== 1)) feedCodexLine(state, record);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ status: "running", exit_code: null, ended_at: null }]);
+    expect(codexSessionOutput(state, "exec-41401", null)?.text).toBe("");
+    feedCodexLine(state, unpolled[2]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)[0]?.status).toBe("running");
+    feedCodexLine(state, reusedLater[4]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ status: "failed", exit_code: 7 }]);
+  });
+
+  it("does not apply a late old poll response to a replacement command", () => {
+    const polledAt = recordedSecond("2026-11-08T12:31:16.000Z");
+    const state = feed([...unpolled.slice(0, 2), poll(polledAt, "old-poll", 41401), unpolled[2]!, ...reusedLater.slice(1, 4)]);
+    feedCodexLine(state, answer(polledAt + 60, "old-poll", "Process exited with code 0\nOutput:\nOLD POLL\n"));
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ status: "running", exit_code: null }]);
+    expect(codexSessionOutput(state, "exec-41401", null)?.text).toBe("");
+    feedCodexLine(state, reusedLater[4]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)[0]?.exit_code).toBe(7);
+  });
+
+  it("does not mistake a poll with a dynamic session argument for a new exec", () => {
+    const state = feed(reused.slice(1, 4));
+    const polledAt = recordedSecond("2026-11-08T12:31:16.000Z");
+    const before = codexBackgroundTasks(state, true, recordedNow);
+    feedCodexLine(state, script(polledAt, "dynamic-poll", 'text(await tools.write_stdin({session_id: activeSession, chars:""}));'));
+    feedCodexLine(state, scriptAnswer(polledAt + 0.1, "dynamic-poll", { session_id: 41401, output: "" }));
+    expect(codexBackgroundTasks(state, true, recordedNow)).toEqual(before);
+    feedCodexLine(state, reused[4]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)[0]?.exit_code).toBe(7);
+  });
+
+  it("reads reused-ID discovery and failure incrementally from the rollout", () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-codex-reused-id-"));
+    roots.push(root);
+    const path = join(root, "rollout.jsonl");
+    writeFileSync(path, `${reused.slice(0, 4).join("\n")}\n`);
+    expect(codexBackgroundTasks(readCodexBackground(path)!, true, recordedNow)).toMatchObject([{ status: "running", exit_code: null }]);
+    appendFileSync(path, `${reused[4]}\n`);
+    expect(codexBackgroundTasks(readCodexBackground(path)!, true, recordedNow)).toMatchObject([{ status: "failed", exit_code: 7 }]);
+  });
+
+  it("keeps an identifiable completion that precedes a delayed script response", () => {
+    const state = feed([reused[0]!, reused[1]!, reused[4]!, reused[3]!.replace("12:31:15.579", "12:31:20.579")]);
+    const task = codexBackgroundTasks(state, true, recordedNow)[0]!;
+    expect(task).toMatchObject({ status: "failed", exit_code: 7, ended_at: "2026-11-08T12:31:17.470Z" });
+    expect(Date.parse(task.started_at!)).toBeLessThanOrEqual(Date.parse(task.ended_at!));
+  });
+
+  it("does not guess that a mixed script's foreground completion belongs to its background command", () => {
+    const old = reused[0]!.replace("12:30:00.000", "12:32:58.339").replaceAll("1794141000000", "1794141178339");
+    const state = feed([unpolled[3]!, old, unpolled[5]!.replace("46402", "41401")]);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ status: "running", exit_code: null, ended_at: null }]);
+    feedCodexLine(state, unpolled[6]!.replace('"process_id":"46402"', '"process_id":"41401"'));
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ status: "failed", exit_code: 7 }]);
+  });
+
+  it("does not reuse an early completion for a second background command in the same script", () => {
+    const started = recordedSecond("2026-11-08T12:31:14.000Z");
+    const state = feed([
+      script(started, "twice", 'text(await tools.exec_command({cmd:"first"})); text(await tools.exec_command({cmd:"second"}));'),
+      unpolled[2]!,
+      scriptAnswer(started + 6, "twice", { session_id: 41401, output: "OLD OUTPUT\n" }, { session_id: 41401, output: "NEW OUTPUT\n" }),
+    ]);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ title: "second", status: "running", exit_code: null }]);
+    expect(codexSessionOutput(state, "exec-41401", null)?.text).toBe("NEW OUTPUT\n");
+    const completion = reused[4]!.replace("12:31:17.470", "12:31:21.470")
+      .replace("1794141074576", "1794141078576").replace("1794141077470", "1794141081470");
+    feedCodexLine(state, completion);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ status: "failed", exit_code: 7 }]);
+  });
+
+  it.each([
+    ['"started_at_ms":1794141074576', '"started_at_ms":"1794141074576"'],
+    ['"started_at_ms":1794141074576,', ""],
+    ['"completed_at_ms":1794141077470', '"completed_at_ms":1794141000000'],
+  ])("ignores invalid completion timing %s", (from, to) => {
+    const state = feed([reused[1]!, reused[3]!, reused[4]!.replace(from, to)]);
+    expect(codexBackgroundTasks(state, true, recordedNow)[0]?.status).toBe("running");
+    feedCodexLine(state, reused[4]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)[0]?.exit_code).toBe(7);
+  });
+
   it("finishes recorded unpolled commands from native completion events without listing foreground commands", () => {
     const tasks = codexBackgroundTasks(feed(unpolled), true, recordedNow);
     expect(tasks).toMatchObject([
@@ -54,7 +159,6 @@ describe("Codex background exec sessions", () => {
     expect(codexBackgroundTasks(state, true, recordedNow)).toEqual([]);
     feedCodexLine(state, unpolled[1]!);
     expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ id: "exec-41401", status: "completed", exit_code: 0 }]);
-    expect(state.pendingCompletions.size).toBe(0);
   });
 
   it("ends only the named background process while another keeps running", () => {

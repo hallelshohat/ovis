@@ -1,8 +1,8 @@
 /**
  * A Codex session's background terminals (what its `/ps` lists): the exec sessions its commands
  * ran in once they outlived their first wait, read from the rollout. Each is a task `exec-<id>`
- * that started with the answer that first named the session, gathers the output its polls
- * recorded, and ended with a native CommandExecution completion or a chunk that gave its exit
+ * first discovered by the answer that named the session, with native events refining its start
+ * time. It gathers polled output and ends with a CommandExecution completion or a chunk's exit
  * code. The sheet keeps only polled output, so it shows what the agent read of it. A session the
  * rollout never saw end runs while the pane still runs this Codex session, and is lost after.
  *
@@ -14,6 +14,8 @@ import type { OmoTask } from "../shared/protocol.ts";
 import { plain, readLines, remember } from "./claude-subagents.ts";
 import { sliceOutput, type OutputSlice } from "./background-output.ts";
 import { codexNativeItem } from "./codex-items.ts";
+import { match } from "ts-pattern";
+import { z } from "zod";
 
 const ROLLOUT_WINDOW = 16 * 1024 * 1024;
 const READ_BUDGET = 8 * 1024 * 1024;
@@ -27,21 +29,25 @@ const RECENT_MS = 24 * 60 * 60 * 1000;
 type Row = Record<string, unknown>;
 const row = (value: unknown): Row | null => typeof value === "object" && value !== null && !Array.isArray(value) ? value as Row : null;
 
-interface Session { id: string; command: string | null; startedAt: number | null; endedAt: number | null; exitCode: number | null; output: string }
+interface Session {
+  id: string; command: string | null; startedAt: number | null; endedAt: number | null; exitCode: number | null; output: string;
+  callStartedAt: number | null; observedAt: number | null; nativeId: string | null; allowEarlyCompletion: boolean;
+}
 interface Completion { exitCode: number; endedAt: number | null }
+interface NativeExecution { id: string; startedAt: number; endedAt: number | null; exitCode: number | null }
 
 /** One tool call a Codex exec call made: a command it started, or a poll of a session. */
-interface ExecCall { command: string | null; session: string | null }
+interface ExecCall { command: string | null; session: string | null; poll: boolean; polled?: Session }
 
 export interface CodexBackground {
   /** the tool calls each exec call made, in order, by call id, until its answer */
-  calls: Map<string, ExecCall[]>;
+  calls: Map<string, { startedAt: number | null; calls: ExecCall[] }>;
   sessions: Map<string, Session>;
-  /** Native completions can precede the script response that identifies a background session. */
-  pendingCompletions: Map<string, Completion>;
+  /** Process IDs are recycled; retain the latest native command identity and its lifetime. */
+  nativeExecutions: Map<string, NativeExecution>;
 }
 
-export const codexBackgroundState = (): CodexBackground => ({ calls: new Map(), sessions: new Map(), pendingCompletions: new Map() });
+export const codexBackgroundState = (): CodexBackground => ({ calls: new Map(), sessions: new Map(), nativeExecutions: new Map() });
 
 /** A tool answer's text: a string, or the text blocks of a list. */
 function outputText(value: unknown): string {
@@ -56,9 +62,9 @@ const unquote = (body: string): string => { try { return JSON.parse(`"${body}"`)
 /** The tool calls an exec script makes (`tools.exec_command({cmd:"…"})`, `tools.write_stdin({session_id:N})`), in the order it names them. */
 function scriptCalls(input: string): ExecCall[] {
   return [...input.matchAll(/tools\.(exec_command|write_stdin)\(\s*\{((?:[^"}]|"(?:[^"\\]|\\.)*")*)\}/g)].map((match) => {
-    if (match[1] === "write_stdin") return { command: null, session: codexInputSessions(match[2]!)[0] ?? null };
+    if (match[1] === "write_stdin") return { command: null, session: codexInputSessions(match[2]!)[0] ?? null, poll: true };
     const cmd = /"?cmd"?\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(match[2]!);
-    return { command: cmd === null ? null : unquote(cmd[1]!), session: null };
+    return { command: cmd === null ? null : unquote(cmd[1]!), session: null, poll: false };
   });
 }
 
@@ -71,13 +77,8 @@ export function feedCodexLine(state: CodexBackground, line: string): void {
   if (payload === null) return;
   const at = typeof entry?.["timestamp"] === "string" ? Date.parse(entry["timestamp"]) : NaN;
   const when = Number.isFinite(at) ? at : null;
-  if (entry?.["type"] === "event_msg" && payload["type"] === "item_completed") {
-    const display = codexNativeItem(payload["item"])?.display;
-    if (!display?.processId || display.part.kind !== "tool" || display.part.exit_code === undefined || display.part.state === "pending") return;
-    const completion = { exitCode: display.part.exit_code, endedAt: when };
-    const session = state.sessions.get(display.processId);
-    if (session === undefined) remember(state.pendingCompletions, display.processId, completion, SESSION_LIMIT);
-    else finishCodexSession({ session, completion });
+  if (entry?.["type"] === "event_msg") {
+    feedNativeExecution({ state, payload, when });
     return;
   }
   if (typeof payload["call_id"] !== "string") return;
@@ -88,38 +89,87 @@ export function feedCodexLine(state: CodexBackground, line: string): void {
     const cmd = args?.["cmd"];
     const command = Array.isArray(cmd) ? cmd.join(" ") : typeof cmd === "string" ? cmd : null;
     const session = payload["name"] === "write_stdin" ? codexInputSessions(payload["arguments"])[0] ?? null : null;
-    remember(state.calls, callId, [{ command: payload["name"] === "exec_command" ? command : null, session }], 512);
+    rememberCalls({ state, callId, startedAt: when, calls: [{ command: payload["name"] === "exec_command" ? command : null, session, poll: payload["name"] === "write_stdin" }] });
     return;
   }
   if (payload["type"] === "custom_tool_call" && typeof payload["input"] === "string") {
-    remember(state.calls, callId, scriptCalls(payload["input"]), 512);
+    rememberCalls({ state, callId, startedAt: when, calls: scriptCalls(payload["input"]) });
     return;
   }
   if (payload["type"] !== "function_call_output" && payload["type"] !== "custom_tool_call_output") return;
-  const calls = state.calls.get(callId) ?? [];
+  const parent = state.calls.get(callId);
+  const calls = parent?.calls ?? [];
   state.calls.delete(callId);
   const chunks = codexChunks(outputText(payload["output"]));
   // one answer object per call, in order, when the counts agree: the call says which session a chunk that names none was
   const paired = chunks.length === calls.length;
+  // shortcut: ambiguous early exits wait for a poll; use nested call IDs if Codex starts exposing them.
+  const startedIds = calls.flatMap((call, index) => call.poll ? [] : [chunks[index]?.session ?? null]);
+  const allowEarlyCompletion = paired && !startedIds.includes(null) && new Set(startedIds).size === startedIds.length;
   chunks.forEach((chunk, index) => {
     const call = paired ? calls[index] : calls.length === 1 ? calls[0] : undefined;
     const id = chunk.session ?? call?.session ?? null;
     if (id === null) return;
     let session = state.sessions.get(id);
-    if (session === undefined) {
+    if (call?.poll && call.polled !== session) return;
+    if (session === undefined || (paired && call && !call.poll && chunk.session !== null)) {
       // only the answer that first names a session starts it: a poll of one not seen began before the window
-      session = { id, command: chunk.session !== null ? call?.command ?? null : null, startedAt: when, endedAt: null, exitCode: null, output: "" };
+      session = { id, command: chunk.session !== null ? call?.command ?? null : null, startedAt: when, endedAt: null, exitCode: null, output: "",
+        callStartedAt: call && !call.poll ? parent?.startedAt ?? null : null, observedAt: when, nativeId: null, allowEarlyCompletion };
       remember(state.sessions, id, session, SESSION_LIMIT);
-      const completion = state.pendingCompletions.get(id);
-      if (completion !== undefined) {
-        finishCodexSession({ session, completion });
-        state.pendingCompletions.delete(id);
-      }
+      const execution = state.nativeExecutions.get(id);
+      if (execution !== undefined) applyNativeExecution({ session, execution });
     }
     session.output = (session.output + chunk.text).slice(-OUTPUT_KEEP);
     if (chunk.exitCode !== null) finishCodexSession({ session, completion: { exitCode: chunk.exitCode, endedAt: when } });
   });
 }
+
+function rememberCalls({ state, callId, startedAt, calls }: { state: CodexBackground; callId: string; startedAt: number | null; calls: ExecCall[] }): void {
+  for (const call of calls) if (call.session !== null) call.polled = state.sessions.get(call.session);
+  remember(state.calls, callId, { startedAt, calls }, 512);
+}
+
+function feedNativeExecution({ state, payload, when }: { state: CodexBackground; payload: unknown; when: number | null }): void {
+  const parsed = executionEventSchema.safeParse(payload);
+  if (!parsed.success) return;
+  const event = parsed.data;
+  const display = codexNativeItem(event.item)?.display;
+  if (!display?.processId || display.part.kind !== "tool") return;
+  const part = display.part;
+  const result = match(event.type)
+    .with("item_started", () => part.state === "pending" ? { endedAt: null, exitCode: null } : null)
+    .with("item_completed", () => {
+      const endedAt = event.completed_at_ms ?? when;
+      if (part.state === "pending" || part.exit_code === undefined || endedAt === null || endedAt < event.started_at_ms) return null;
+      return { endedAt, exitCode: part.exit_code };
+    })
+    .exhaustive();
+  if (result === null) return;
+  const execution = { id: display.id, startedAt: event.started_at_ms, ...result };
+  const previous = state.nativeExecutions.get(display.processId);
+  if (previous && (previous.startedAt > execution.startedAt || (previous.id === execution.id && previous.endedAt !== null))) return;
+  remember(state.nativeExecutions, display.processId, execution, SESSION_LIMIT);
+  const session = state.sessions.get(display.processId);
+  if (session !== undefined) applyNativeExecution({ session, execution });
+}
+
+function applyNativeExecution({ session, execution }: { session: Session; execution: NativeExecution }): void {
+  if (session.nativeId !== null && session.nativeId !== execution.id) return;
+  if (session.nativeId === null) {
+    if (session.observedAt === null || execution.startedAt > session.observedAt) return;
+    if (session.callStartedAt !== null && execution.startedAt < session.callStartedAt) return;
+    if (execution.endedAt !== null && execution.endedAt < session.observedAt && !(session.callStartedAt !== null && session.allowEarlyCompletion)) return;
+    session.nativeId = execution.id;
+    session.startedAt = execution.startedAt;
+  }
+  if (execution.exitCode !== null) finishCodexSession({ session, completion: { exitCode: execution.exitCode, endedAt: execution.endedAt } });
+}
+
+const executionEventSchema = z.object({
+  type: z.enum(["item_started", "item_completed"]), item: z.unknown(),
+  started_at_ms: z.number().int().nonnegative(), completed_at_ms: z.number().int().nonnegative().optional(),
+});
 
 function finishCodexSession({ session, completion }: { session: Session; completion: Completion }): void {
   if (session.endedAt !== null) return;
