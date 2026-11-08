@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,7 +25,77 @@ const feed = (lines: string[]) => {
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
+// Recorded with Codex 0.166.0 in an isolated session; local paths and model metadata removed.
+const unpolled = readFileSync(join(import.meta.dir, "fixtures/codex-background/0.166.0-unpolled.jsonl"), "utf8").trimEnd().split("\n");
+const recordedNow = Date.parse("2026-11-08T12:34:00.000Z");
+
 describe("Codex background exec sessions", () => {
+  it("finishes recorded unpolled commands from native completion events without listing foreground commands", () => {
+    const tasks = codexBackgroundTasks(feed(unpolled), true, recordedNow);
+    expect(tasks).toMatchObject([
+      { id: "exec-46402", status: "failed", exit_code: 7, ended_at: "2026-11-08T12:33:01.387Z" },
+      { id: "exec-41401", status: "completed", exit_code: 0, ended_at: "2026-11-08T12:31:17.470Z" },
+    ]);
+    expect(tasks).toHaveLength(2);
+  });
+
+  it("reads native completion appended after the background session was discovered", () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-codex-native-bg-"));
+    roots.push(root);
+    const path = join(root, "rollout.jsonl");
+    writeFileSync(path, `${unpolled.slice(0, 2).join("\n")}\n`);
+    expect(codexBackgroundTasks(readCodexBackground(path)!, true, recordedNow)).toMatchObject([{ id: "exec-41401", status: "running" }]);
+    appendFileSync(path, `${unpolled[2]}\n`);
+    expect(codexBackgroundTasks(readCodexBackground(path)!, true, recordedNow)).toMatchObject([{ id: "exec-41401", status: "completed", exit_code: 0 }]);
+  });
+
+  it("remembers a native completion before the script response without inventing a background task", () => {
+    const state = feed([unpolled[0]!, unpolled[2]!]);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toEqual([]);
+    feedCodexLine(state, unpolled[1]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ id: "exec-41401", status: "completed", exit_code: 0 }]);
+    expect(state.pendingCompletions.size).toBe(0);
+  });
+
+  it("ends only the named background process while another keeps running", () => {
+    const state = feed([unpolled[0]!, unpolled[1]!, ...unpolled.slice(3, 6)]);
+    expect(codexBackgroundTasks(state, true, recordedNow).map((task) => task.status)).toEqual(["running", "running"]);
+    feedCodexLine(state, unpolled[2]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([
+      { id: "exec-46402", status: "running" }, { id: "exec-41401", status: "completed" },
+    ]);
+  });
+
+  it("keeps completion and polled output when native events and later polls describe the same process", () => {
+    const state = feed(unpolled);
+    const before = codexBackgroundTasks(state, true, recordedNow);
+    const late = (recordedNow - Date.parse(at(0))) / 1000;
+    const calls = [poll(late, "late", 46402), answer(late, "late", "Process exited with code 7\nOutput:\nOVS26_FAILED\n")];
+    for (const each of calls) feedCodexLine(state, each);
+    feedCodexLine(state, unpolled[6]!);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toEqual(before);
+    expect(codexSessionOutput(state, "exec-46402", null)?.text).toBe("OVS26_FAILED\n");
+    const polled = feed([...unpolled.slice(0, 6), ...calls, unpolled[6]!]);
+    expect(codexBackgroundTasks(polled, true, recordedNow)).toMatchObject([
+      { id: "exec-46402", status: "failed", exit_code: 7 }, { id: "exec-41401", status: "completed", exit_code: 0 },
+    ]);
+    expect(codexSessionOutput(polled, "exec-46402", null)?.text).toBe("OVS26_FAILED\n");
+  });
+
+  it.each([
+    ["in-progress command", unpolled[2]!.replace('"status":"completed"', '"status":"in_progress"')],
+    ["missing exit code", unpolled[2]!.replace('"exit_code":0', '"exit_code":null')],
+    ["invalid exit code", unpolled[2]!.replace('"exit_code":0', '"exit_code":"0"')],
+    ["missing process ID", unpolled[2]!.replace('"process_id":"41401",', "")],
+    ["unrelated process", unpolled[2]!.replace('"process_id":"41401"', '"process_id":"other"')],
+    ["unrelated item", unpolled[2]!.replace('"type":"CommandExecution"', '"type":"FileChange"')],
+    ["non-event record", unpolled[2]!.replace('"type":"event_msg"', '"type":"response_item"')],
+    ["partial record", unpolled[2]!.slice(0, -1)],
+  ])("does not infer completion from %s", (_name, completion) => {
+    const state = feed([...unpolled.slice(0, 2), completion]);
+    expect(codexBackgroundTasks(state, true, recordedNow)).toMatchObject([{ id: "exec-41401", status: "running", exit_code: null }]);
+  });
+
   it("lists a native exec session as running, then completed with its exit code and output", () => {
     const lines = [
       nativeCall(1, "c1", "bun run build"),
