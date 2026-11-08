@@ -105,13 +105,15 @@
 .tab-strip-dot[data-status="done"] { background: var(--status-done); }
 .tab-strip-dot[data-status="waiting"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--status-working); }
 
+/* The working ring turns on its own compositor layer, as the chat tool spinner does. */
 .tab-strip-dot:not(.tab-strip-glyph)[data-status="working"] {
   width: calc(var(--dot-size) + 3px);
   height: calc(var(--dot-size) + 3px);
   background: transparent;
   border: 1.5px solid var(--status-working);
   border-top-color: transparent;
-  animation: tab-strip-spin var(--dur-spin) steps(8) infinite;
+  animation: tab-strip-spin 1s linear infinite;
+  will-change: transform;
 }
 
 @keyframes tab-strip-spin {
@@ -121,6 +123,7 @@
 @media (prefers-reduced-motion: reduce) {
   .tab-strip-dot:not(.tab-strip-glyph)[data-status="working"] {
     animation: none;
+    will-change: auto;
   }
 }
 
