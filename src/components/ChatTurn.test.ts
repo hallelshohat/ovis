@@ -112,6 +112,36 @@ describe("the folds Settings → Chat starts a turn with", () => {
   });
 });
 
+describe("Codex tool details", () => {
+  it("starts arguments folded while keeping pending and completed results visible", () => {
+    for (const state of ["pending", "ok"] as const) {
+      const html = render([
+        { kind: "tool", native: true, name: "functions.exec", summary: "Run the probe", input: "RAW_EXEC_ARGUMENTS", output: "probe output", state },
+        { kind: "tool", native: true, name: "exec_command", summary: "Run a command", input: '{"cmd":"RAW_COMMAND_ARGUMENTS"}', output: "command output", state },
+        { kind: "tool", native: true, name: "custom_tool", summary: "Run custom input", input: '{"input":"RAW_WRAPPED_ARGUMENTS"}', output: "custom output", state },
+      ], { live: state === "pending" });
+      expect(expanded(html)).toEqual([true]);
+      expect(html.match(/class="work-row-head" aria-expanded="false"/g)).toHaveLength(3);
+      expect(html).not.toContain("RAW_EXEC_ARGUMENTS");
+      expect(html).not.toContain("RAW_COMMAND_ARGUMENTS");
+      expect(html).not.toContain("RAW_WRAPPED_ARGUMENTS");
+      expect(html).toContain("probe output");
+      expect(html).toContain("command output");
+    }
+  });
+
+  it("keeps diffs and plan updates visible with their tool details folded", () => {
+    const html = render([
+      { kind: "tool", native: true, name: "apply_patch", summary: "notes.txt", input: "*** Begin Patch\n*** Update File: notes.txt\n@@\n-alpha\n+beta\n*** End Patch", output: "Success" },
+      { kind: "tool", native: true, name: "update_plan", summary: "Update the plan", input: '{"plan":[{"step":"Check the result","status":"in_progress"}]}', output: "" },
+    ], { live: false });
+    expect(html.match(/class="work-row-head" aria-expanded="false"/g)).toHaveLength(2);
+    expect(html).toContain('class="chat-diff-add">+beta');
+    expect(html).toContain("Check the result");
+    expect(html).toContain("Success");
+  });
+});
+
 describe("Compaction and failed requests (#901)", () => {
   const failed = (error: string): ConversationPart => ({ kind: "text", text: `Error: ${error}`, failed: true });
   const rows = (html: string) => [...html.matchAll(/class="chat-skill is-error chat-failed-requests"><summary>.*?<span class="chat-skill-name">([^<]*)</g)].map((match) => match[1]);

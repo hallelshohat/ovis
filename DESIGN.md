@@ -4731,7 +4731,9 @@ headless choice; sign-in waits continue reconnecting automatically.
 ## Codex terminal parity
 
 Codex Chat follows the Codex CLI 0.167 terminal: native command, read and file-change items stay
-open in their original order, with output, exit status and diffs. Model wrappers already represented
+visible in their original order, with output, exit status and diffs. Tool arguments start collapsed;
+opening a row reveals its input without hiding results, plans or images when it closes again.
+Model wrappers already represented
 by those native items do not add duplicate rows; wrapper failures and returned images remain visible.
 Native image views use a `Viewed image` row and the existing image viewer. Reasoning summaries
 are visible, while private model context is excluded. Other agents retain their existing folding.
