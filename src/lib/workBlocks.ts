@@ -155,8 +155,13 @@ export function workSummary(parts: readonly ConversationPart[]): string {
     .join(" · ");
 }
 
+/**
+ * How many calls and native runtime notices failed. The folded header says it apart from the counts, where
+ * it is never cut: it is what a glance at a finished turn must not miss, and the fold hides the row.
+ */
 export function workFailed(parts: readonly ConversationPart[]): number {
-  return parts.filter((part) => part.kind === "tool" && part.error === true).length;
+  return parts.filter((part) => (part.kind === "tool" && part.error === true)
+    || (part.kind === "notice" && part.native === true && (part.source === "error" || part.source === "stream_error"))).length;
 }
 
 export function formatWorkDuration(startTs: string | null, endTs: string | null): string | null {
