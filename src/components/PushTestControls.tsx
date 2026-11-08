@@ -57,7 +57,7 @@ export function PushTestControls({ onEnable }: { onEnable: () => Promise<PushAct
   return (
     <div className="settings-item">
       <div className="settings-row">
-        <div className="settings-row-text">
+        <div className="settings-row-text" data-icon="">
           <span className="settings-label-line"><BellRing className="settings-row-icon" aria-hidden="true" /><span className="settings-label">{t("Test notification")}</span></span>
           {!bare && <span className="settings-description">{t("Check whether this device can receive push alerts")}</span>}
           {/* always in the document, empty until there is something to say: a live region */}

@@ -119,8 +119,8 @@ export function SettingsRow({ label, description, keywords, held = false, htmlFo
   };
   const label_ = htmlFor !== undefined ? <label className="settings-label" htmlFor={htmlFor}>{label}</label> : <span className="settings-label">{label}</span>;
   return (
-    <div className={wide ? "settings-row is-wide" : "settings-row"} data-setting="">
-      <div className="settings-row-text">
+    <div className={wide ? "settings-row is-wide" : "settings-row"} data-setting="" data-preview={preview !== undefined ? "" : undefined}>
+      <div className="settings-row-text" data-icon={Icon !== undefined ? "" : undefined}>
         {changed || Icon !== undefined ? (
           <span className="settings-label-line">
             {Icon !== undefined && <Icon className="settings-row-icon" aria-hidden="true" />}

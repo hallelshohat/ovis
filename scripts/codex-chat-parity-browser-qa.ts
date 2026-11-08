@@ -5,7 +5,10 @@ import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "playwright-core";
+import { chromium, type Page } from "playwright-core";
+import { z } from "zod";
+import type { ConversationResponse } from "../shared/protocol.ts";
+import { parseCodexTranscript } from "../server/codex.ts";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { shellQuote } from "../server/machine-security.ts";
@@ -56,7 +59,7 @@ try {
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "working" });
   server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), codexHome, tailscaleOwner: null });
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: "en-US" });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: "en-US", serviceWorkers: "block" });
   page.setDefaultTimeout(15_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -69,23 +72,33 @@ try {
   await log.getByText("Steering · current turn", { exact: true }).waitFor();
   const steerText = "OVS24_CURRENT_STEER: include indigo in the final reply. Keep waiting for release167.";
   assert.equal(await log.getByText(steerText, { exact: true }).count(), 1);
-  await log.locator(".chat-diff-add").filter({ hasText: "+gamma=4" }).waitFor({ state: "attached" });
-  assert.match(await log.innerText(), /OVS24_CURRENT_STDERR/);
-  assert.match(await log.innerText(), /exit 9/);
-  assert.equal(await log.locator('.work-block-head[aria-expanded="false"]').count(), 0, "native work remains visible");
-  assert.equal(await log.locator('.work-row-line > .work-row-head[aria-expanded="true"]').count(), 0, "native and pending tool arguments start collapsed while their results remain visible");
-  assert.equal(await log.locator(".chat-turn-duration").count(), 0, "steering does not end its native task");
   const capture = async (name: string) => {
     if (!evidence) return;
     mkdirSync(evidence, { recursive: true });
     await page.screenshot({ path: join(evidence, `${name}.png`), animations: "disabled" });
   };
+  assert(await log.locator('.work-block-head[aria-expanded="false"]').count() > 0, "completed native work starts compact");
+  assert(await log.locator(".work-block-failed").count() > 0, "folded summaries retain failures");
+  assert.equal(await log.locator(".chat-turn-duration").count(), 0, "steering does not end its native task");
+  await capture("steering-compact");
+  await log.locator('.work-block-head[aria-expanded="false"]').evaluateAll((buttons) => {
+    for (const button of buttons) if (button instanceof HTMLButtonElement) button.click();
+  });
+  await log.locator('.work-row-line > .work-row-head[aria-expanded="false"]').evaluateAll((buttons) => {
+    for (const button of buttons) if (button instanceof HTMLButtonElement) button.click();
+  });
+  await log.locator(".chat-diff-add").filter({ hasText: "+gamma=4" }).waitFor({ state: "attached" });
+  assert.match(await log.innerText(), /OVS24_CURRENT_STDERR/);
+  assert.match(await log.innerText(), /exit 9/);
   await capture("steering-pending");
-  const edit = log.locator(".work-row").filter({ has: page.locator(".chat-diff-add").filter({ hasText: "+gamma=4" }) });
-  for (const expanded of [true, false]) {
+  const editHead = log.locator(".work-row").filter({ has: page.locator(".chat-diff-add").filter({ hasText: "+gamma=4" }) }).locator(".work-row-head");
+  const editTitle = await editHead.getAttribute("title");
+  assert(editTitle);
+  const edit = log.locator(".work-row").filter({ has: page.getByTitle(editTitle, { exact: true }) });
+  for (const expanded of [false, true]) {
     await edit.locator(".work-row-head").click();
     assert.equal(await edit.locator(".work-row-head").getAttribute("aria-expanded"), String(expanded));
-    assert.equal(await edit.locator(".chat-diff-add").filter({ hasText: "+gamma=4" }).count(), 1, "toggling arguments keeps one visible diff");
+    assert.equal(await edit.locator(".chat-diff-add").filter({ hasText: "+gamma=4" }).count(), expanded ? 1 : 0, "the diff is available once, only when opened");
   }
   await page.locator(".composer-text").focus();
   await log.evaluate((node) => { node.scrollTop = node.scrollHeight; });
@@ -146,42 +159,148 @@ try {
   await showScreen("› Ask Codex to do anything\nGPT-6-Luna medium · /workspace/codex-parity\n");
   await page.getByText("Implement this plan?", { exact: true }).first().waitFor({ state: "hidden" });
   await log.getByText("DONE_IMAGE", { exact: true }).waitFor();
-  const viewed = log.locator(".work-row-head").filter({ hasText: "Viewed image" });
+  const mixed = log.locator(".chat-turn-agent").filter({ hasText: "DONE_IMAGE" });
+  const mixedHead = mixed.locator(".work-block-head");
+  assert.equal(await mixedHead.getAttribute("aria-expanded"), "false");
+  const thumbnail = mixed.locator(".work-block-line .work-images img");
+  await thumbnail.waitFor();
+  await thumbnail.evaluate((image) => image instanceof HTMLImageElement ? image.decode() : Promise.reject(new Error("expected image")));
+  assert.equal(await thumbnail.evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth), 192);
+  assert.equal(await thumbnail.count(), 1, "the mixed exec image stays visible on the folded summary");
+  await capture("mixed-image-compact");
+  await mixed.locator(".work-block-line .work-image").click();
+  const viewer = page.getByRole("dialog", { name: "Image viewer", exact: true });
+  await viewer.waitFor();
+  await viewer.locator(".image-lightbox-canvas img").evaluate((image) => image instanceof HTMLImageElement ? image.decode() : Promise.reject(new Error("expected image")));
+  assert.equal(await viewer.locator(".image-lightbox-canvas img").evaluate((image) => image instanceof HTMLImageElement && image.naturalWidth), 192);
+  await viewer.getByRole("button", { name: "Close", exact: true }).click();
+  await viewer.waitFor({ state: "detached" });
+  await mixedHead.click();
+  const viewed = mixed.locator(".work-row-head").filter({ hasText: "Viewed image" });
   await viewed.waitFor();
   assert.equal(await viewed.count(), 1);
   assert.match(await viewed.innerText(), /probe\.png/);
-  assert.equal(await log.locator(".chat-tool-output pre").filter({ hasText: /^IMAGE_COMMAND$/ }).count(), 1);
-  const picture = log.locator(".chat-tool-images img");
-  await picture.waitFor();
-  await page.waitForFunction(() => {
-    const image = document.querySelector<HTMLImageElement>(".chat-tool-images img");
-    return image !== null && image.complete && image.naturalWidth === 192;
-  });
-  assert.equal(await picture.count(), 1, "the exec wrapper retains one loaded image beside its native command and image-view action");
-  const imageRow = log.locator(".work-row").filter({ has: page.locator(".chat-tool-images img") });
-  const imageHead = imageRow.locator(".work-row-head");
-  const rawInput = imageRow.locator(".work-row-detail > pre.chat-tool-io");
+  const wrapper = mixed.locator(".work-row").filter({ has: page.locator(".work-images img, .chat-tool-images img") });
+  const imageHead = wrapper.locator(".work-row-head");
+  const rawInput = wrapper.locator(".work-row-detail > pre.chat-tool-io");
   assert.equal(await imageHead.getAttribute("aria-expanded"), "false");
-  assert.equal(await rawInput.count(), 0, "the wrapper's JavaScript is hidden by default");
-  await imageHead.click();
-  await rawInput.waitFor();
-  assert.match(await rawInput.innerText(), /tools\.view_image/);
-  await imageHead.click();
   assert.equal(await rawInput.count(), 0);
-  assert.equal(await picture.isVisible(), true, "closing arguments keeps the returned image visible");
-  assert.equal(await log.locator(".chat-tool-output pre").filter({ hasText: /^IMAGE_COMMAND$/ }).isVisible(), true);
-  await picture.scrollIntoViewIfNeeded();
+  await imageHead.click();
+  await wrapper.locator(".chat-tool-images img").waitFor();
+  assert.match(await wrapper.locator(".work-row-detail > pre.chat-tool-io").innerText(), /tools\.view_image/);
+  await mixed.locator('.work-row-line > .work-row-head[aria-expanded="false"]').evaluateAll((buttons) => {
+    for (const button of buttons) if (button instanceof HTMLButtonElement) button.click();
+  });
+  assert.equal(await mixed.locator(".chat-tool-output pre").filter({ hasText: /^IMAGE_COMMAND$/ }).count(), 1);
+  assert.equal(await mixed.locator(".chat-tool-images img").count(), 1);
   await capture("mixed-image");
-  console.log("PASS recorded mixed command/image output and native Viewed image action");
+  await wrapper.locator(".work-row-head").click();
+  assert.equal(await wrapper.locator(".work-row-detail").count(), 0);
+  assert.equal(await wrapper.locator(".work-images img").count(), 1, "closing the image tool restores its thumbnail");
+  await mixedHead.click();
+  await thumbnail.waitFor();
+  await mixed.locator(".work-block-rows").waitFor({ state: "detached" });
+  assert.equal(await mixed.locator(".chat-tool-output").count(), 0, "folding the group removes its result panels");
+  console.log("PASS mixed command/image thumbnails, native action and expandable results");
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await thumbnail.scrollIntoViewIfNeeded();
+  assert.equal(await thumbnail.isVisible(), true, "the folded image remains visible on mobile");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await capture("mobile");
   assert.deepEqual(errors, []);
   console.log("PASS mobile layout and no browser errors");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  for (const source of ["error", "stream_error"]) {
+    const aborted = fixture("runtime-abort.jsonl").replace('"type":"error"', `"type":"${source}"`);
+    writeFileSync(rollout, [header, ...lines.slice(start), fixture("0.167.0-mixed-image.jsonl"), aborted].join("\n") + "\n");
+    await page.reload();
+    await log.getByText("Show runtime failures.", { exact: true }).waitFor();
+    const runtime = log.locator(".chat-turn-agent").last();
+    const head = runtime.locator(".work-block-head");
+    await head.waitFor();
+    await runtime.scrollIntoViewIfNeeded();
+    await capture(`runtime-${source}-initial`);
+    assert.equal(await head.getAttribute("aria-expanded"), "false");
+    assert.match(await runtime.locator(".work-block-failed").innerText(), /1 failed/);
+    const notices = runtime.locator(".chat-native-notice");
+    assert.deepEqual(await notices.allInnerTexts(), ["Connection interrupted; retrying", "Retry limit reached"]);
+    assert.equal(await notices.first().isVisible(), true);
+    assert.equal(await notices.last().isVisible(), true);
+    for (const expanded of [true, false]) {
+      await head.click();
+      assert.equal(await head.getAttribute("aria-expanded"), String(expanded));
+      assert.deepEqual(await notices.allInnerTexts(), ["Connection interrupted; retrying", "Retry limit reached"], "fold transitions never duplicate native notices");
+    }
+    await capture(`runtime-${source}-folded`);
+  }
+  console.log("PASS settled runtime warnings/errors stay visible and counted while work is folded");
+  await checkTyping({ page, paneId });
+  await capture("typing");
+  assert.deepEqual(errors, []);
 } finally {
   await browser?.close();
-  server?.stop(true);
+  server?.stop();
   if (workspaceId) await workspaceClose(workspaceId);
   rmSync(root, { recursive: true, force: true });
+}
+
+/** Style work, rather than wall-clock speed: unrelated Settings CSS must not restyle a long turn on each key. */
+async function checkTyping({ page, paneId }: { page: Page; paneId: string }): Promise<void> {
+  const command = parseCodexTranscript(fixture("0.167.0.jsonl")).flatMap((turn) => turn.parts)
+    .find((part) => part.kind === "tool" && part.native && part.name === "exec_command" && part.output.length > 10);
+  assert(command?.kind === "tool", "the recording provides a native command for the typing load");
+  const count = 1_000;
+  const response: ConversationResponse = {
+    source: "codex-transcript", history_id: "typing", turns: [
+      { role: "user", ts: null, parts: [{ kind: "text", text: "Check the long tool history." }] },
+      { role: "assistant", ts: null, native_turn_id: "typing", parts: [
+        ...Array.from({ length: count }, (_, index) => ({ ...command, call_id: `typing-${index}`, output: `${command.output}\n`.repeat(30) })),
+        { kind: "text", text: "TYPING_PROBE_END", phase: "final_answer" },
+      ] },
+    ],
+  };
+  await page.route("**/api/pane/conversation?**", (route) => route.fulfill({ json: response }));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.reload();
+  await page.getByText("TYPING_PROBE_END", { exact: true }).waitFor();
+  assert.equal(await page.locator('.work-block-head[aria-expanded="false"]').count(), 1, "long finished work starts as one compact summary");
+  assert.equal(await page.locator(".chat-tool-output").count(), 0);
+  await page.locator(".work-block-head").click();
+  await page.locator('.work-row-line > .work-row-head[aria-expanded="false"]').evaluateAll((buttons) => {
+    for (const button of buttons) if (button instanceof HTMLButtonElement) button.click();
+  });
+  assert.equal(await page.locator(".work-row").count(), count, "the results stay rendered during typing");
+  assert.equal(await page.locator(".chat-tool-output").count(), count, "the stress check still mounts every output");
+  const input = page.locator(`.pane-frame[data-layout-pane="${paneId}"] .composer-text`);
+  await input.fill("");
+  await input.focus();
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  const cdp = await page.context().newCDPSession(page);
+  const trace: unknown[] = [];
+  cdp.on("Tracing.dataCollected", ({ value }: { value: unknown[] }) => trace.push(...value));
+  const text = "This is a short typing check with a few words to see whether the input stays responsive. ";
+  try {
+    await cdp.send("Tracing.start", { categories: "devtools.timeline", transferMode: "ReportEvents" });
+    try { await input.pressSequentially(text); }
+    finally {
+      const done = new Promise<void>((resolve) => cdp.once("Tracing.tracingComplete", () => resolve()));
+      await cdp.send("Tracing.end");
+      await done;
+    }
+  } finally { await cdp.detach(); }
+  assert.equal(await input.inputValue(), text, "typing retains every character");
+  const parsed = z.array(z.object({ name: z.string(), args: z.object({ elementCount: z.number().optional() }).optional(), dur: z.number().optional() })).safeParse(trace);
+  assert(parsed.success, "Chrome returned valid trace events");
+  const updates = parsed.data.filter((event) => event.name === "UpdateLayoutTree");
+  assert(updates.some((event) => (event.args?.elementCount ?? 0) > 0), "the trace captured style recalculation");
+  const styled = updates.reduce((sum, event) => sum + (event.args?.elementCount ?? 0), 0);
+  const perKey = styled / text.length;
+  const styleMs = updates.reduce((sum, event) => sum + (event.dur ?? 0), 0) / 1_000;
+  console.log(`Typing ${count} tool rows: ${perKey.toFixed(1)} styled elements/key, ${styleMs.toFixed(1)} ms style work for ${text.length} keys`);
+  if (evidence) writeFileSync(join(evidence, "typing.json"), JSON.stringify({ tools: count, keys: text.length, styled, perKey, styleMs }, null, 2));
+  // The old selectors restyle ~15,000 elements/key; allow unrelated rendering without a timing-dependent limit.
+  assert(perKey < count * 2, `typing restyled the pane subtree: ${perKey.toFixed(1)} elements/key`);
+  console.log("PASS long Chat typing avoids full-pane style recalculation and retains the draft");
 }

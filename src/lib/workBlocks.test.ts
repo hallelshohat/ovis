@@ -407,6 +407,14 @@ describe("workFailed", () => {
     expect(workFailed([tool("Edit"), thinking("x"), text("y")])).toBe(0);
   });
 
+  it("counts native runtime errors without marking warnings or recovery as failures", () => {
+    const notices: ConversationPart[] = ["warning", "guardian_warning", "deprecation_notice", "auth_recovery_started", "auth_recovery_completed"].map((source) => ({ kind: "notice", native: true, source, text: source }));
+    expect(workFailed(notices)).toBe(0);
+    const errors: ConversationPart[] = ["error", "stream_error"].map((source) => ({ kind: "notice", native: true, source, text: source }));
+    expect(workFailed([...notices, ...errors, failed])).toBe(3);
+    expect(workFailed([{ kind: "notice", source: "error", text: "Another agent's notice" }])).toBe(0);
+  });
+
   it("counts a failed call the summary does not count", () => {
     const parts: ConversationPart[] = [{ ...failed, name: "TodoWrite" }];
     expect(workSummary(parts)).toBe("");

@@ -4,6 +4,7 @@
  * shows them the same way, small, beside the words, so a reader sees what the agent saw without
  * opening anything.
  */
+import { CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF } from "../../shared/codex-image-refs.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 import type { ToolPart } from "./workBlocks.ts";
 
@@ -53,8 +54,8 @@ export function workImages(parts: readonly ConversationPart[]): WorkImage[] {
  * (`grok-image:<digest of the bytes>`) and Copilot's (`copilot:<digest of the bytes>`) name bytes
  * that never change, and server/pane-routes.ts serves
  * them immutable. Codex and OpenCode refs are
- * served no-store, and an agent not listed here is taken to be, so their pictures load only when
- * their row is opened (ToolImages).
+ * served no-store, and an agent not listed here is taken to be. Codex also shows thumbnails
+ * through linePictures, without changing that cache policy.
  */
 const CACHED_IMAGE_REFS = [/^[0-9a-f-]{8,64}:\d{1,3}(?::\d{1,3})?$/i, /^pi:/, /^pi-prompt:/, /^grok-image:[a-f0-9]{64}$/, /^copilot:[a-f0-9]{64}$/];
 
@@ -63,9 +64,9 @@ export function cachedImageRef(ref: string): boolean {
   return CACHED_IMAGE_REFS.some((pattern) => pattern.test(ref));
 }
 
-/** The pictures a work line carries: those of `parts` the browser keeps once fetched (cachedImageRef). */
+/** Cached pictures and Codex results stay visible as thumbnails when their tools fold. */
 export function linePictures(parts: readonly ConversationPart[]): WorkImage[] {
-  return workImages(parts).filter((image) => cachedImageRef(image.ref));
+  return workImages(parts).filter((image) => cachedImageRef(image.ref) || CODEX_IMAGE_REF.test(image.ref) || CODEX_TOOL_IMAGE_REF.test(image.ref));
 }
 
 /** The pictures a line draws: the latest `shown`, and how many came before them (the "+N" tile). */

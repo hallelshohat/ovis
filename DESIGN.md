@@ -4730,13 +4730,20 @@ headless choice; sign-in waits continue reconnecting automatically.
 
 ## Codex terminal parity
 
-Codex Chat follows the Codex CLI 0.167 terminal: native command, read and file-change items stay
-visible in their original order, with output, exit status and diffs. Tool arguments start collapsed;
-opening a row reveals its input without hiding results, plans or images when it closes again.
-Model wrappers already represented
-by those native items do not add duplicate rows; wrapper failures and returned images remain visible.
-Native image views use a `Viewed image` row and the existing image viewer. Reasoning summaries
-are visible, while private model context is excluded. Other agents retain their existing folding.
+Settings rows record their icon and preview presence in data attributes. This preserves the existing
+Ovis Settings layout without broad relational selectors making Chrome restyle the chat on typing.
+It changes no visual pattern from the Codex-style chat: tool results remain available and input stays immediate.
+
+Codex Chat uses the same compact work groups as Claude: completed groups fold to a summary with
+failure counts, and a tool row opens its arguments, output and diff on request. Running commands
+show live output; the existing Collapse work setting and the reader's fold choices apply to both.
+Native actions retain their recorded order and exit status. Model wrappers already represented by
+native items do not add duplicate rows; wrapper failures and returned images remain available.
+Codex images stay visible as thumbnails on folded groups and rows, opening in the existing viewer.
+Native image views keep their `Viewed image` action. Reasoning summaries remain available, while
+private model context is excluded. This adapts the existing Claude presentation without copied code.
+Native runtime notices stay readable beside folded work; opening the group puts them back in their
+recorded order among its tools. Runtime errors count in the summary's failure badge too.
 
 Native queued and steering messages use the existing sent-message store. Each transcript receipt
 replaces one waiting bubble; steering keeps the native task identity and does not add a completion

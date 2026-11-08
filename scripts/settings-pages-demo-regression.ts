@@ -4,6 +4,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright-core";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { Globe } from "lucide-react";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp, buildDevelopmentDemoApp } from "./demo-build.ts";
 import { DEMO_FILE_PREVIEW_SCRIPT } from "./demo-file-preview.ts";
@@ -11,7 +14,8 @@ import { openSettingsFolds, openSettingsPage, sheetRisen, themeSide } from "./se
 import { KO } from "../src/lib/i18n.ko.ts";
 import { JA } from "../src/lib/i18n.ja.ts";
 import { ZH } from "../src/lib/i18n.zh.ts";
-import { DEFAULT_SETTINGS, terminalTheme } from "../src/lib/settings.ts";
+import { DEFAULT_SETTINGS, SettingsProvider, terminalTheme } from "../src/lib/settings.ts";
+import { SettingsRow } from "../src/components/SettingsControls.tsx";
 import { rowFor, THEME_IDS, type ThemeId } from "../src/lib/themes.ts";
 import baseline from "../src/lib/themes.legacy-baseline.json";
 import { comboKey, LEGACY_COMBOS } from "./theme-baseline.ts";
@@ -1111,6 +1115,74 @@ async function mergedRows(browser: import("playwright-core").Browser, url: strin
   console.log("PASS the merged rows (Agents order, Show thinking, Tidy dictated text) keep both settings each stands for, through a reload");
 }
 
+/** Real SettingsRow markup under the app's CSS: icon indentation and preview layout survive the typing fix. */
+async function rowLayouts({ browser, url }: { browser: import("playwright-core").Browser; url: string }): Promise<void> {
+  const cases = [
+    { label: "Plain" }, { label: "Reset only", onReset: () => {} }, { label: "Icon", icon: Globe },
+    { label: "Preview", icon: Globe, preview: createElement("span", null, "Preview") },
+    { label: "Null preview", preview: null }, { label: "False preview", preview: false },
+  ];
+  const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+  let markup: string;
+  try {
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    markup = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement("section", { className: "settings-section", "data-row-layout": "" },
+      createElement("div", { className: "settings-card" }, cases.map((item) => createElement(SettingsRow, {
+        ...item, key: item.label, wide: true, description: "Description", condition: createElement("span", { className: "settings-condition" }, "Condition"),
+        children: createElement("button", { className: "btn" }, "Control"),
+      }))),
+    ) }));
+  } finally {
+    if (languages) Object.defineProperty(navigator, "languages", languages);
+    else Reflect.deleteProperty(navigator, "languages");
+  }
+  for (const width of [1280, 390]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, locale: "en" });
+    try {
+      await context.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify(SETTINGS));
+      const page = await context.newPage();
+      await page.goto(`${url}?settings=appearance`);
+      const body = page.locator(".settings-body:not([hidden])");
+      await body.waitFor();
+      await sheetRisen(page);
+      await body.evaluate((node, html) => node.insertAdjacentHTML("afterbegin", html), markup);
+      const rows = await page.locator("[data-row-layout] .settings-row").evaluateAll((nodes) => nodes.map((row) => {
+        const icon = row.querySelector(".settings-row-icon");
+        const line = row.querySelector(".settings-label-line");
+        const preview = row.querySelector(".settings-row-preview");
+        const control = getComputedStyle(row.querySelector(".btn")!);
+        const indent = icon && line ? parseFloat(getComputedStyle(icon).width) + parseFloat(getComputedStyle(icon).marginInlineEnd) + parseFloat(getComputedStyle(line).columnGap) : 0;
+        return { label: row.querySelector(".settings-label")!.textContent, indent,
+          description: parseFloat(getComputedStyle(row.querySelector(".settings-description")!).paddingInlineStart),
+          condition: parseFloat(getComputedStyle(row.querySelector(".settings-condition")!).paddingInlineStart),
+          preview: preview !== null, display: getComputedStyle(row).display, controlColumn: [control.gridColumnStart, control.gridColumnEnd],
+          previewCell: preview === null ? null : [getComputedStyle(preview).gridRowStart, getComputedStyle(preview).gridColumnStart],
+        };
+      }));
+      assert.equal(rows.length, cases.length);
+      for (const row of rows) {
+        assert.equal(row.description, row.indent, `${row.label}: description aligns with the name at ${width}px`);
+        assert.equal(row.condition, row.indent, `${row.label}: condition aligns with the name at ${width}px`);
+        if (row.preview && width <= 640) {
+          assert.equal(row.display, "grid");
+          assert.deepEqual(row.previewCell, ["1", "2"]);
+          assert.deepEqual(row.controlColumn, ["1", "-1"]);
+        } else assert.equal(row.display, "flex");
+      }
+      if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `row-layout-${width}.png`), animations: "disabled" });
+      await page.goto(`${url}?settings=alerts`);
+      await openSettingsFolds(page);
+      const hint = page.getByTestId("push-health-hint");
+      await hint.waitFor({ state: "attached" });
+      assert(await hint.evaluate((node) => parseFloat(getComputedStyle(node).paddingInlineStart) > 0), "the standalone push-health hint keeps its icon indent");
+      await page.goto(`${url}?settings=about`);
+      await page.locator(".settings-about .settings-row-icon").waitFor();
+      assert(await page.locator(".settings-about .settings-label-line").evaluate((line) => line.querySelector("a")!.getBoundingClientRect().left > line.querySelector("svg")!.getBoundingClientRect().right), "the standalone About label stays beside its icon");
+    } finally { await context.close(); }
+  }
+  console.log("PASS Settings icon, reset-only, condition and preview layouts on desktop and mobile");
+}
+
 try {
   await buildDemoApp(app);
   await buildDevelopmentDemoApp(devApp);
@@ -1137,6 +1209,7 @@ try {
   try {
     const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? chromium.executablePath(), headless: true, args: ["--no-sandbox"] });
     try {
+      await rowLayouts({ browser, url });
       for (const [width, language] of [[390, "en"], [320, "en"], [320, "ko"], [320, "ja"], [320, "zh"]] as const) {
         const started = performance.now();
         const strings: Record<string, string> = language === "ko" ? KO : language === "ja" ? JA : language === "zh" ? ZH : {};
