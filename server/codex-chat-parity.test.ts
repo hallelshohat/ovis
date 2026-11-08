@@ -157,3 +157,12 @@ it("accepts compatibility event shapes for summaries, plan updates and warnings"
     { kind: "notice", text: "Connection interrupted; retrying" }, { kind: "notice", text: "Retry limit reached" },
   ]);
 });
+
+// Synthetic regression from the review's supported event shapes; no live session data.
+it("keeps both runtime notices and completion on an aborted turn", () => {
+  const turn = parseCodexTranscript(readFileSync(fixture("runtime-abort"), "utf8")).find((turn) => turn.role === "assistant");
+  expect(turn).toMatchObject({ native_turn_id: "runtime-failure", turn_complete: true, end_ts: "2026-11-08T10:48:04Z", parts: [
+    { kind: "notice", native: true, source: "warning", text: "Connection interrupted; retrying" },
+    { kind: "notice", native: true, source: "error", text: "Retry limit reached" },
+  ] });
+});

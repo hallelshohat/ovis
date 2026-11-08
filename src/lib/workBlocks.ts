@@ -207,11 +207,12 @@ export function workSummary(parts: readonly ConversationPart[]): string {
 }
 
 /**
- * How many calls failed, whatever they were. The folded header says it apart from the counts, where
+ * How many calls and native runtime notices failed. The folded header says it apart from the counts, where
  * it is never cut: it is what a glance at a finished turn must not miss, and the fold hides the row.
  */
 export function workFailed(parts: readonly ConversationPart[]): number {
-  return parts.filter((part) => part.kind === "tool" && part.error === true).length;
+  return parts.filter((part) => (part.kind === "tool" && part.error === true)
+    || (part.kind === "notice" && part.native === true && (part.source === "error" || part.source === "stream_error"))).length;
 }
 
 /** "7s" / "1m 12s" for a block header; null when the span is unknown or nonsense. */
