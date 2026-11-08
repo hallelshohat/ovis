@@ -2361,8 +2361,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   Tabs retain their names, status dots, active underline, keyboard navigation, rename field and
   close confirmation. As the Herdr app's tabs show the program, each tab carries its agent's mark
   (the pane it opens on, else its first agent) before its name, hidden from assistive tech so the
-  tab is named by its words; a working tab's dot is a ring with a gap that turns in 8 steps per
-  `--dur-spin`, the plain dot under reduced motion. A right-click opens tab actions at the pointer, including Move tab left/right
+  tab is named by its words. A working tab's ring turns smoothly once per second on its own
+  compositor layer, matching Ovis's chat tool spinner; reduced motion keeps the plain dot.
+  The mark uses inline-flex so SVG baseline spacing cannot lift it above the ring's center.
+  Zed's SpinnerLabel uses stepped glyph frames; this ring differs to meet the requested smooth motion.
+  A right-click opens tab actions at the pointer, including Move tab left/right
   when a neighbouring position exists. Tabs have no close buttons or chevrons. Touch and narrow layouts show a `⋯` beside
   the selected tab for a trimmed menu, and there a tab is at least `--touch-target` tall and wide, so a one- or
   two-character name (탭 1) is still a finger's target with the `⋯` a target of its own beside it; a desktop with a mouse draws the same `⋯` on the selected tab, hidden in its place
