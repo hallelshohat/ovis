@@ -62,6 +62,7 @@ export const CHAT_JA: Record<string, string> = {
   "{n} other tool": "その他のツール {n} 件",
   "{n} other tools": "その他のツール {n} 件",
   "Read": "読み取り",
+  "Viewed image": "画像を表示",
   "Edited": "編集",
   "Wrote": "書き込み",
   "Ran": "実行",

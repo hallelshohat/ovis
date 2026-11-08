@@ -464,6 +464,14 @@ it("says the open block waits for the user while the agent is blocked, and only 
 });
 
 describe("visibleWorkParts", () => {
+  it("keeps native wrappers with returned images or errors while hiding represented text-only wrappers", () => {
+    const wrapper: ToolPart = { ...tool("exec"), native_wrapper: true };
+    const pictured: ToolPart = { ...wrapper, images: [{ media_type: "image/png", ref: "codex-tool:mixed:0" }] };
+    const failed: ToolPart = { ...wrapper, error: true };
+    expect(visibleWorkParts([wrapper, pictured, failed], false)).toEqual([pictured, failed]);
+    expect(visibleWorkParts([{ ...wrapper, images: [] }], false)).toEqual([]);
+  });
+
   it("draws no rows for skills, nor for thinking unless it is shown", () => {
     const skill: ConversationPart = { kind: "skill", skill: { name: "review", evidence: "invocation", status: "loaded" } };
     expect(visibleWorkParts([skill, thinking("hm")], false)).toEqual([]);
