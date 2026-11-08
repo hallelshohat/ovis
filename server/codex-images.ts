@@ -3,6 +3,7 @@ import { constants, createReadStream, lstatSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { CODEX_IMAGE_REF } from "../shared/codex-image-refs.ts";
 import type { ConversationPart } from "../shared/protocol.ts";
 import { type Held, heldOpenPlatform, openHeldDirectory } from "./held-open.ts";
 
@@ -334,13 +335,12 @@ export function codexOutputPicture(value: unknown): { mediaType: string; data: s
 }
 
 /** A picture a Codex tool returned: the call its output answers, and its place among that output's pictures. */
-export const CODEX_TOOL_IMAGE_REF = /^codex-tool:([A-Za-z0-9_.\-]{1,128}):(\d{1,3})$/;
+export { CODEX_TOOL_IMAGE_REF, CODEX_IMAGE_REF } from "../shared/codex-image-refs.ts";
 
 /** The pictures of a Codex tool's output, in order, each with the type its bytes announce. */
 export function codexOutputPictures(output: unknown): { mediaType: string; data: string }[] {
   return Array.isArray(output) ? output.flatMap((value) => codexOutputPicture(value) ?? []) : [];
 }
-export const CODEX_IMAGE_REF = /^codex-[a-f0-9]{64}$/;
 
 /** Only native user records name attachments; tool output and remote URLs never do. */
 function imageValues(entry: RecordValue): string[] {
