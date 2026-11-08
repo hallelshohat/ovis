@@ -2698,7 +2698,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
       {sentWaiting.length > 0 && <SentWaitingList sends={sentWaiting} paneKey={waitKey} agent={agent}
         resting={workStatus === "idle" || workStatus === "done"} onOpenTerminal={openTerminal} />}
-      {connected && !promptStale && codexDisplay !== null && <div className="chat-codex-status" aria-label={t("Codex status")}>
+      {connected && !promptStale && codexDisplay !== null && codexDisplay.status_lines.length > 0 && <div className="chat-codex-status" aria-label={t("Codex status")}>
         {codexDisplay.status_lines.map((line, index) => <pre key={index}>{line}</pre>)}
       </div>}
       {error !== null && !waiting && (errorStatus === 401

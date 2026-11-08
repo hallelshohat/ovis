@@ -10,10 +10,9 @@ export function readCodexDisplay({ screen }: { screen: string }): CodexDisplay |
     const warnings = warningScreen(screen);
     return warnings === null ? null : { status_lines: [warnings], pending_inputs: [] };
   }
-  const { rows, composer, status, footer } = live;
+  const { rows, composer, status } = live;
   const panel = status < 0 ? [] : rows.slice(status + 1, composer);
-  const command = panel.filter((row) => row.text.startsWith("└")).map((row) => row.text);
-  return { status_lines: [...screenNotices(screen), ...(status < 0 ? [] : [rows[status]!.text, ...command]), ...footer], pending_inputs: pendingInputs(panel) };
+  return { status_lines: screenNotices(screen), pending_inputs: pendingInputs(panel) };
 }
 
 function warningScreen(screen: string): string | null {
