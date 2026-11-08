@@ -22,8 +22,9 @@ export function turnRevision(turn: ConversationTurn, immutable = false): string 
     if (part.kind === "text" || part.kind === "thinking" || part.kind === "compact" || part.kind === "notice") add(part.text);
     // a tool row draws its name, summary, input, output, error, images and skill: all of it counts
     else add(JSON.stringify(part));
+    if ((part.kind === "thinking" || part.kind === "notice") && part.native) add("native");
   }
-  const revision = `${turn.role}|${turn.ts ?? ""}|${turn.end_ts ?? ""}|${turn.parts.length}|${(hash >>> 0).toString(36)}`;
+  const revision = `${turn.role}|${turn.ts ?? ""}|${turn.end_ts ?? ""}|${turn.native_turn_id ?? ""}|${turn.input_kind ?? ""}|${turn.turn_complete ?? ""}|${turn.parts.length}|${(hash >>> 0).toString(36)}`;
   if (immutable) revisions.set(turn, revision);
   return revision;
 }

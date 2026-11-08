@@ -119,6 +119,7 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   // the last row carries the cursor once a move has put it there
   // Codex's folder trust prompt ends "enter continue · esc back" or, from 0.163, "· esc quit".
   // Only those two: its update prompt ends "· esc skip" and must not read as an approval.
+  if (prompt.responder === "codex-approval" && prompt.kind === "plan") return ends(/^enter select\s*·\s*esc back$/i);
   if (prompt.responder === "codex-approval") return ends(/press enter to confirm|esc to cancel|enter continue\s*·\s*esc (?:back|quit)$|^(?:[›>❯]\s*)?\d+\.\s+(?:No|Reject|Cancel|Deny)\b/i);
   // the panel (with 18.13's composer under it), or the older Approve/Deny menu's rows
   if (prompt.responder === "omp-approval") return ompApprovalPanelShown(screen) || ends(/^(?:[›>❯•]\s*)?(?:Approve|Deny)$|esc.*cancel/i);

@@ -12,6 +12,7 @@ import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../s
 import { chromePath } from "./chrome-path.ts";
 
 const root = mkdtempSync(join(tmpdir(), "ovis-chat-browser-"));
+const evidence = process.env["UI_EVIDENCE_DIR"] ?? join(root, "evidence");
 const codexHome = join(root, "codex");
 const rollout = join(codexHome, "sessions", "rollout.jsonl");
 const answer = "The conversation is now clean. Native transcript records preserve the user request and final answer while internal instructions stay hidden.";
@@ -146,7 +147,7 @@ try {
   // a failed call says so after its object, never between the verb and what it ran
   const failedRow = log.getByRole("button", { name: /^Ran bun test failed/ });
   assert.equal(await failedRow.getAttribute("title"), "exec_command · bun test");
-  await row.click();
+  assert.equal(await row.getAttribute("aria-expanded"), "true", "the previously opened tool stays open across its outer work fold");
   assert.equal(await log.locator(".work-row-detail > :first-child").innerText(), "exec_command");
   await log.getByText("git status", { exact: true }).last().waitFor();
   assert.equal(await log.locator(".chat-agent-meta").count(), 1);
@@ -252,10 +253,10 @@ try {
     const level = document.querySelector(".composer-reasoning");
     return level !== null && (level.scrollWidth <= level.clientWidth || level.getBoundingClientRect().width <= 1);
   }, undefined, { timeout: 5_000 });
-  mkdirSync("evidence/chat-mode", { recursive: true });
-  await page.screenshot({ path: "evidence/chat-mode/mobile.png", fullPage: true, animations: "disabled" });
+  mkdirSync(evidence, { recursive: true });
+  await page.screenshot({ path: join(evidence, "mobile.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.screenshot({ path: "evidence/chat-mode/desktop.png", fullPage: true, animations: "disabled" });
+  await page.screenshot({ path: join(evidence, "desktop.png"), fullPage: true, animations: "disabled" });
   // Read back Chromium's actual clipboard from the secure loopback page. The copy itself
   // runs on an ordinary HTTP hostname, where navigator.clipboard genuinely does not exist.
   const secureOrigin = `http://127.0.0.1:${server.port}`;
@@ -320,7 +321,7 @@ try {
   assert.equal(await insecureLog.getByRole("alert").filter({ hasText: "Couldn't copy. Select the text and copy it manually." }).count(), 2);
   assert.equal(await insecureLog.getByRole("button", { name: "Code copied", exact: true }).count(), 0);
   assert.equal(await insecure.locator("body > textarea[readonly]").count(), 0, "temporary copy field is removed");
-  await insecure.screenshot({ path: "evidence/chat-mode/clipboard-refused.png", fullPage: true, animations: "disabled" });
+  await insecure.screenshot({ path: join(evidence, "clipboard-refused.png"), fullPage: true, animations: "disabled" });
   await insecure.close();
   console.log("PASS actual clipboard contents on HTTP, denied API fallback, and refused-copy feedback");
   rmSync(rollout);

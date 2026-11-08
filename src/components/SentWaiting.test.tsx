@@ -29,6 +29,11 @@ const textWithoutTags = (markup: string): string => markup.replace(/<[^>]*>/gu, 
 
 afterEach(() => { setSystemTime(); });
 
+test("shows native steering and queue states beside the message", () => {
+  expect(textWithoutTags(render(at, [{ ...send, native: "steering" }]))).toContain("Steering · current turn");
+  expect(textWithoutTags(render(at, [{ ...send, native: "queued" }]))).toContain("Queued · next turn");
+});
+
 describe("SentWaitingList", () => {
   test("shows only the sent words, with no caption, while the agent is about to take them", () => {
     for (const now of [at, at + WAITING_HINT_MS - 1]) {
