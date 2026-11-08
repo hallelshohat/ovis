@@ -5577,6 +5577,18 @@ headless choice; sign-in waits continue reconnecting automatically.
 | Drawer has no focus trap | `.sidebar.is-open` | Closed state leaves the tab order, but open-state trapping is not implemented | Add a shared focus utility |
 | Modal focus is initialized, not fully trapped | Dialog components | Escape/scrim/close work; tab containment is not shared | Add the same focus utility |
 
+## Codex terminal parity
+
+Codex Chat follows the Codex CLI 0.167 terminal: native command, read and file-change items stay
+open in their original order, with output, exit status and diffs. Model wrappers already represented
+by those native items do not add duplicate rows; wrapper failures remain visible. Reasoning summaries
+are visible, while private model context is excluded. Other agents retain their existing folding.
+
+Native queued and steering messages use the existing sent-message store. Each transcript receipt
+replaces one waiting bubble; steering keeps the native task identity and does not add a completion
+divider before the continued reply. Live footer details, update notices and `/status` output sit near
+the composer. Plan confirmation uses the existing prompt card and guarded answer route.
+
 ## Local Markdown images in Chat
 
 User attachment galleries keep the existing Codex-style image presentation. Composer uploads

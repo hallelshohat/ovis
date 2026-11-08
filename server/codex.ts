@@ -21,6 +21,8 @@ import { kiroCodexProcess, kiroNested, kiroWrapper } from "./kiro-terminal.ts";
 import { resolveAgent } from "./pane-context.ts";
 import { FOOTER } from "./codex-steering.ts";
 import { codexStartScreenUnused } from "./start-screen.ts";
+import { codexDisplayEvent, codexNativeItem } from "./codex-items.ts";
+import { codexInputSessions } from "../shared/codex-chunks.ts";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -189,6 +191,7 @@ function withoutMemoryCitations(text: string): string {
 export function codexCallFailed(output: string): boolean {
   const head = output.slice(0, 2000);
   if (/^Script completed\b/m.test(head)) return false;
+  if (/^failed to spawn code-mode host\b/.test(head)) return true;
   if (/^Script failed\b/m.test(head) || /apply_patch verification failed/.test(head)) return true;
   const code = /^(?:Process exited with code|Exit code:) (\d+)$/m.exec(head) ?? /"exit_code":\s*(\d+)/.exec(head);
   return code !== null && code[1] !== "0";
@@ -197,10 +200,13 @@ export function codexCallFailed(output: string): boolean {
 interface CodexParseState {
   turns: ConversationTurn[];
   tools: Map<string, Extract<ConversationPart, { kind: "tool" }>>;
-  messages: { role: string; text: string; source: string; ts: string; paired: boolean; part: Extract<ConversationPart, { kind: "text" }>; turn: ConversationTurn }[];
+  messages: { role: string; text: string; sources: Set<string>; ts: string; part: Extract<ConversationPart, { kind: "text" }>; turn: ConversationTurn }[];
   startedAt?: string;
   skillEvents?: Set<string>;
   activeTurnId?: string;
+  nativeItems?: Map<string, ConversationPart>;
+  userTurnId?: string;
+  nativeCalls?: { at: number; end?: number; part: Extract<ConversationPart, { kind: "tool" }> }[];
 }
 
 /** Complete records are folded once; snapshots detach mutable tools from prior HTTP answers. */
@@ -209,7 +215,8 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
   const assistant = (ts: string): ConversationTurn => {
     let turn = turns.at(-1);
     if (turn?.role !== "assistant") {
-      turn = { role: "assistant", ts: state.startedAt || ts || null, parts: [] };
+      turn = { role: "assistant", ts: state.startedAt || ts || null, parts: [],
+        ...(state.activeTurnId ? { native_turn_id: state.activeTurnId, turn_complete: false } : {}) };
       turns.push(turn);
     }
     if (ts) turn.end_ts = ts;
@@ -217,12 +224,12 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
   };
   const message = (role: "user" | "assistant", text: string, source: string, ts: string, phase?: "commentary" | "final_answer", images: ConversationPart[] = []): void => {
     const body = role === "user" ? questionReply(text) ?? text
-      : withoutMemoryCitations(text);
+      : withoutMemoryCitations(text.replace(/^\s*<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>\s*$/, "$1"));
     if (!body.trim() && images.length === 0) return;
-    const duplicate = messages.slice(-8).reverse().find((other) => !other.paired && other.role === role && other.text === body
-      && other.source !== source && (other.ts === ts || Math.abs(Date.parse(other.ts) - Date.parse(ts)) <= 1000));
+    const duplicate = messages.slice(-8).reverse().find((other) => other.role === role && other.text === body
+      && !other.sources.has(source) && (other.ts === ts || Math.abs(Date.parse(other.ts) - Date.parse(ts)) <= 1000));
     if (duplicate) {
-      duplicate.paired = true;
+      duplicate.sources.add(source);
       if (phase) duplicate.part.phase = phase;
       // Prefer the event's local paths over a response's inline copies of the same images.
       if (images.length > 0 && (source === "event" || !duplicate.turn.parts.some((part) => part.kind === "image"))) {
@@ -231,10 +238,12 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
       return;
     }
     const part: Extract<ConversationPart, { kind: "text" }> = { kind: "text", text: body, ...(phase ? { phase } : {}) };
-    const turn = role === "user" ? { role, ts: ts || null, parts: [...images, ...(body.trim() ? [part] : [])] } : assistant(ts);
-    if (role === "user") turns.push(turn);
+    const turn: ConversationTurn = role === "user" ? { role, ts: ts || null, parts: [...images, ...(body.trim() ? [part] : [])],
+      ...(state.activeTurnId ? { native_turn_id: state.activeTurnId,
+        ...(state.userTurnId === state.activeTurnId ? { input_kind: "steering" as const } : {}) } : {}) } : assistant(ts);
+    if (role === "user") { turns.push(turn); state.userTurnId = state.activeTurnId; }
     else turn.parts.push(part);
-    messages.push({ role, text: body, source, ts, paired: false, part, turn });
+    messages.push({ role, text: body, sources: new Set([source]), ts, part, turn });
     if (messages.length > 8) messages.shift();
   };
 
@@ -243,6 +252,40 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
       const payload = record(entry.payload);
       const ts = string(entry.timestamp);
       if (entry.type === "event_msg") {
+        if ((payload.type === "item_completed" || payload.type === "item_started") && (!state.activeTurnId || !payload.turn_id || payload.turn_id === state.activeTurnId)) {
+          const native = codexNativeItem(payload.item);
+          const nativeMessage = native?.message;
+          if (nativeMessage && payload.type === "item_completed") message(nativeMessage.role, contentText(nativeMessage.text, nativeMessage.role === "user"), "native", ts, nativeMessage.phase);
+          const display = native?.display;
+          if (display) {
+            const { id, part } = display;
+            if (part.kind === "tool" && typeof payload.started_at_ms === "number") {
+              const started = payload.started_at_ms;
+              const wrapper = [...state.nativeCalls ?? []].reverse().find((call) => call.at <= started && (call.end === undefined || started <= call.end));
+              if (wrapper) wrapper.part.native_wrapper = true;
+              if (display.processId) for (const call of state.nativeCalls ?? []) {
+                if (codexInputSessions(call.part.input).includes(display.processId)) call.part.native_wrapper = true;
+              }
+            }
+            const known = state.nativeItems?.get(id);
+            if (part.kind === "tool") trimOutput(part, part.output, id);
+            if (known) Object.assign(known, part);
+            else if (!(part.kind === "thinking" && !part.text.trim())) {
+              const turn = assistant(ts);
+              const duplicate = part.kind === "thinking" ? [...turn.parts].reverse().find((other) => other.kind === "thinking" && !other.native && other.text === part.text) : undefined;
+              if (duplicate?.kind === "thinking") duplicate.native = true;
+              else turn.parts.push(part);
+              (state.nativeItems ??= new Map()).set(id, duplicate ?? part);
+            }
+          }
+        }
+        const event = codexDisplayEvent(payload);
+        if (event?.kind === "notice") assistant(ts).parts.push(event);
+        if (event?.kind === "tool") {
+          const existing = [...assistant(ts).parts].reverse().find((part) => part.kind === "tool" && part.name === "update_plan" && part.state === "pending");
+          if (existing?.kind === "tool") existing.native = true;
+          else assistant(ts).parts.push(event);
+        }
         if (payload.type === "item_completed" && (!state.activeTurnId || !payload.turn_id || payload.turn_id === state.activeTurnId)) {
           const item = record(payload.item);
           const id = string(item.id);
@@ -261,6 +304,8 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         if (payload.type === "task_started") {
           state.startedAt = string(payload.started_at) || ts;
           state.activeTurnId = string(payload.turn_id) || undefined;
+          state.nativeItems = new Map();
+          state.nativeCalls = [];
         }
         // a turn that failed (a usage limit, a refused request) records why on its end, and nothing else: no answer
         // of the turn read as running only, as its items are (a sub-agent's turn ends in its own record)
@@ -270,7 +315,9 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         if (payload.type === "task_complete" || payload.type === "turn_aborted") {
           const turn = turns.at(-1);
           if (turn?.role === "assistant" && ts) turn.end_ts = ts;
+          if (turn?.native_turn_id) turn.turn_complete = true;
           state.startedAt = undefined;
+          state.activeTurnId = undefined;
         }
         if (payload.type === "user_message" && (!payload.kind || payload.kind === "plain")) {
           message("user", contentText(payload.message, true), "event", ts, undefined, codexImageParts(entry));
@@ -306,7 +353,13 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         }
       } else if (payload.type === "reasoning") {
         const body = contentText(payload.summary);
-        if (body.trim()) assistant(ts).parts.push({ kind: "thinking", text: body });
+        const id = string(payload.id);
+        const paired = id ? state.nativeItems?.has(id) : assistant(ts).parts.some((part) => part.kind === "thinking" && part.native && part.text === body);
+        if (body.trim() && !paired) {
+          const part: ConversationPart = { kind: "thinking", text: body, native: true };
+          assistant(ts).parts.push(part);
+          if (id) (state.nativeItems ??= new Map()).set(id, part);
+        }
       } else if (payload.type === "function_call" || payload.type === "custom_tool_call") {
         const name = string(payload.name) || "tool";
         const raw = payload.type === "function_call" ? payload.arguments : payload.input;
@@ -327,10 +380,13 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         // the native id, and pending until an output record answers it
         if (typeof payload.call_id === "string" && payload.call_id.length > 0) { part.call_id = payload.call_id; part.state = "pending"; }
         assistant(ts).parts.push(part);
+        (state.nativeCalls ??= []).push({ at: Date.parse(ts), part });
         if (typeof payload.call_id === "string") tools.set(payload.call_id, part);
       } else if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") {
         const tool = tools.get(string(payload.call_id));
         if (!tool) continue;
+        const call = state.nativeCalls?.find((call) => call.part === tool);
+        if (call) call.end = Date.parse(ts);
         const output = contentText(payload.output);
         trimOutput(tool, output, string(payload.call_id));
         if (codexCallFailed(output)) tool.error = true;

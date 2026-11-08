@@ -32,7 +32,7 @@ const CODEX_MODEL_TITLE_RE = /^(?:Select Model and Effort|Select Reasoning Level
 const CODEX_MODEL_MORE_ROW_RE = /^More reasoning(?:…|\.{3})$/;
 
 const CODEX_APPROVAL_HEADER_RE =
-  /(?:Would you like to (?:run|make|apply|continue|grant)|Allow Codex to|Approve (?:this )?(?:app )?tool call|Do you trust the contents|Trust this folder\?|Enable full access)/i;
+  /(?:Would you like to (?:run|make|apply|continue|grant)|Allow Codex to|Approve (?:this )?(?:app )?tool call|Do you trust the contents|Trust this folder\?|Enable full access|Implement this plan\?)/i;
 
 function parseCodexContinueMenu(screen: string): ParsedPrompt | null {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
@@ -148,7 +148,10 @@ function parseCodexApproval(screen: string): ParsedPrompt | null {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const headerIndex = findLastIndex(lines, (line) => CODEX_APPROVAL_HEADER_RE.test(line) && !NUMBERED_OPTION_RE.test(line));
   if (headerIndex < 0) return null;
-  const rows = parseNumberedRows(lines, headerIndex + 1, lines.length);
+  const plan = cleanLine(lines[headerIndex]!) === "Implement this plan?";
+  const planHint = plan ? findLastIndex(lines, (line) => CODEX_MODEL_OPEN_HINT_RE.test(cleanLine(line))) : -1;
+  if (plan && planHint < headerIndex) return null;
+  const rows = plan ? menuRows(lines, headerIndex + 1, planHint) : parseNumberedRows(lines, headerIndex + 1, lines.length);
   if (!sequentialRows(rows) || rows.length < 2 || rows.filter((row) => row.selected).length !== 1) return null;
   // "Trust this folder? Codex can read, …": the question heads the card, its explanation joins the body
   const header = cleanLine(lines[headerIndex]!);
@@ -156,12 +159,15 @@ function parseCodexApproval(screen: string): ParsedPrompt | null {
   const heading = split ? split[1]! : header;
   const body = [split?.[2] ?? "", ...lines.slice(headerIndex + 1, rows[0]!.lineIndex).map(cleanLine)].filter(Boolean).join("\n");
   return finishPrompt("codex", {
-    kind: "approval", title: heading, question: heading, body: body || null,
-    options: rows.map((row) => ({ label: row.label, description: null })), multi_select: false, custom_option_index: null,
+    kind: plan ? "plan" : "approval", title: heading, question: heading, body: body || null,
+    options: rows.map((row) => {
+      const [label, ...description] = plan ? row.label.split(/\s{2,}/) : [row.label];
+      return { label: label!, description: plan ? [...description, row.description].filter(Boolean).join(" ") || null : null };
+    }), multi_select: false, custom_option_index: null,
   }, {
     responder: "codex-approval", menuLabels: rows.map((row) => row.label),
     selectedIndex: rows.findIndex((row) => row.selected), checkedOptionIndices: [], customMenuIndex: null,
-    rejectWithEscapeIndex: rows.findIndex((row) => /^(?:No|Reject|Cancel|Deny)\b/i.test(row.label)),
+    rejectWithEscapeIndex: plan ? null : rows.findIndex((row) => /^(?:No|Reject|Cancel|Deny)\b/i.test(row.label)),
   });
 }
 
