@@ -210,6 +210,31 @@ try {
   await capture("mobile");
   assert.deepEqual(errors, []);
   console.log("PASS mobile layout and no browser errors");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  for (const source of ["error", "stream_error"]) {
+    const aborted = fixture("runtime-abort.jsonl").replace('"type":"error"', `"type":"${source}"`);
+    writeFileSync(rollout, [header, ...lines.slice(start), fixture("0.167.0-mixed-image.jsonl"), aborted].join("\n") + "\n");
+    await page.reload();
+    await log.getByText("Show runtime failures.", { exact: true }).waitFor();
+    const runtime = log.locator(".chat-turn-agent").last();
+    const head = runtime.locator(".work-block-head");
+    await head.waitFor();
+    await runtime.scrollIntoViewIfNeeded();
+    await capture(`runtime-${source}-initial`);
+    assert.equal(await head.getAttribute("aria-expanded"), "false");
+    assert.match(await runtime.locator(".work-block-failed").innerText(), /1 failed/);
+    const notices = runtime.locator(".chat-native-notice");
+    assert.deepEqual(await notices.allInnerTexts(), ["Connection interrupted; retrying", "Retry limit reached"]);
+    assert.equal(await notices.first().isVisible(), true);
+    assert.equal(await notices.last().isVisible(), true);
+    for (const expanded of [true, false]) {
+      await head.click();
+      assert.equal(await head.getAttribute("aria-expanded"), String(expanded));
+      assert.deepEqual(await notices.allInnerTexts(), ["Connection interrupted; retrying", "Retry limit reached"], "fold transitions never duplicate native notices");
+    }
+    await capture(`runtime-${source}-folded`);
+  }
+  console.log("PASS settled runtime warnings/errors stay visible and counted while work is folded");
   await checkTyping({ page, paneId });
   await capture("typing");
   assert.deepEqual(errors, []);

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { parseCodexTranscript } from "../../server/codex.ts";
 import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
@@ -146,6 +148,23 @@ describe("Codex tool details", () => {
   });
 });
 
+describe("Codex runtime notices", () => {
+  const transcript = readFileSync(new URL("../../server/fixtures/codex-chat-parity/runtime-abort.jsonl", import.meta.url), "utf8");
+  it("shows the parsed aborted turn's warnings and errors without opening its work", () => {
+    for (const source of ["error", "stream_error"]) {
+      const turn = parseCodexTranscript(transcript.replace('"type":"error"', `"type":"${source}"`)).find((turn) => turn.role === "assistant");
+      expect(turn?.turn_complete).toBe(true);
+      for (const foldWork of [false, true]) {
+        const html = render(turn!.parts, { live: false }, "assistant", { foldWork });
+        expect(expanded(html)).toEqual([false]);
+        expect(html).toContain("Connection interrupted; retrying");
+        expect(html).toContain("Retry limit reached");
+        expect(html).toContain("1 failed");
+      }
+    }
+  });
+});
+
 describe("Compaction and failed requests (#901)", () => {
   const failed = (error: string): ConversationPart => ({ kind: "text", text: `Error: ${error}`, failed: true });
   const rows = (html: string) => [...html.matchAll(/class="chat-skill is-error chat-failed-requests"><summary>.*?<span class="chat-skill-name">([^<]*)</g)].map((match) => match[1]);
@@ -278,6 +297,26 @@ describe("an agent turn's folded work, drawn again", () => {
     await toggle(0);
     await remount(settled);
     expect(opened()).toEqual([false]);
+  });
+
+  it("keeps native notices visible when they arrive after the reader folded a live group", async () => {
+    const command: ConversationPart = { kind: "tool", native: true, name: "exec_command", summary: "ls", input: "{}", output: "", state: "ok" };
+    await draw([command]);
+    await toggle(0);
+    const parts: ConversationPart[] = [command,
+      { kind: "notice", native: true, source: "warning", text: "Connection interrupted; retrying" },
+      { kind: "notice", native: true, source: "error", text: "Retry limit reached" },
+    ];
+    await draw(parts);
+    expect(opened()).toEqual([false]);
+    const notices = () => renderer!.root.findAll((node) => node.type === "pre" && node.props.className === "chat-inline-state chat-native-notice").map((node) => node.props.children);
+    expect(notices()).toEqual(["Connection interrupted; retrying", "Retry limit reached"]);
+    await toggle(0);
+    expect(notices()).toEqual(["Connection interrupted; retrying", "Retry limit reached"]);
+    await toggle(0);
+    await remount(parts);
+    expect(opened()).toEqual([false]);
+    expect(notices()).toEqual(["Connection interrupted; retrying", "Retry limit reached"]);
   });
 
   it("keeps reasoning as the reader opened or closed it for its message, whatever Expand thinking says", async () => {
