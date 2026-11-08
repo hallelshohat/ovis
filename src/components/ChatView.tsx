@@ -452,11 +452,11 @@ function PatchView({ patch }: { patch: string }) {
   </div>)}</div>;
 }
 
-function ToolInputView({ part, expanded = true }: { part: ToolPartType; expanded?: boolean }) {
+function ToolInputView({ part }: { part: ToolPartType }) {
   const open = useContext(OpenFileContext);
   const t = useT();
-  const raw = expanded ? <pre className="chat-tool-io">{part.input}</pre> : null;
-  if (part.arguments_omitted) return expanded ? <pre className="chat-tool-io">{t("Arguments omitted (too large)")}</pre> : null;
+  const raw = <pre className="chat-tool-io">{part.input}</pre>;
+  if (part.arguments_omitted) return <pre className="chat-tool-io">{t("Arguments omitted (too large)")}</pre>;
   // a todo call shows the list as it stood after it, when the agent answered with it
   const after = isTodoTool(part.name) ? parseTodoAnswer(part.output) : null;
   if (after !== null && after.length > 0) return <TodoList items={after} />;
@@ -486,7 +486,7 @@ function ToolInputView({ part, expanded = true }: { part: ToolPartType; expanded
   </li>)}</ol>;
   const str = (key: string): string | undefined => typeof parsed[key] === "string" ? parsed[key] : undefined;
   const command = str("command") ?? str("cmd");
-  if (command !== undefined) return expanded ? <div className="chat-tool-io"><pre>{linkFilePaths(command, open)}</pre>{(str("cwd") ?? str("description")) !== undefined && <p className="chat-tool-io-meta">{str("cwd") ?? str("description")}</p>}</div> : null;
+  if (command !== undefined) return <div className="chat-tool-io"><pre>{linkFilePaths(command, open)}</pre>{(str("cwd") ?? str("description")) !== undefined && <p className="chat-tool-io-meta">{str("cwd") ?? str("description")}</p>}</div>;
   const oldString = str("old_string");
   const newString = str("new_string");
   if (oldString !== undefined || newString !== undefined) return <div className="chat-tool-io">{str("file_path") !== undefined && <ToolFile path={str("file_path")!} />}<EditDiff before={oldString ?? ""} after={newString ?? ""} /></div>;
@@ -503,12 +503,11 @@ function ToolInputView({ part, expanded = true }: { part: ToolPartType; expanded
     {sendUserFile.files.map((file, index) => <ToolFile key={`${index}:${file}`} path={file} />)}
   </div>;
   const editScript = str("input");
-  if (editScript !== undefined) return expanded ? <pre className="chat-tool-io chat-diff">{editScript.split("\n").map((line, index) => <span key={index} className={ompEditLineClass(line)}>{line}{"\n"}</span>)}</pre> : null;
+  if (editScript !== undefined) return <pre className="chat-tool-io chat-diff">{editScript.split("\n").map((line, index) => <span key={index} className={ompEditLineClass(line)}>{line}{"\n"}</span>)}</pre>;
   const content = str("content");
   if (content !== undefined) return <div className="chat-tool-io">{(str("file_path") ?? str("path")) !== undefined && <ToolFile path={(str("file_path") ?? str("path"))!} />}<pre>{content}</pre></div>;
   const path = str("file_path") ?? str("path");
   if (path !== undefined) {
-    if (!expanded) return null;
     return <div className="chat-tool-io"><ToolFile path={path} suffix={str("pattern") !== undefined ? ` — /${str("pattern")}/` : undefined} /></div>;
   }
   for (const [key, toRows] of [["list", phaseRows], ["todos", todoRows], ["plan", planRows], ["tasks", taskRows]] as const) {
@@ -854,16 +853,13 @@ function ToolOutputText({ stateKey, output, whole }: { stateKey: string; output:
  * verb table knows reads as verb + object, and its id moves to the title and the opened detail;
  * any other keeps its id in front, as the agent names it.
  */
-function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], since = null, terminal = false }: { paneId: string; part: ToolPartType; stateKey: string; state?: TodoAttempt["state"]; live?: boolean; parts?: readonly ConversationPart[]; since?: string | null; terminal?: boolean }) {
+function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], since = null }: { paneId: string; part: ToolPartType; stateKey: string; state?: TodoAttempt["state"]; live?: boolean; parts?: readonly ConversationPart[]; since?: string | null }) {
   const t = useT();
   // a call of the running turn that has not answered: it runs now, as the terminal's spinner says
   const running = live && part.state === "pending";
-  // Codex keeps results visible independently of its optional argument detail.
   const watching = running && isCommandTool(part.name);
-  const terminalResult = terminal || part.native === true;
   const [chosen, setOpen] = useChatRowToggle(stateKey, null);
-  const open = chosen ?? (!terminalResult && watching);
-  const showResult = terminalResult || open;
+  const open = chosen ?? watching;
   const focus = useRowFocus<HTMLButtonElement>(stateKey);
   // an update inside a todo run: the run already shows the list it left, so the update shows what it sent and got back
   const attempt = state !== undefined;
@@ -897,9 +893,9 @@ function WorkRow({ paneId, part, stateKey, state, live = false, parts = [], sinc
     </button>
     {background !== null && <BackgroundTaskChip background={background} />}
     {/* opened, the row shows its pictures larger in its detail */}
-    {!showResult && <LineImages paneId={paneId} images={images} />}
+    {!open && <LineImages paneId={paneId} images={images} />}
   </div>
-  {showResult && <div className="work-row-detail">{open && verb !== null && <p className="work-row-tool">{part.name}</p>}{attempt ? open && <RawToolInput part={part} /> : <ToolInputView part={part} expanded={open} />}<ToolImages paneId={paneId} part={part} />{watching && <LiveOutput paneId={paneId} part={part} parts={parts} since={since} />}{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><ToolOutputText key={whole.text !== null ? `whole:${part.output_ref ?? ""}` : "preview"} stateKey={`${stateKey}:${whole.text !== null ? `whole:${part.output_ref ?? ""}` : "output"}`} output={output} whole={whole.text !== null} />
+  {open && <div className="work-row-detail">{verb !== null && <p className="work-row-tool">{part.name}</p>}{attempt ? <RawToolInput part={part} /> : <ToolInputView part={part} />}<ToolImages paneId={paneId} part={part} />{watching && <LiveOutput paneId={paneId} part={part} parts={parts} since={since} />}{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><ToolOutputText key={whole.text !== null ? `whole:${part.output_ref ?? ""}` : "preview"} stateKey={`${stateKey}:${whole.text !== null ? `whole:${part.output_ref ?? ""}` : "output"}`} output={output} whole={whole.text !== null} />
     {part.output_ref !== undefined && whole.text === null && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
       {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
     </button>}</section>}</div>}
@@ -1012,7 +1008,7 @@ function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThin
   // named by its first part's place in the turn: appended parts never rename it
   const [chosenOpen, setOpen] = useChatRowToggle(memoryKey, null);
   // only the run the agent is in now is open; a run it left reads as the terminal's one folded line
-  const open = chosenOpen ?? (terminal || workBlockStartsOpen({ live, waiting, last: false }, parts, foldWork));
+  const open = chosenOpen ?? workBlockStartsOpen({ live, waiting, last: false }, parts, foldWork);
   // reading or working inside the block is a choice to keep it: the fold at the end of the turn
   // must not take the rows from under the reader's focus or close the row they opened
   const keepOpen = () => { if (chosenOpen === null) setOpen(true); };
@@ -1036,7 +1032,7 @@ function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThin
         {/* its own span: the counts before it are cut on a narrow screen, a failure never is */}
         {failed > 0 && <span className="work-block-failed">· {t("{n} failed", { n: failed })}</span>}
       </button>
-      {/* folded, the block's line carries its tools' pictures the browser keeps (linePictures); opened, each row carries its own */}
+      {/* folded, the block's line carries its tools' thumbnails; opened, each row carries its own */}
       {!open && <LineImages paneId={paneId} images={images} />}
     </div>
     {/* the rows open and fold at the block's measured height; folded and settled, they are not drawn */}
@@ -1044,12 +1040,18 @@ function WorkBlockView({ paneId, parts, work, memoryKey, live, waiting, showThin
       <div className="work-block-rows" onFocus={keepOpen} onPointerDown={keepOpen}>{visible.map((part) =>
         part.kind === "thinking" ? <ThinkingRow key={`thinking:${at.get(part)}`} stateKey={`thinking:${at.get(part)}`} text={part.text} defaultOpen={terminal || expandThinking} />
           : part.kind === "text" ? <div key={`text:${at.get(part)}`} className="work-narration"><Markdown>{part.text}</Markdown></div>
-            : part.kind === "notice" ? <pre key={`notice:${at.get(part)}`} className="chat-inline-state chat-native-notice">{part.text}</pre>
+            : part.kind === "notice" ? (open || !part.native) && <WorkNotice key={`notice:${at.get(part)}`} notice={part} />
             : part.kind === "tool" ? groups.has(part) ? <TodoGroupRow key={groups.get(part)!.id} paneId={paneId} group={groups.get(part)!} stateKeyOf={toolKey} />
-              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} parts={work.parts} since={since} terminal={terminal} /> : null)}
+              : grouped.has(part) ? null : <WorkRow key={toolKey(part)} stateKey={toolKey(part)} paneId={paneId} part={part} live={live} parts={work.parts} since={since} /> : null)}
       </div>
     </AnimatedHeight>
+    {!open && visible.map((part) => part.kind === "notice" && part.native
+      ? <WorkNotice key={`notice:${at.get(part)}`} notice={part} /> : null)}
   </section>;
+}
+
+function WorkNotice({ notice }: { notice: Extract<ConversationPart, { kind: "notice" }> }) {
+  return <pre className="chat-inline-state chat-native-notice">{notice.text}</pre>;
 }
 
 /** Skill evidence stays visible even when the surrounding work block is folded. */

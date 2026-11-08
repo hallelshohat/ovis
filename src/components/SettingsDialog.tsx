@@ -1835,7 +1835,7 @@ function AboutPage({ updates, herdrVersion, herdrRuntime, herdrCore, herdrRuntim
       </div>
       <SettingsGroup title={t("About")} className="settings-about" section="about">
         <div className="settings-row">
-          <div className="settings-row-text">
+          <div className="settings-row-text" data-icon="">
             <span className="settings-label-line"><Globe className="settings-row-icon" aria-hidden="true" /><a className="settings-link" href="https://ovis.sh/" target="_blank" rel="noreferrer">ovis.sh</a></span>
           </div>
           <a className="btn" href="https://github.com/devswha/ovis" target="_blank" rel="noreferrer"><Star aria-hidden="true" />{t("Star on GitHub")}</a>
