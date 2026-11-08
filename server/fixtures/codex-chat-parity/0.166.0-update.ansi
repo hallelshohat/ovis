@@ -4,7 +4,7 @@ To update your account to use zsh, please run `chsh -s /bin/zsh`.
 For more details, please visit https://support.apple.com/kb/HT208050.
 bash-3.2$ codex --no-daemon --no-alt-screen --sandbox workspace-write
 WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir "/workspace/codex-parity" (codex_home: AbsolutePathBuf("/workspace/codex-parity/codex-update"))
- 
+
 [0m[1m  Folder access[0m
   [0m[2m/workspace/codex-parity/project                              [0m
 
@@ -21,8 +21,8 @@ WARNING: proceeding, even though we could not create PATH aliases: Refusing to c
      [0m[2m/workspace/codex-parity/project[0m
 
   [0m[1mTip:[0m Use the [0m[1mdesktop app[0m. Run codex app to open it. It installs automatically if needed.
- 
- 
+
+
 [0m[1m›[0m [0m[2mAsk Codex to do anything[0m
- 
+
   GPT-6-Luna default · /workspace/codex-parity/project
