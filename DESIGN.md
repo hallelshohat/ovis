@@ -4732,7 +4732,8 @@ headless choice; sign-in waits continue reconnecting automatically.
 
 Codex Chat follows the Codex CLI 0.167 terminal: native command, read and file-change items stay
 open in their original order, with output, exit status and diffs. Model wrappers already represented
-by those native items do not add duplicate rows; wrapper failures remain visible. Reasoning summaries
+by those native items do not add duplicate rows; wrapper failures and returned images remain visible.
+Native image views use a `Viewed image` row and the existing image viewer. Reasoning summaries
 are visible, while private model context is excluded. Other agents retain their existing folding.
 
 Native queued and steering messages use the existing sent-message store. Each transcript receipt

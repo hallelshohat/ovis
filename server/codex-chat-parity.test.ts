@@ -4,13 +4,55 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createCodexTranscriptParser, parseCodexTranscript } from "./codex.ts";
 import { codexNativeItem } from "./codex-items.ts";
-import { transcriptToolOutput } from "./conversation.ts";
+import { codexToolImage, transcriptToolOutput } from "./conversation.ts";
 import type { ConversationPart } from "../shared/protocol.ts";
 import { parseConversationMetadata } from "./conversation-metadata.ts";
+import { visibleWorkParts } from "../src/lib/workBlocks.ts";
 
 // Recorded in an isolated Codex session on 2026-11-08. Paths are replaced; model context is removed.
 const fixture = (version: string) => join(import.meta.dir, "fixtures/codex-chat-parity", `${version}.jsonl`);
 const isNativeTool = (part: ConversationPart): part is Extract<ConversationPart, { kind: "tool" }> => part.kind === "tool" && part.native === true;
+
+it("keeps the returned image and native action when a recorded exec also runs a command", async () => {
+  const path = fixture("0.167.0-mixed-image");
+  const text = readFileSync(path, "utf8");
+  const visible = visibleWorkParts(parseCodexTranscript(text).flatMap((turn) => turn.parts), false);
+  const images = visible.flatMap((part) => part.kind === "tool" ? part.images ?? [] : []);
+  expect(images).toHaveLength(1);
+  expect((await codexToolImage(path, images[0]!.ref, "/workspace/codex-parity"))?.mediaType).toBe("image/png");
+  expect(visible.filter(isNativeTool).map((part) => part.name)).toEqual(["exec_command", "view_image"]);
+  expect(visible.find((part) => part.kind === "tool" && part.name === "view_image")).toMatchObject({
+    summary: "/workspace/codex-parity/probe.png", input: JSON.stringify({ path: "/workspace/codex-parity/probe.png" }),
+  });
+  expect(visible.some((part) => part.kind === "tool" && part.output === "IMAGE_COMMAND")).toBe(true);
+});
+
+it("keeps an image-only wrapper and incremental snapshots of the mixed image recording", () => {
+  const lines = readFileSync(fixture("0.167.0-mixed-image"), "utf8").trimEnd().split("\n");
+  const parser = createCodexTranscriptParser();
+  for (const line of lines) {
+    const before = parser.snapshot();
+    const saved = JSON.stringify(before);
+    parser.write(`${line}\n`);
+    expect(JSON.stringify(before)).toBe(saved);
+  }
+  expect(parser.snapshot()).toEqual(parseCodexTranscript(lines.join("\n")));
+  const imageOnly = lines.filter((line) => !line.includes('"type":"CommandExecution"')).join("\n");
+  const visible = visibleWorkParts(parseCodexTranscript(imageOnly).flatMap((turn) => turn.parts), false);
+  expect(visible.flatMap((part) => part.kind === "tool" ? part.images ?? [] : [])).toHaveLength(1);
+  expect(visible.filter(isNativeTool).map((part) => part.name)).toEqual(["view_image"]);
+});
+
+it("pairs native image start/completion records and validates their required fields", () => {
+  const item = { type: "ImageView", id: "image", path: "file:///C:/images/probe%20one.png" };
+  const text = ["item_started", "item_completed"].map((type) => JSON.stringify({ type: "event_msg", payload: { type, item } })).join("\n");
+  expect(parseCodexTranscript(text).flatMap((turn) => turn.parts)).toEqual([{
+    kind: "tool", native: true, call_id: "image", name: "view_image", summary: "C:/images/probe one.png",
+    input: JSON.stringify({ path: "C:/images/probe one.png" }), output: "", state: "ok",
+  }]);
+  expect(codexNativeItem({ ...item, path: 12 })).toBeNull();
+  expect(codexNativeItem({ ...item, path: "" })).toBeNull();
+});
 
 describe.each(["0.166.0", "0.167.0"])("Codex %s terminal parity", (version) => {
   const text = readFileSync(fixture(version), "utf8");
