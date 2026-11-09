@@ -1,5 +1,28 @@
 import { expect, it } from "bun:test";
-import { codexThreadTitle, folderName, placeLine, shortPathTitle, tabTitle, taskRowLines, stripPaneChrome, unsaidLine } from "./paneName.ts";
+import { codexThreadTitle, folderName, placeLine, shortPathTitle, tabTitle, taskRowLines, stripPaneChrome, unsaidLine, workspaceRowText } from "./paneName.ts";
+
+it("gives a workspace title its space and says a leading task key once", () => {
+  expect(workspaceRowText({ title: "MAIN-103 Add an MFA column" }))
+    .toEqual({ title: "Add an MFA column", place: "", key: "MAIN-103" });
+  expect(workspaceRowText({ title: "MAIN-103 MAIN-103 Add an MFA column", place: "MAIN-103 api" }))
+    .toEqual({ title: "Add an MFA column", place: "api", key: "MAIN-103" });
+  expect(workspaceRowText({ title: "MAIN-12 RD-130 Fix access for MAIN-12" }))
+    .toEqual({ title: "RD-130 Fix access for MAIN-12", place: "", key: "MAIN-12" });
+  expect(workspaceRowText({ title: "Review permissions", place: "MAIN-103 API workspace" }))
+    .toEqual({ title: "Review permissions", place: "API workspace", key: "MAIN-103" });
+});
+
+it("keeps plain and key-only workspace names readable", () => {
+  for (const title of ["main", "Cut integration test time", "MAIN-103", "", "release-cafe", "🔒 Check access"]) {
+    expect(workspaceRowText({ title })).toEqual({ title, place: "", key: null });
+  }
+  expect(workspaceRowText({ title: "MAIN-103", place: "MAIN-103 api" }))
+    .toEqual({ title: "MAIN-103", place: "api", key: null });
+  expect(workspaceRowText({ title: "MAIN-103 MAIN-103" }))
+    .toEqual({ title: "MAIN-103", place: "", key: null });
+  expect(workspaceRowText({ title: "Title", place: "api" }))
+    .toEqual({ title: "Title", place: "api", key: null });
+});
 
 it("shows a path title as its last folder, and leaves any other title alone", () => {
   expect(shortPathTitle("/tmp/audit-oDjsU2/lms-backend")).toBe("lms-backend");
