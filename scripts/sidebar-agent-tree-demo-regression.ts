@@ -118,12 +118,12 @@ try {
             const list = document.querySelector<HTMLElement>(".machine-list")!;
             const box = list.getBoundingClientRect();
             const rows = [...document.querySelectorAll<HTMLElement>(".workspace-agent")].map((row) => row.getBoundingClientRect());
-            const header = document.querySelector<HTMLElement>(".worktree-children .workspace-header")!.getBoundingClientRect();
-            return { overflow: list.scrollWidth - list.clientWidth, inside: rows.every((row) => row.left >= box.left - 0.5 && row.right <= box.right + 0.5), heights: [...new Set(rows.map((row) => Math.round(row.height)))], header: Math.round(header.height) };
+            const control = document.querySelector<HTMLElement>(".workspace-agent-select")!;
+            return { overflow: list.scrollWidth - list.clientWidth, inside: rows.every((row) => row.left >= box.left - 0.5 && row.right <= box.right + 0.5), heights: [...new Set(rows.map((row) => Math.round(row.height)))], minimum: Math.round(parseFloat(getComputedStyle(control).minHeight)) };
           });
           assert.equal(fit.overflow, 0, "no sideways scroll");
           assert.ok(fit.inside, "the rows stay inside the list");
-          assert.deepEqual(fit.heights, [fit.header], "an agent row is a one-line workspace row's height");
+          assert.deepEqual(fit.heights, [fit.minimum], "agent rows keep their compact height below wrapping workspace titles");
 
           // opening an agent from the tree selects its pane, and its row takes the fill from its workspace's
           await agent(page, "workstation", panes.web).locator("button").click();

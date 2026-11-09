@@ -1,7 +1,22 @@
 import { AGENT_CHROME, codexThreadTitle, folderName, SHELL_PREFIX, shortPathTitle, stripPaneChrome } from "../../shared/pane-title.ts";
+import { isBoardTaskId } from "../../shared/board-tasks.ts";
 
 // shared with the server's push titles, which name a pane as the client's alerts do
 export { codexThreadTitle, folderName, shortPathTitle, stripPaneChrome };
+
+/** Display a leading task key separately; this text never identifies a task for board actions. */
+export function workspaceRowText({ title, place = "" }: { title: string; place?: string }): { title: string; place: string; key: string | null } {
+  const key = [title, place].map((text) => text.trim().split(/\s+/)[0] ?? "").find(isBoardTaskId);
+  if (!key) return { title, place, key: null };
+  const withoutKey = (text: string): string => {
+    const words = text.trim().split(/\s+/);
+    if (words[0] !== key) return text;
+    while (words[0] === key) words.shift();
+    return words.join(" ");
+  };
+  const name = withoutKey(title);
+  return { title: name || key, place: withoutKey(place), key: name ? key : null };
+}
 
 /**
  * A pane's live title as the browser tab shows it: as a row's, with the agent's glyph and spinner
