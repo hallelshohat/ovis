@@ -622,36 +622,34 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 
 .workspace-copy {
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
   flex: 1 1 auto;
-  gap: var(--space-2);
+  gap: var(--space-1);
   min-width: 0;
+  padding-block: var(--space-1);
 }
 
 /* a row's name is navigation: a step back from the state beside it (G-042), AA in both themes */
 .workspace-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   color: var(--text-dim);
   font-size: var(--fs-md);
   font-weight: var(--fw-regular);
   line-height: var(--lh-tight);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
-
-.workspace-name { flex: 0 1 auto; }
 
 /* Settings → Sidebar rows → Two lines: a row says what its pane is doing, and where under it,
    on the height and in the type of an agent's row. */
 .machine-workspaces.is-two-line .workspace-header { min-height: var(--side-row-2); }
-
-.workspace-copy.is-two-line {
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  gap: var(--space-1);
-}
 
 .workspace-line {
   display: flex;
@@ -659,6 +657,25 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   gap: var(--space-2);
   min-width: 0;
 }
+
+.workspace-details {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.workspace-details:not(:has(.workspace-key, .workspace-place, .workspace-branch-tail, .pull-badge)) { display: none; }
+
+.workspace-key {
+  flex: none;
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
+.workspace-details .workspace-place { flex: 0 1000 auto; }
 
 .workspace-place {
   min-width: 0;
@@ -1180,8 +1197,7 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   color: var(--status-blocked);
 }
 
-/* Compact rows, the default (Settings → Sidebar rows → Two lines keeps the tall ones), as herdr-app's list: one line
-   a little lower than a control under a pointer (a finger keeps its touch target), the name, and a branch other than the default dim at the row's end */
+/* Compact rows keep their smaller minimum height; wrapped titles and metadata can grow them. */
 @media (pointer: fine) {
   .machine-workspaces:not(.is-two-line) {
     --side-row: calc(var(--control-h) - var(--space-1) - var(--hairline) * 2);
@@ -1189,21 +1205,14 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 }
 
 .workspace-branch-tail {
-  flex: 0 1 auto;
+  flex: 0 1000 auto;
   min-width: 0;
-  max-width: 45%;
-  margin-inline-start: auto;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
   line-height: var(--lh-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* a workspace row's branch shows under the pointer or the focus; a finger keeps it */
-@media (hover: hover) and (pointer: fine) {
-  .machine-workspaces:not(.is-two-line) .workspace-header:not(:hover, :focus-within) .workspace-branch-tail { visibility: hidden; }
 }
 
 /* state by shape as well as colour (HIG): working a dot, waiting a ?, an unread finish a check, in the same cell */
@@ -1218,13 +1227,17 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
   transform: rotate(45deg);
 }
 
-/* the row's leading pull request, its glyph in its state's colour, just before the state cell */
+/* The PR shares the secondary line; even a long repository name cannot take title space. */
 .sidebar-pr {
   display: inline-flex;
   align-items: center;
-  flex: none;
-  margin-left: var(--space-1);
+  flex: 0 1 auto;
+  min-width: 0;
 }
+
+.workspace-details .pull-badge { max-width: 100%; }
+.workspace-details .pull-badge-number { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.workspace-details .pull-badge-more { flex: none; }
 
 .sidebar-pr:empty {
   display: none;

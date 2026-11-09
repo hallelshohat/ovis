@@ -72,7 +72,6 @@ const patch = `(() => {
 })();`;
 
 const row = (page: Page, id: string) => page.locator(`.workspace-group[data-workspace="${id}"]`);
-const height = (page: Page, id: string) => row(page, id).locator(":scope > .workspace-header").evaluate((header) => header.getBoundingClientRect().height);
 
 try {
   await buildDemoApp(app);
@@ -102,26 +101,19 @@ try {
           page.on("pageerror", (error) => errors.push(error.message));
           await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(panes.api)}`);
           if (phone) await page.getByRole("button", { name: "Open workspace list", exact: true }).click();
-          // one line per row, as herdr-app's list: a branch other than the default dim at the row's end, without its
-          // feature/-style prefix; the default branch says nothing
+          // A branch other than the default sits below the title, without its feature/-style prefix.
           const branchOf = (id: string) => row(page, id).locator(":scope > .workspace-header .workspace-branch-tail");
-          // a mouse's row keeps its branch out of sight until the pointer or the focus is on it; a finger's shows it
-          const shown = async (id: string) => {
-            if (!phone) {
-              await branchOf(id).waitFor({ state: "attached" });
-              assert.equal(await branchOf(id).isVisible(), false, `${id} at rest hides its branch under a mouse`);
-              await row(page, id).locator(":scope > .workspace-header").hover();
-            }
-            await branchOf(id).waitFor();
-          };
-          await shown("w1J");
-          await shown("w1D");
+          await branchOf("w1J").waitFor();
+          await branchOf("w1D").waitFor();
           assert.equal(await branchOf("w1C").count(), 0, "a repository on its default branch says no branch");
           assert.equal(await branchOf("w1J").textContent(), "develop", "a git folder herdr has not marked says its branch");
           assert.equal(await branchOf("w1D").textContent(), "web", "a worktree says its branch without the feature/ prefix");
           for (const id of ["w1D", "w1H"]) assert.equal(await page.locator(`.worktree-children .workspace-group[data-workspace="${id}"]`).count(), 1, `${id} sits under its repository`);
-          const one = await height(page, "w1K");
-          for (const id of ["w1C", "w1J", "w1D"]) assert.equal(await height(page, id), one, `${id} keeps one line's height, its branch beside its name`);
+          for (const id of ["w1J", "w1D"]) {
+            const name = await row(page, id).locator(".workspace-name").boundingBox();
+            const branchBox = await branchOf(id).boundingBox();
+            assert.ok(name && branchBox && branchBox.y >= name.y + name.height, `${id} gives the title its own line above the branch`);
+          }
           // herdr's tree: the first worktree's branch runs on (a tee), the last one's stops halfway (an elbow)
           const branch = (id: string) => row(page, id).locator(":scope > .workspace-header").evaluate((header) => {
             const stem = getComputedStyle(header, "::before"), arm = getComputedStyle(header, "::after");
@@ -130,14 +122,14 @@ try {
           });
           const tee = await branch("w1D"), elbow = await branch("w1H");
           assert.equal(tee.stem, tee.height, "a worktree with a sibling below draws its branch the row's full height");
-          assert.equal(elbow.stem, elbow.height / 2, "the last worktree's branch stops at its middle");
+          assert.ok(Math.abs(elbow.stem - elbow.height / 2) < 0.5, "the last worktree's branch stops at its middle, including fractional line heights");
           assert.ok(tee.arm > 0 && elbow.arm > 0, "each worktree's branch reaches toward its row");
           if (evidence) {
             mkdirSync(evidence, { recursive: true });
             await page.locator(".machine-workspaces").first().screenshot({ path: join(evidence, `branch-line-${phone ? "phone" : "desktop"}-${theme}.png`) });
           }
           assert.deepEqual(errors, []);
-          console.log(`PASS ${phone ? "phone" : "desktop"} ${theme}: every row is one line, a non-default branch dim at its end`);
+          console.log(`PASS ${phone ? "phone" : "desktop"} ${theme}: non-default branches sit below titles and tree stems follow row heights`);
         } finally { await context.close(); }
       }
       const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US" });
@@ -147,7 +139,7 @@ try {
         await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(panes.api)}`);
         await page.locator(".workspace-copy.is-two-line").first().waitFor();
         assert.equal(await page.locator(".workspace-branch-tail").count(), 0, "Two lines keeps its own task rows");
-        console.log("PASS Two lines keeps its task rows and draws no branch at the row's end");
+        console.log("PASS Two lines keeps its task titles and place text");
       } finally { await context.close(); }
     } finally { await browser.close(); }
   } finally { server.stop(true); }
