@@ -226,7 +226,7 @@ export function readCodexBackground(path: string): CodexBackground | null {
   remember(reads, path, read, 64);
   const current = read;
   while (current.offset < stat.size) {
-    const next = readLines(path, current.offset, stat.size, READ_BUDGET, (line) => feedCodexLine(current.state, line), current.skipping);
+    const next = readLines(path, current.offset, stat, READ_BUDGET, (line) => feedCodexLine(current.state, line), current.skipping);
     if (next.failed || next.offset === current.offset) break;
     current.offset = next.offset;
     current.skipping = next.skipping;

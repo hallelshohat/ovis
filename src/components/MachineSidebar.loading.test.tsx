@@ -22,7 +22,7 @@ const descriptors = new Map<string, PropertyDescriptor | undefined>();
 let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
-  for (const key of ["window", "document", "navigator", "getComputedStyle", "localStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+  for (const key of ["window", "document", "navigator", "getComputedStyle", "localStorage", "HTMLElement", "Element", "IS_REACT_ACT_ENVIRONMENT"]) descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
   const stored = new Map<string, string>();
   const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); }, removeItem: (key: string) => { stored.delete(key); } };
   const events = new EventTarget();
@@ -30,6 +30,7 @@ beforeEach(() => {
   const define = (key: string, value: unknown) => Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   define("IS_REACT_ACT_ENVIRONMENT", true);
   define("HTMLElement", class HTMLElement {});
+  define("Element", HTMLElement);
   define("localStorage", storage);
   define("navigator", { languages: ["en-US"], platform: "Linux", userAgent: "test" });
   define("window", { localStorage: storage, sessionStorage: storage, location: { pathname: "/", search: "", hash: "" }, matchMedia: () => media, innerWidth: 1280, innerHeight: 800, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), requestAnimationFrame: (run: FrameRequestCallback) => { run(0); return 1; }, cancelAnimationFrame() {}, setTimeout, clearTimeout, setInterval, clearInterval });
