@@ -1978,12 +1978,16 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the title over the place) and the compact state at the right. The leading glyph is the brand mark of the agent in the pane the row opens; a row that opens a
   shell shows the terminal glyph, and a linked worktree without an agent the branch glyph. The
   mark never stands for another pane's agent; the row's tooltip lists every agent in the
-  workspace. A custom worktree workspace name follows the branch on the same line in dim text.
-  On One line, as in herdr's own sidebar, a top-level git workspace (a repository, or a worktree
-  whose repository is not open) says its branch under its name in `--text-dim` `--fs-xs`, on a
-  two-line row's height (`--side-row-2`); an indented worktree, whose name already comes from its
-  branch, a pinned workspace in its card (the branch stays in its tooltip and menu) and a folder
-  outside git stay one line. The branch is read with the worktree inventory
+  workspace. In both Sidebar rows settings the title gets the available width and wraps to at most
+  two lines; its own native tooltip keeps the complete original title. A leading board key is
+  shown once in `--fs-2xs` below it, alongside the leading PR and its count of other open PRs.
+  Long PR repository labels shrink with ellipsis on that secondary line, leaving the title's
+  width unchanged. One line keeps the workspace name; Two lines keeps the pane title and place.
+  A distinct non-default branch sits on the secondary line in `--text-dim` `--fs-xs`; rows with
+  no secondary information reserve no empty line. The existing remembered 240–520px resizer stays.
+  This follows [T3 Code's constrained flexible sidebar and remembered resize](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/ui/sidebar.tsx),
+  with wrapping titles and secondary metadata for Ovis's denser workspace rows; no code was copied.
+  The branch is read with the worktree inventory
   (`useWorktreeBranches`), a repository without worktrees and a git workspace herdr has not marked
   included. As herdr draws its tree, each indented worktree hangs from its repository's folder on
   a `--hairline` `--border-strong` branch in the indent: a tee for each but the last, an elbow for

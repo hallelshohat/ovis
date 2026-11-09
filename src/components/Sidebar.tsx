@@ -23,7 +23,7 @@ import { BoardNoteView, boardTaskItems, useBoard } from "./BoardTasks.tsx";
 import { RowMenu, type RowMenuItem } from "./RowMenu.tsx";
 import { WorktreeDialog, type WorktreeDialogMode } from "./WorktreeDialog.tsx";
 import { focusWorkspaceListToggle } from "../lib/focus.ts";
-import { folderName, shortPathTitle, stripPaneChrome, tabTitle, taskRowLines } from "../lib/paneName.ts";
+import { folderName, shortPathTitle, stripPaneChrome, tabTitle, taskRowLines, workspaceRowText } from "../lib/paneName.ts";
 import { useT } from "../lib/i18n.ts";
 import { contextLeftPercent, formatTokens } from "../lib/compose.ts";
 import { userErrorMessage } from "../lib/userError.ts";
@@ -934,8 +934,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     // branch itself is the tooltip's and the menu's, where the name does not already say it
     const rowTitle = workspace.label;
     const secondaryBranch = linked && branchTitle && workspace.label !== branchTitle && workspace.label !== worktreeLabel(branchTitle) ? branchTitle : null;
-    // the compact rows (the default), as herdr-app's Spaces list: one line, the name without herdr's worktree prefix and
-    // hash, and a branch other than the default one dim at its end, unless it only repeats the name
+    // Compact rows keep the workspace's name without herdr's worktree prefix and hash; a different branch goes below it.
     const compact = !twoLine;
     // only a worktree herdr opened has a name it made: a name the user chose is drawn whole
     const shownTitle = compact && linked ? compactWorktreeName(rowTitle) : rowTitle;
@@ -953,6 +952,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     const statusPanes = collapsed ? [...panes, ...children.flatMap((child) => roster.filter((candidate) => candidate.workspace_id === child.workspace_id))] : panes;
     // on two lines the row says what its pane is doing, and the workspace it has named until now sits under that
     const lines = twoLine ? taskRowLines({ paneTitle: displayPaneTitle(pane), labelled: Boolean(pane.label?.trim()), folder: cwdBasename(pane.cwd), workspace: rowTitle, alias: secondaryBranch }) : null;
+    const text = workspaceRowText({ title: lines?.title ?? shownTitle, place: lines?.place ?? branchTail ?? "" });
     // a folded group still shows the checkout that is open; the count is of the ones put away
     const foldedCount = collapsed ? children.filter((child) => !roster.some((candidate) => candidate.workspace_id === child.workspace_id && candidate.pane_id === selectedPaneId)).length : 0;
     const editingWorkspace = editingWorkspaceId === workspace.workspace_id;
@@ -1031,21 +1031,18 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
               if (event.key === "Enter") saveWorkspaceRename(workspace.workspace_id);
               if (event.key === "Escape") setEditingWorkspaceId(null);
             }}
-          /> : lines ? <span className="workspace-copy is-two-line">
+          /> : <span className={`workspace-copy${twoLine ? " is-two-line" : ""}`}>
             <span className="workspace-line">
-              <span className="workspace-name">{lines.title}</span>
+              <span className="workspace-name" title={lines?.title ?? rowTitle}>{text.title}</span>
               {foldedCount > 0 && <span className="workspace-fold-count" aria-hidden="true">+{foldedCount}</span>}
               {filterNote}
             </span>
-            {lines.place && <span className="workspace-place">{lines.place}</span>}
-          </span> : <span className="workspace-copy">
-            <span className="workspace-name">{shownTitle}</span>
-            {!compact && secondaryBranch && <span className="worktree-workspace-label">{secondaryBranch}</span>}
-            {branchTail && <span className="workspace-branch-tail">{branchTail}</span>}
-            {foldedCount > 0 && <span className="workspace-fold-count" aria-hidden="true">+{foldedCount}</span>}
-            {filterNote}
+            <span className="workspace-details">
+              {text.key && <span className="workspace-key">{text.key}</span>}
+              {online && <span className="sidebar-pr"><PaneLeadBadge machineId={machineId} paneId={pane.pane_id} /></span>}
+              {text.place && <span className={twoLine ? "workspace-place" : "workspace-branch-tail"} title={text.place}>{text.place}</span>}
+            </span>
           </span>}
-          {online && <span className="sidebar-pr"><PaneLeadBadge machineId={machineId} paneId={pane.pane_id} /></span>}
           <span className="sidebar-pane-meta">
             <span className="visually-hidden">{markName(pane)}</span>
             {online && pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge compact status={online ? rollupStatus(statusPanes.map((candidate) => activity.status(machineId, candidate))) : undefined} />}
