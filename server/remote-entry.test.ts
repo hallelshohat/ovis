@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { join as winJoin } from "node:path/win32";
@@ -117,7 +117,7 @@ describe("remote entry startup lock", () => {
   }
 
   it.skipIf(process.platform === "win32")("refuses a second daemon and accepts only an explicit new-start choice", async () => {
-    const socket = join(home, "config/herdr/sessions/work/herdr.sock");
+    const socket = join(home, "c/herdr/sessions/work/herdr.sock");
     mkdirSync(dirname(socket), { recursive: true });
     const listener = Bun.listen({ unix: socket, socket: { data() {} } });
     const result = join(home, "startup.result");
@@ -152,8 +152,8 @@ describe("remote entry startup lock", () => {
   }, 60_000);
 
   it.skipIf(process.platform === "win32")("offers another live session when the selected socket has disappeared", async () => {
-    const chosen = join(home, "config/herdr/sessions/gone/herdr.sock");
-    const other = fakeHerdr(join(home, "config/herdr/sessions/other/herdr.sock"));
+    const chosen = join(home, "c/herdr/sessions/gone/herdr.sock");
+    const other = fakeHerdr(join(home, "c/herdr/sessions/other/herdr.sock"));
     const resultFile = join(home, "gone-with-other.result");
     try {
       const result = await start(undefined, { HERDR_REMOTE_SOCKET: chosen, HERDR_REMOTE_RESULT: resultFile });
@@ -164,13 +164,13 @@ describe("remote entry startup lock", () => {
   }, 60_000);
 
   it.skipIf(process.platform === "win32").each(["symlink", "parent symlink", "outside", "file"])("refuses a chosen %s before any bridge connection", async (kind) => {
-    const actual = join(home, kind === "outside" ? "other" : "config/herdr", "herdr.sock");
+    const actual = join(home, kind === "outside" ? "other" : "c/herdr", "herdr.sock");
     mkdirSync(dirname(actual), { recursive: true });
     let connections = 0;
     const listener = kind === "file" ? undefined : Bun.listen({ unix: actual, socket: { open(socket) { connections++; socket.end(); }, data() {} } });
     if (!listener) writeFileSync(actual, "not a socket");
     let selected = actual;
-    if (kind === "symlink") { selected = join(home, "config/herdr/sessions/link/herdr.sock"); mkdirSync(dirname(selected), { recursive: true }); symlinkSync(actual, selected); }
+    if (kind === "symlink") { selected = join(home, "c/herdr/sessions/link/herdr.sock"); mkdirSync(dirname(selected), { recursive: true }); symlinkSync(actual, selected); }
     if (kind === "parent symlink") { symlinkSync(dirname(actual), join(home, "alias")); selected = join(home, "alias/herdr.sock"); }
     const resultFile = join(home, "refused.result");
     try {
