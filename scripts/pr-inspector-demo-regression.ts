@@ -109,6 +109,8 @@ async function desktop(browser: Browser, origin: string, theme: "dark" | "light"
     await box.fill("");
 
     // the changelog's #1940 waits for a review with green checks: it can be merged, behind a confirmation
+    const resting = page.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+    if (await resting.getAttribute("aria-expanded") === "false") await resting.click();
     await page.locator(".agent-row").filter({ hasText: "Draft the changelog" }).click();
     await page.locator(".pr-header-button").filter({ hasText: "#1940" }).waitFor();
     await inspector.getByRole("button", { name: "Squash and merge", exact: true }).click();
