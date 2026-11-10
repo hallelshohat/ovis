@@ -90,7 +90,6 @@ export const SIDEBAR_ZH: Record<string, string> = {
   "Remove task {task}?": "移除任务 {task}？",
   "The task leaves the board with its description and reviews, and its worktree is removed. Work in it that is not saved or not merged is kept.": "任务连同描述和评审一起离开看板，其工作树也会被移除。其中未保存或未合并的工作会保留。",
   "Archive done tasks in every repo ({n})": "归档所有仓库中已完成的任务 ({n})",
-  "Undo": "撤销",
   "Allow request": "允许请求",
   "Archive done tasks in {repo} ({n})": "归档 {repo} 中已完成的任务 ({n})",
   "Board tasks": "看板任务",

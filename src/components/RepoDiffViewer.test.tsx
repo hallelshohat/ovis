@@ -43,7 +43,7 @@ afterEach(async () => {
 });
 
 const viewer = (target: RepoDiffTarget) => createElement(SettingsProvider, {
-  children: createElement(RepoDiffViewer, { target, onClose: () => {}, onOpenFile: () => {}, note: { machine: target.machineId, blocked: null } }),
+  children: createElement(RepoDiffViewer, { target, onClose: () => {}, onOpenFile: () => {}, onSwitchFile: () => {}, note: { machine: target.machineId, blocked: null } }),
 });
 const noteTexts = (): unknown[] => renderer!.root.findAll((node) => node.type === "textarea").map((field) => field.props.value);
 

@@ -260,7 +260,7 @@ async function reducedMotion(browser: Browser, origin: string): Promise<void> {
     const page = await context.newPage();
     await page.goto(`${origin}/?pane=${encodeURIComponent(panes.api)}`);
     await page.locator("#pull-requests").waitFor();
-    await page.locator(".machine-new-row").click();
+    await page.getByRole("button", { name: "New workspace", exact: true }).click();
     await page.locator(".new-session-modal").waitFor();
     // A hover color change does not move or fade any of these surfaces.
     const moving = await page.evaluate(() => document.getAnimations().filter((animation) => animation.playState === "running" && !(animation instanceof CSSAnimation && /pulse|breathe|spin/.test(animation.animationName)) && !(animation instanceof CSSTransition && animation.transitionProperty === "background-color")).length);

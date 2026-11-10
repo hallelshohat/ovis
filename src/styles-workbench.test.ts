@@ -47,6 +47,8 @@ describe("the workbench's shared styles", () => {
     expect(css).toMatch(/\.section-label,\s*\.field-label,\s*\.menu-heading\s*\{[^}]*text-transform: uppercase;/);
     const offenders: string[] = [];
     for (const file of new Glob("components/**/*.css").scanSync({ cwd: new URL(".", import.meta.url).pathname })) {
+      // The hosted relay sign-in has its own form typography, outside the Workbench.
+      if (file === "components/RelayShell.css") continue;
       const text = await Bun.file(new URL(file, import.meta.url)).text();
       for (const [, selector, body] of text.matchAll(/([^{}]*(?:section-label|menu-heading|field-label)[^{}]*)\{([^}]*)\}/g)) {
         if (/text-transform|font-size|letter-spacing/.test(body!)) offenders.push(`${file}: ${selector!.trim()}`);

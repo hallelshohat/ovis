@@ -90,7 +90,6 @@ export const SIDEBAR_JA: Record<string, string> = {
   "Remove task {task}?": "タスク {task} を削除しますか？",
   "The task leaves the board with its description and reviews, and its worktree is removed. Work in it that is not saved or not merged is kept.": "タスクは説明とレビューごとボードから外れ、ワークツリーも削除されます。保存されていない作業やマージされていない作業は残ります。",
   "Archive done tasks in every repo ({n})": "全リポジトリの完了したタスクをアーカイブ ({n})",
-  "Undo": "元に戻す",
   "Allow request": "リクエストを許可",
   "Archive done tasks in {repo} ({n})": "{repo} の完了したタスクをアーカイブ ({n})",
   "Board tasks": "ボードのタスク",
