@@ -291,11 +291,11 @@ function scanCommands(commands: Commands, entry: Row, at: number | null, notices
   }
   if (callId !== undefined) commands.calls.delete(callId);
   for (const end of ends) {
-  const told = commands.ends.get(end.id) ?? [];
-  // the same notice comes in more than one carrier: once is enough
-  if (told.some((known) => known.at === end.at && known.status === end.status && known.call === end.call)) continue;
-  remember(commands.ends, end.id, [...told, { at: end.at, status: end.status, call: end.call, exitCode: end.exitCode, seq }].slice(-ENDS_PER_ID), MAX_NAMES);
-}
+    const told = commands.ends.get(end.id) ?? [];
+    // the same notice comes in more than one carrier: once is enough
+    if (told.some((known) => known.at === end.at && known.status === end.status && known.call === end.call)) continue;
+    remember(commands.ends, end.id, [...told, { at: end.at, status: end.status, call: end.call, exitCode: end.exitCode, seq }].slice(-ENDS_PER_ID), MAX_NAMES);
+  }
 }
 
 /**
