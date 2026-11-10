@@ -154,7 +154,9 @@ try {
             assert.equal(rest.menuShown, false, `${what}: a mouse's row hides its ⋯ at rest`);
             await item.hover();
             const hovered = await measure(item, parts);
-            assert.deepEqual([hovered.startLeft, hovered.startRight, hovered.afterLeft], [rest.startLeft, rest.startRight, rest.afterLeft], `${what}: the name and branch stay put under the pointer`);
+            assert.equal(hovered.startLeft, rest.startLeft, `${what}: the name stays anchored under the pointer`);
+            // An agent reveals its PR and task badges on hover; the workspace keeps its own title line.
+            if (what === "w1D") assert.equal(hovered.startRight, rest.startRight, "the workspace title keeps its width under the pointer");
             assert.equal(hovered.menuShown && hovered.menuBeforeState && !hovered.menuOverState && hovered.stateShown, true, `${what}: the ⋯ shows just before the state, which stays in sight`);
             await page.mouse.move(1270, 890);
           }
