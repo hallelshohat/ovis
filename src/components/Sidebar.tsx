@@ -12,7 +12,7 @@ import { useAppLayout, useMachineApi, useMachineId, useReorderCoordinator } from
 import { PanePressContext } from "../lib/paneSubmitContext.ts";
 import { usePaneLocked } from "../lib/paneLocks.ts";
 import type { AppActions } from "../lib/actions.ts";
-import { indicatorGlyph, knownStatus, rollupStatus, STATUS_WORD } from "../lib/status.ts";
+import { indicatorGlyph, knownStatus, STATUS_WORD } from "../lib/status.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { WorkspaceFavicon } from "./WorkspaceFavicon.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -38,7 +38,7 @@ import { watchTouchReorder } from "../lib/touchReorder.ts";
 import { isBackgroundWorkspace, placeBlock, splitBackgroundGroups, workspaceMoves, worktreeGroups as groupWorktrees } from "../lib/workspaceOrder.ts";
 import { worktreeLabel } from "../lib/worktreeName.ts";
 import { lastViewedPane, rememberViewedPane } from "../lib/lastViewedPane.ts";
-import { agentTabName, paneMark, sidebarAgents, workspaceAgentLabels, type SidebarAgent } from "../lib/sidebarAgents.ts";
+import { agentTabName, paneMark, rollupAgentStatus, sidebarAgents, workspaceAgentLabels, type SidebarAgent } from "../lib/sidebarAgents.ts";
 import { PANE_DRAG_TYPE, paneDragData } from "../lib/split.ts";
 import { paneDrag } from "../lib/paneDrag.ts";
 import { publishWorkspaceRows, workspaceRows } from "../lib/adjacentTarget.ts";
@@ -804,6 +804,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
     // a folded group's parent stands for its worktrees too, as herdr's collapsed parent does:
     // a checkout that waits or has finished must not hide behind the fold
     const statusPanes = collapsed ? [...panes, ...children.flatMap((child) => roster.filter((candidate) => candidate.workspace_id === child.workspace_id))] : panes;
+    const status = online ? rollupAgentStatus({ panes: statusPanes, agentRows, statusOf: (candidate) => activity.status(machineId, candidate) }) : undefined;
     // Two lines lead with the workspace's name, as herdr's sidebar does, and say under it what the pane it opens is on;
     // a shell's "~" (its home folder) names nothing, nor does the pane id a pane without a title falls back to
     const shownPaneTitle = displayPaneTitle(pane);
@@ -906,7 +907,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           </span>}
           <span className="sidebar-pane-meta">
             <span className="visually-hidden">{markName(pane)}</span>
-            {online && pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge compact status={online ? rollupStatus(statusPanes.map((candidate) => activity.status(machineId, candidate))) : undefined} />}
+            {online && pane.restore_error ? <RestoreErrorBadge reason={pane.restore_error} /> : <StatusBadge compact status={status} />}
           </span>
         </div>
         <div className="workspace-actions">

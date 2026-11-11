@@ -1,8 +1,25 @@
 import { nonblank, type SidebarAgent } from "../../shared/agent-roster.ts";
-import type { TabInfo } from "../../shared/protocol.ts";
+import type { AgentStatus, HerdrPane, TabInfo } from "../../shared/protocol.ts";
 import { customTabLabel, tabLabel } from "./tabName.ts";
 
+import { paneStatus, rollupStatus, type KnownStatus } from "./status.ts";
+
 export { sidebarAgents, type SidebarAgent } from "../../shared/agent-roster.ts";
+
+/** A shell beside an agent is not unfinished agent work; shell-only groups keep their pane state. */
+export function rollupAgentStatus({ panes, agentRows, statusOf = paneStatus }: {
+  panes: readonly HerdrPane[];
+  agentRows: readonly SidebarAgent[];
+  statusOf?: (pane: HerdrPane) => AgentStatus | undefined;
+}): KnownStatus {
+  const agentIds = new Set(agentRows.map(({ pane }) => pane.pane_id));
+  const agents = panes.filter((pane) => agentIds.has(pane.pane_id));
+  const own = agents.length > 0 ? agents : panes;
+  const status = rollupStatus(own.map(paneStatus));
+  if (status !== "done") return status;
+  // Reading a finish changes its mark, not whether that agent completed its work.
+  return own.some((pane) => statusOf(pane) === "done") ? "done" : "idle";
+}
 
 export function paneMark(entry: SidebarAgent | undefined): string | null {
   if (!entry) return null;
