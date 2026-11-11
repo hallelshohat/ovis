@@ -474,7 +474,7 @@ export async function runBackgroundAgentDetail(part: BackgroundAgentDetailPart):
               await page.locator(".composer .composer-text:disabled").waitFor();
               // A watching device's composer locks what writes. The list and its rows only read, so they stay
               // usable however often the pane draws again (they went dead on the next draw once)
-              assert.deepEqual(await locks(page), { ".composer-text": [true], ".composer-attach": [true], ".composer-action": [true], ".bg-tasks-toggle": [false], ".bg-task-open": [false, false], ".bg-ended-toggle": [false] }, `${state}: a watching composer locks what writes and leaves the list alone`);
+              assert.deepEqual(await locks(page), { ".composer-text": [true], ".composer-attach": [true], ".composer-action": [true], ".bg-tasks-toggle": [false], ".bg-task-open": [false, false, false, false, false], ".bg-ended-toggle": [false] }, `${state}: a watching composer locks what writes and leaves the list alone`);
             }
             await openDetail(page);
             const refreshed = state === "refresh-error" || state === "refresh-changed" || state === "session-swap";
