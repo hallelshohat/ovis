@@ -58,6 +58,8 @@ import { GhosttyTerminal, ownTerminalEngine } from "./ghostty/terminal.ts";
  */
 declare const __HERDR_TEST_HOOKS__: boolean;
 
+const COPY_HISTORY_PROMPTS = 50;
+
 /** `automatic`: xterm made the input itself (a query's answer), nobody typed it */
 /** `typedAt`: when it was captured (markTyped): what waited goes only over a link up since then (HerdrSocket.takesKey) */
 type Typed = { input: string; keys: string[] | null; chord: boolean; stop: boolean; secret: boolean; typedAt: number; arrowModeEpoch?: number | null; automatic?: boolean };
@@ -538,7 +540,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
 
       let copiedText: string | null = null;
       let said: { pane: string; texts: readonly string[] } | null = null;
-      const readSaid = (pane: string): Promise<readonly string[]> => fetchPaneConversation(pane, machineId).then((answer) => {
+      const readSaid = (pane: string): Promise<readonly string[]> => fetchPaneConversation(pane, machineId, { prompts: COPY_HISTORY_PROMPTS }).then((answer) => {
         const texts = answer.source === "scrollback" ? [] : answer.turns.flatMap((turn) => turn.role === "assistant"
           ? turn.parts.flatMap((part) => part.kind === "text" ? [part.text] : []) : []);
         said = { pane, texts };
