@@ -69,6 +69,13 @@ function installSidebarFixture(): void {
           if (!layout.panes.some((pane) => pane.pane_id === target.pane_id)) {
             layout.panes.push({ pane_id: target.pane_id, focused: false, rect: { ...layout.area } });
           }
+          if (state.zoom.split) {
+            const half = layout.area.width / 2;
+            layout.panes = [
+              { pane_id: focused.pane_id, focused: true, rect: { ...layout.area, width: half } },
+              { pane_id: target.pane_id, focused: false, rect: { ...layout.area, x: layout.area.x + half, width: half } },
+            ];
+          }
         }
       }
     }
@@ -294,6 +301,115 @@ try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
       const finishCase = process.env["SIDEBAR_FINISH_CASE"];
+      if (!finishCase || finishCase === "split-unread-finish") {
+        for (const mobile of [false, true]) await withPage(browser, {}, async (page) => {
+          await page.evaluate(async ({ api, web }) => {
+            await window.sidebarFixture.split(web, api);
+            await window.sidebarFixture.finish(api, "working", 199);
+            await window.sidebarFixture.finish(web, "working", 200);
+          }, panes);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.api)}&view=terminal`);
+          await page.locator(`.pane-frame[data-layout-pane="${panes.api}"] .terminal-stack:not(.is-chat)[data-pane-content]`).waitFor();
+          await page.evaluate(async (id) => {
+            await window.sidebarFixture.finish(id, "done", 201);
+            window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "Claude finished review 201\r\n" });
+          }, panes.api);
+          await agent(page, API).locator('.sidebar-status[data-status="idle"]').waitFor({ state: "attached" });
+          const workspaceId = await page.locator(`.workspace-select[data-pane="${panes.api}"]`).evaluate((row) => row.closest(".workspace-group")?.getAttribute("data-workspace"));
+          assert.ok(workspaceId);
+          const workspace = page.locator(`.workspace-group[data-workspace="${workspaceId}"] > .workspace-header .sidebar-status`);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 202), panes.web);
+          await agent(page, WEB).locator('.sidebar-status[data-status="done"]').waitFor({ state: "attached" });
+          const drawer = page.locator('button[aria-controls="workspace-drawer"]');
+          if (mobile) {
+            await drawer.tap();
+            await page.locator(".sidebar.is-open").waitFor();
+          }
+          await workspace.and(page.locator('[data-status="done"]')).waitFor();
+          assert.equal(await agent(page, API).locator(".sidebar-status").getAttribute("data-status"), "idle", "Claude's finish is already acknowledged");
+          assert.equal(await page.locator(".tab-strip-item.is-active .tab-strip-dot").getAttribute("data-status"), "done", "the tab agrees that both agents finished");
+          const evidence = process.env["UI_EVIDENCE_DIR"];
+          if (evidence) {
+            mkdirSync(evidence, { recursive: true });
+            await page.screenshot({ path: join(evidence, `split-unread-finish-${mobile ? "phone" : "desktop"}.png`), animations: "disabled" });
+          }
+          if (mobile) await drawer.tap();
+          await agent(page, WEB).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
+          await page.keyboard.press("ControlOrMeta+Shift+J");
+          await page.locator(`.pane-frame[data-layout-pane="${panes.web}"] .terminal-stack:not(.is-chat)[data-pane-content]`).waitFor();
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "Codex finished work 202\r\n" }), panes.web);
+          await agent(page, WEB).locator('.sidebar-status[data-status="idle"]').waitFor({ state: "attached" });
+          if (mobile) await drawer.tap();
+          assert.equal(await workspace.getAttribute("data-status"), "idle", "the workspace clears only after both finishes are acknowledged");
+        }, mobile);
+        console.log("PASS an acknowledged split sibling preserves the unread completion on desktop and phone until both finishes are read");
+      }
+      if (!finishCase || finishCase === "split-status") {
+        for (const mobile of [false, true]) await withPage(browser, {}, async (page) => {
+          const drawer = page.locator('button[aria-controls="workspace-drawer"]');
+          if (mobile) await drawer.tap();
+          const parent = page.locator(".workspace-group").filter({ has: page.locator(`.workspace-select[data-pane="${panes.shell}"]`) }).first();
+          await page.evaluate(async ({ api, web }) => {
+            await window.sidebarFixture.finish(api, "working", 100);
+            await window.sidebarFixture.finish(web, "done", 101);
+          }, panes);
+          await parent.locator(':scope > .workspace-header .sidebar-status[data-status="working"]').waitFor();
+          assert.equal(await page.locator('.tab-strip-item:not(.is-active) .tab-strip-dot[data-status="working"]').count(), 1,
+            "an inactive tab's working agent keeps its workspace working");
+          const fold = parent.locator(":scope > .workspace-header .workspace-toggle");
+          await fold.click();
+          await page.evaluate(async ({ api, web }) => {
+            await window.sidebarFixture.finish(api, "done", 102);
+            await window.sidebarFixture.finish(web, "working", 103);
+          }, panes);
+          await parent.locator(':scope.is-collapsed > .workspace-header .sidebar-status[data-status="working"]').waitFor();
+          await fold.click();
+
+          await page.evaluate(({ api, web }) => window.sidebarFixture.split(api, web), panes);
+          if (mobile) await drawer.tap();
+          await agent(page, WEB).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
+          const split = page.locator(`.pane-frame[data-layout-pane="${panes.web}"]`);
+          await split.locator(".terminal-stack.is-chat").waitFor();
+          const workspace = page.locator(`.workspace-select[data-pane="${panes.web}"]`);
+          const tabStatus = page.locator(".tab-strip-item.is-active .tab-strip-dot");
+          if (mobile) await drawer.tap();
+          await workspace.locator('.sidebar-status[data-status="working"]').waitFor();
+          assert.equal(await tabStatus.getAttribute("data-status"), "working", "split tab combines both agents");
+          if (!mobile) {
+            const left = await split.boundingBox();
+            const right = await page.locator(`.pane-frame[data-layout-pane="${panes.api}"]`).boundingBox();
+            assert.ok(left && right && left.x + left.width <= right.x + 1, "both split panes are visible side by side");
+          }
+          const evidence = process.env["UI_EVIDENCE_DIR"];
+          if (evidence) {
+            mkdirSync(evidence, { recursive: true });
+            await page.screenshot({ path: join(evidence, `split-status-${mobile ? "phone" : "desktop"}.png`), animations: "disabled" });
+          }
+          if (mobile) await drawer.tap();
+          await page.keyboard.press("ControlOrMeta+Shift+K");
+          await page.locator(`.palette-pane[data-pane="${panes.web}"] [data-status="working"]`).waitFor();
+          await page.locator(`.palette-pane[data-pane="${panes.api}"] [data-status="done"]`).waitFor();
+          await page.keyboard.press("Escape");
+          await page.evaluate(async ({ api, web }) => {
+            await window.sidebarFixture.finish(api, "working", 104);
+            await window.sidebarFixture.finish(web, "done", 105);
+          }, panes);
+          if (mobile) await drawer.tap();
+          await workspace.locator('.sidebar-status[data-status="working"]').waitFor();
+          assert.equal(await tabStatus.getAttribute("data-status"), "working", "a working sibling wins in either pane order");
+          if (mobile) await drawer.tap();
+          await agent(page, INFRA).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
+          await page.evaluate(async ({ api, web }) => {
+            await window.sidebarFixture.finish(api, "done", 106);
+            await window.sidebarFixture.finish(web, "done", 107);
+          }, panes);
+          if (mobile) await drawer.tap();
+          await workspace.locator('.sidebar-status[data-status="done"]').waitFor();
+          await agent(page, WEB).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
+          await page.locator('.tab-strip-item.is-active .tab-strip-dot[data-status="done"]').waitFor();
+        }, mobile);
+        console.log("PASS split workspace and tab stay working in either pane order, including mobile, inactive tabs and collapsed groups; all agents done completes the workspace; palette keeps pane statuses");
+      }
       if (!finishCase || finishCase === "previous-answer") {
         for (const source of ["claude-transcript", "codex-transcript", "pi-transcript", "omp-transcript", "omo-transcript", "gjc-transcript", "opencode-transcript", "grok-transcript", "devin-transcript", "hermes-transcript", "agy-transcript"] as const) {
           await withPage(browser, {}, async (page) => {

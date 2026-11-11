@@ -1023,8 +1023,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   them. The roster has no label or fold of its own.
 - A repository's parent row keeps `workspace.label`; its opened linked
   worktree rows show their actual checkout branches. Each row's compact status
-  glyph rolls up all of the workspace's panes as herdr does (blocked, then done, then working,
-  then ready); a folded worktree parent rolls up its whole group.
+  glyph rolls up its agent panes: working, blocked, background waiting, ready, unknown, then done.
+  Done requires every agent's raw state to be done; its mark remains while any finish is unread,
+  even when another finished pane has been read. Ordinary shells do not prevent completion. A shell-only
+  workspace uses its panes' states, and a folded worktree parent rolls up its whole group. Tabs
+  use the same rule for their own panes. Like [Warp's tab summaries](https://docs.warp.dev/terminal/windows/vertical-tabs/),
+  split-pane activity stays visible; Ovis keeps one aggregate mark, so any working agent wins.
   Clicking its name opens the
   selected pane in that workspace, else the last viewed pane, else the pane herdr has focused,
   else its first pane. Tabs are selected from the tab strip; panes are selected on the canvas or from the command palette.

@@ -3,19 +3,27 @@ import { describe, expect, it } from "bun:test";
 import { paneStatus, rollupStatus, statusEdgeRead } from "./status.ts";
 
 describe("rollupStatus", () => {
-  it("rolls a workspace's panes up as herdr does: blocked, then done, then working, then ready", () => {
-    expect(rollupStatus(["idle", "blocked", "working"])).toBe("blocked");
+  it("keeps a split workspace working until its last working agent finishes, in either pane order", () => {
+    expect(rollupStatus(["done", "working"])).toBe("working");
+    expect(rollupStatus(["working", "done"])).toBe("working");
+    expect(rollupStatus(["done", "done"])).toBe("done");
+  });
+
+  it("shows done only when every agent is done", () => {
+    expect(rollupStatus(["idle", "blocked", "working"])).toBe("working");
     expect(rollupStatus(["blocked", "done"])).toBe("blocked");
-    expect(rollupStatus(["done", "working"])).toBe("done");
     expect(rollupStatus(["idle", "working"])).toBe("working");
-    expect(rollupStatus(["idle", "done"])).toBe("done");
+    expect(rollupStatus(["idle", "done"])).toBe("idle");
+    expect(rollupStatus([undefined, "done"])).toBe("unknown");
+    expect(rollupStatus(["something-new", "done"])).toBe("unknown");
     expect(rollupStatus(["idle", undefined])).toBe("idle");
   });
 
   it("puts a pane waiting on its background work after working and before ready", () => {
     expect(rollupStatus(["waiting", "idle"])).toBe("waiting");
     expect(rollupStatus(["waiting", "working"])).toBe("working");
-    expect(rollupStatus(["done", "waiting", "idle"])).toBe("done");
+    expect(rollupStatus(["done", "waiting", "idle"])).toBe("waiting");
+    expect(rollupStatus(["done", "waiting", "blocked"])).toBe("blocked");
   });
 });
 
