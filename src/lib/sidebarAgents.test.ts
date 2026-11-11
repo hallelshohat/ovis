@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentInfo, HerdrPane, SessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/protocol.ts";
-import { agentContext, agentTabName, paneMark, sidebarAgents, workspaceAgentLabels } from "./sidebarAgents.ts";
+import { agentContext, agentTabName, paneMark, rollupAgentStatus, sidebarAgents, workspaceAgentLabels } from "./sidebarAgents.ts";
+import { shownStatus } from "./sidebarOrder.ts";
 
 function workspace(id: string): WorkspaceInfo {
   return { workspace_id: id, active_tab_id: `${id}:t1`, label: id, number: 1, tab_count: 1, pane_count: 1, focused: false, agent_status: "idle" };
@@ -79,6 +80,45 @@ describe("sidebarAgents", () => {
     expect(sidebarAgents(snapshot([current], [agent(current, { display_agent: "Review bot", name: "reviewer" })]))[0]!.agentLabel).toBe("Review bot");
     expect(sidebarAgents(snapshot([current], [agent(current, { display_agent: " ", name: "reviewer" })]))[0]!.agentLabel).toBe("reviewer");
     expect(sidebarAgents(snapshot([current], [agent(current)]))[0]!.agentLabel).toBe("codex");
+  });
+});
+
+describe("rollupAgentStatus", () => {
+  it("counts every agent pane but ignores ordinary shells when agents are present", () => {
+    const codex = pane("codex", { agent: "codex", agent_status: "working" });
+    const claude = pane("claude", { agent: "claude", agent_status: "done" });
+    const shell = pane("shell");
+    const current = snapshot([codex, claude, shell]);
+    const agentRows = sidebarAgents(current);
+    expect(rollupAgentStatus({ panes: current.panes, agentRows })).toBe("working");
+    codex.agent_status = "done";
+    expect(rollupAgentStatus({ panes: current.panes, agentRows })).toBe("done");
+    shell.agent_status = "working";
+    expect(rollupAgentStatus({ panes: current.panes, agentRows })).toBe("done");
+  });
+
+  it("uses current pane states, including agents identified only by the roster", () => {
+    const named = pane("named", { agent_status: "working" });
+    const completed = pane("completed", { agent: "claude", agent_status: "done" });
+    const current = snapshot([named, completed], [agent(named, { name: "reviewer", agent_status: "done" })]);
+    const agentRows = sidebarAgents(current);
+    expect(rollupAgentStatus({ panes: current.panes, agentRows })).toBe("working");
+    expect(rollupAgentStatus({ panes: [completed], agentRows })).toBe("done");
+  });
+
+  it("keeps background waits and acknowledged finishes from showing done", () => {
+    const waiting = pane("waiting", { agent: "codex", agent_status: "done", background_wait: true });
+    const completed = pane("completed", { agent: "claude", agent_status: "done", finish_id: 5 });
+    const current = snapshot([waiting, completed]);
+    const agentRows = sidebarAgents(current);
+    expect(rollupAgentStatus({ panes: current.panes, agentRows })).toBe("waiting");
+    expect(rollupAgentStatus({ panes: [completed], agentRows, statusOf: (pane) => shownStatus(pane, { completed: 5 }) })).toBe("idle");
+  });
+
+  it("falls back to pane status for shell-only groups and unknown for an empty group", () => {
+    expect(rollupAgentStatus({ panes: [pane("shell")], agentRows: [] })).toBe("idle");
+    expect(rollupAgentStatus({ panes: [pane("shell", { agent_status: "working" })], agentRows: [] })).toBe("working");
+    expect(rollupAgentStatus({ panes: [], agentRows: [] })).toBe("unknown");
   });
 });
 

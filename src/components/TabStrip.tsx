@@ -27,7 +27,8 @@ import { rosterPanes } from "../lib/dagPane.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { useTabReorder } from "../lib/useTabReorder.ts";
-import { indicatorGlyph, paneStatus, rollupStatus } from "../lib/status.ts";
+import { indicatorGlyph, paneStatus } from "../lib/status.ts";
+import { rollupAgentStatus, sidebarAgents } from "../lib/sidebarAgents.ts";
 import { useSettings } from "../lib/settings.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -99,6 +100,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     refocus.current = null; closed.current = null;
   }, [owner]);
   const panes = rosterPanes(snapshot.panes.filter((pane) => pane.workspace_id === workspace.workspace_id), selectedPane.pane_id);
+  const agentRows = sidebarAgents(snapshot);
   // The snapshot order is authoritative; number identifies a tab and does not change on a move.
   const tabs = snapshot.tabs.filter((tab) => tab.workspace_id === workspace.workspace_id);
   const reorder = useTabReorder({ owner: `${machineId}:${workspace.workspace_id}`, tabs, strip, moveTab,
@@ -370,8 +372,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
         {tabs.map((tab, index) => {
           const active = tab.tab_id === selectedPane.tab_id;
           const own = panesOf(tab);
-          // Settle each pane's wait before rolling up, so a sibling's RUN or DONE stays visible.
-          const status = rollupStatus(own.map((pane) => paneStatus(pane as HerdrPane)));
+          const status = rollupAgentStatus({ panes: own, agentRows });
           const pickerOpen = picker?.tab.tab_id === tab.tab_id;
           const name = nameOf(tab);
           return (

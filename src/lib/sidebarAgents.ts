@@ -1,5 +1,6 @@
-import type { AgentInfo, HerdrPane, SessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/protocol.ts";
+import type { AgentInfo, AgentStatus, HerdrPane, SessionSnapshot, TabInfo, WorkspaceInfo } from "../../shared/protocol.ts";
 import { customTabLabel, tabLabel } from "./tabName.ts";
+import { paneStatus, rollupStatus, type KnownStatus } from "./status.ts";
 
 export interface SidebarAgent {
   pane: HerdrPane;
@@ -58,6 +59,17 @@ export function sidebarAgents(snapshot: SessionSnapshot | null): SidebarAgent[] 
     || (tabOrder.get(left.row.tab?.tab_id ?? "") ?? snapshot.tabs.length) - (tabOrder.get(right.row.tab?.tab_id ?? "") ?? snapshot.tabs.length)
     || left.paneOrder - right.paneOrder,
   ).map(({ row }) => row);
+}
+
+/** A shell beside an agent is not unfinished agent work; shell-only groups keep their pane state. */
+export function rollupAgentStatus({ panes, agentRows, statusOf = paneStatus }: {
+  panes: readonly HerdrPane[];
+  agentRows: readonly SidebarAgent[];
+  statusOf?: (pane: HerdrPane) => AgentStatus | undefined;
+}): KnownStatus {
+  const agentIds = new Set(agentRows.map(({ pane }) => pane.pane_id));
+  const agents = panes.filter((pane) => agentIds.has(pane.pane_id));
+  return rollupStatus((agents.length > 0 ? agents : panes).map(statusOf));
 }
 
 /**
