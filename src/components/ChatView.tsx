@@ -20,6 +20,7 @@ import { ChatMarkdownImages } from "./ChatMarkdownImages.tsx";
 import { ImageLightbox } from "./ImageLightbox.tsx";
 import { PromptCard } from "./PromptCard.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
+import { Skeleton } from "./Skeleton.tsx";
 import { loadChatTimeline, loadedChatTimeline, useChatTimeline } from "./chatTimelineLoader.ts";
 import { ChatMinimap } from "./ChatMinimap.tsx";
 import { minimapTurns } from "../lib/chatMinimap.ts";
@@ -123,6 +124,15 @@ import { useResourceUrl } from "../lib/useResourceUrl.ts";
 
 /** Slow reads in a row the chat waits through quietly before it alarms: about 50 s at the local 15 s deadline. */
 const SLOW_READS_BEFORE_ALARM = 3;
+
+function ChatLoadingPlaceholder(): React.JSX.Element {
+  return <div className="chat-loading-placeholder" aria-hidden="true">
+    {[0, 1].map((exchange) => <div className="chat-loading-exchange" key={exchange}>
+      <div className="chat-loading-user"><Skeleton width="long" /><Skeleton width="medium" /></div>
+      <div className="chat-loading-answer"><Skeleton width="long" /><Skeleton width="long" /><Skeleton width="short" /></div>
+    </div>)}
+  </div>;
+}
 
 /**
  * A read that failed, as one line (DESIGN.md, Messages say only what the person needs now): the
@@ -3056,6 +3066,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   }, [sentWaiting, state.turns, turnsRead, waitKey]);
   const waitWords = useAnnouncedText(!loaded && error === null ? t("Loading conversation…") : waiting ? t("Waiting for the PC…") : null);
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
+  const loading = lastAnswer.current === null && (!loaded || waiting);
   const footer = <>
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
       {sentWaiting.length > 0 && <SentWaitingList sends={sentWaiting} />}
@@ -3095,7 +3106,6 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       && readPresentation === presentationKey && (state.source === "conversation" ? ChatTimeline !== null : agent === null) ? presentationKey : undefined}>
     <div className="chat-frame-body">
     {state.source === "conversation" ? ChatTimeline === null
-      // its chunk is still loading: no turn is read until it arrives, so this is the loading state
       ? <div className="chat-view chat-view-virtual" role="log" aria-live="polite" aria-label={logLabel}>
         <div className="chat-transcript chat-transcript-virtual">
           <div className="chat-virtual-header">{header}</div>
@@ -3123,6 +3133,12 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       <div className="chat-transcript" data-conversation-source={state.conversationSource}>
         <ChatFallback paneId={paneId} agent={agent} visible={visible} messages={state.messages} scrollback={state.scrollback} outcomes={outcomes} restored={restored} actions={outcomeActions} skills={skillMatcher} />
         {footer}
+      </div>
+    </div>}
+    {state.source === "conversation" && loading && <div className="chat-view chat-view-virtual chat-loading-view" aria-hidden="true">
+      <div className="chat-transcript chat-transcript-virtual chat-loading-transcript">
+        <ChatLoadingPlaceholder />
+        <div className="chat-virtual-footer" />
       </div>
     </div>}
     {state.source === "conversation" && <ChatMinimap turns={minimap} rowKeys={rowKeys} scroller={scroller} onJump={jumpToTurn} onWheel={minimapWheel} />}

@@ -2038,7 +2038,7 @@ describe("transcript pages", () => {
       expect(transcriptPage("omo-transcript", path).turns.length).toBeGreaterThan(0);
       appendFileSync(path, `${omoUser(`2026-10-05T00:${String(10 + Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}.000Z`, `prompt ${n}`)}\n`);
     }
-    expect(transcriptPage("omo-transcript", path).turns[0]?.parts[0]).toEqual({ kind: "text", text: "prompt 2" });
+    expect(transcriptPage("omo-transcript", path).turns[0]?.parts[0]).toEqual({ kind: "text", text: "prompt 40" });
     appendFileSync(path, `${omoWake("2026-10-05T00:20:00.000Z", [completion({ task_id: "st_1", name: "st_1", status: "completed", agent_type: "explore", final_response: "done" })])}\n`);
     return endedTitles(transcriptPage("omo-transcript", path));
   };
@@ -2116,22 +2116,24 @@ describe("transcript pages", () => {
     writeFileSync(path, `${whole}\n`);
 
     const newest = transcriptPage("claude-transcript", path);
-    expect(newest.turns).toHaveLength(MAX_TURNS);
-    expect(texts(newest.turns)[0]).toBe("prompt 70");
+    expect(newest.turns).toHaveLength(24);
+    expect(texts(newest.turns)[0]).toBe("prompt 108");
     expect(newest.cursor).not.toBeNull();
     const middle = transcriptPage("claude-transcript", path, { before: newest.cursor! });
-    expect(texts(middle.turns)[0]).toBe("prompt 20");
+    expect(middle.turns).toHaveLength(MAX_TURNS);
+    expect(texts(middle.turns)[0]).toBe("prompt 58");
     const first = transcriptPage("claude-transcript", path, { before: middle.cursor! });
-    expect(first.cursor).toBeNull();
-    expect(texts([...first.turns, ...middle.turns, ...newest.turns])).toEqual(texts(parseClaudeTranscript(whole, Infinity)));
-    expect(texts(middle.turns).at(-1)).toBe("[out 69] answer 69");
+    const beginning = transcriptPage("claude-transcript", path, { before: first.cursor! });
+    expect(beginning.cursor).toBeNull();
+    expect(texts([...beginning.turns, ...first.turns, ...middle.turns, ...newest.turns])).toEqual(texts(parseClaudeTranscript(whole, Infinity)));
+    expect(texts(middle.turns).at(-1)).toBe("[out 107] answer 107");
   });
 
   it("keeps a held start while it is inside the newest page, then fills the turns it moved past a page at a time", () => {
     const path = join(temp(), "session.jsonl");
     writeFileSync(path, `${Array.from({ length: 60 }, (_, n) => claudeTurn(n)).join("\n")}\n`);
     const held = transcriptPage("claude-transcript", path).cursor!;
-    // while the last turn grows, the held start (prompt 10) is still inside the newest page
+    // while the last turn grows, the held start (prompt 48) is still inside the newest page
     const more = JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "still working" }] } });
     writeFileSync(path, `${Array.from({ length: 60 }, (_, n) => claudeTurn(n)).join("\n")}\n${more}\n`);
     const growing = transcriptPage("claude-transcript", path, { from: held });
@@ -2142,12 +2144,12 @@ describe("transcript pages", () => {
     // the newest page slid past it: the answer is the newest page, never more than a page
     const newest = transcriptPage("claude-transcript", path, { from: held });
     expect(newest.cursor).not.toBe(held);
-    expect(texts(newest.turns)[0]).toBe("prompt 20");
+    expect(texts(newest.turns)[0]).toBe("prompt 58");
     // the turns in between come from `before` the newest page, `since` the held start
     const gap = transcriptPage("claude-transcript", path, { before: newest.cursor!, since: held });
     expect(gap.cursor).toBe(held);
-    expect(texts(gap.turns)[0]).toBe("prompt 10");
-    expect(texts(gap.turns).at(-1)).toBe("[out 19] answer 19");
+    expect(texts(gap.turns)[0]).toBe("prompt 48");
+    expect(texts(gap.turns).at(-1)).toBe("[out 57] answer 57");
     for (const cursor of ["another-file:10", `${held.split(":")[0]}:999999999`, "garbage"]) {
       expect(() => transcriptPage("claude-transcript", path, { before: cursor })).toThrow(HistoryChanged);
     }
@@ -2195,7 +2197,8 @@ describe("transcript pages", () => {
     expect(() => transcriptPage("codex-transcript", segment, { from: newest.cursor! }, home)).toThrow(HistoryChanged);
     // read afresh, the pages reach the earlier rollout
     const again = transcriptPage("codex-transcript", segment, {}, home);
-    const all = [...transcriptPage("codex-transcript", segment, { before: again.cursor! }, home).turns, ...again.turns];
+    const middle = transcriptPage("codex-transcript", segment, { before: again.cursor! }, home);
+    const all = [...transcriptPage("codex-transcript", segment, { before: middle.cursor! }, home).turns, ...middle.turns, ...again.turns];
     expect(texts(all)[0]).toBe("prompt 0");
   });
 
@@ -2219,7 +2222,7 @@ describe("transcript pages", () => {
     writeFileSync(segment, `${meta({ history_base: { thread_id: thread, end_ordinal_exclusive: kept.split("\n").length - 1, end_byte_offset: Buffer.byteLength(kept) } })}\n${Array.from({ length: 3 }, (_, n) => task(80 + n)).join("\n")}\n`);
     forgetHistoryChains();
     const before = transcriptPage("codex-transcript", segment, {}, home);
-    expect(texts(before.turns)[0]).toBe("prompt 33");
+    expect(texts(before.turns)[0]).toBe("prompt 71");
     expect(before.cursor).not.toBeNull();
     // archived while the complete chain is remembered
     renameSync(parent, join(home, "archived_sessions", `rollout-2026-09-15T12-58-12-${thread}.jsonl`));
@@ -2335,14 +2338,14 @@ describe("transcript pages", () => {
 
   it("reads no replacement of a Codex parent rollout its remembered chain was resolved without", () => {
     const { home, parent, live, task } = codexChain();
-    const before = transcriptPage("codex-transcript", live, {}, home);
+    const before = transcriptPage("codex-transcript", live, { prompts: 50 }, home);
     expect(texts(before.turns)[0]).toBe("prompt 33");
     // another file renamed over the parent: no rollout header, so it holds no cut, but turns where the parent's were
     const next = `${parent}.next`;
     writeFileSync(next, `${JSON.stringify({ type: "event_msg", payload: { type: "not_a_rollout" } })}\n${Array.from({ length: 80 }, (_, n) => task(n, "FOREIGN")).join("\n")}\n${"\n".repeat(256)}`);
     renameSync(next, parent);
     let after: unknown;
-    try { after = transcriptPage("codex-transcript", live, {}, home); } catch (error) { after = error; }
+    try { after = transcriptPage("codex-transcript", live, { prompts: 50 }, home); } catch (error) { after = error; }
     expect(JSON.stringify(after)).not.toContain("FOREIGN");
     expect(texts((after as { turns: ConversationTurn[] }).turns)).toEqual(["prompt 80", "answer 80", "prompt 81", "answer 81", "prompt 82", "answer 82"]);
   });
@@ -2365,10 +2368,11 @@ describe("transcript pages", () => {
     writeFileSync(segment, `${meta({ history_base: { thread_id: thread, end_ordinal_exclusive: keptLines, end_byte_offset: Buffer.byteLength(kept) } })}\n${Array.from({ length: 10 }, (_, n) => task(60 + n)).join("\n")}\n`);
 
     const newest = transcriptPage("codex-transcript", segment, {}, home);
-    expect(texts(newest.turns)[0]).toBe("prompt 20");
+    expect(texts(newest.turns)[0]).toBe("prompt 58");
     const older = transcriptPage("codex-transcript", segment, { before: newest.cursor! }, home);
-    expect(older.cursor).toBeNull();
-    const all = texts([...older.turns, ...newest.turns]);
+    const first = transcriptPage("codex-transcript", segment, { before: older.cursor! }, home);
+    expect(first.cursor).toBeNull();
+    const all = texts([...first.turns, ...older.turns, ...newest.turns]);
     expect(all).toEqual(Array.from({ length: 70 }, (_, n) => [`prompt ${n}`, `answer ${n}`]).flat());
   });
 });
