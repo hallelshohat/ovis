@@ -21,7 +21,13 @@ const patch = `(() => {
   const roster = (machines) => machines.map((machine) => {
     const copy = structuredClone(machine);
     for (const workspace of copy.snapshot?.workspaces ?? []) if (tagged.has(workspace.workspace_id)) workspace.tokens = { role: "background" };
-    if (localStorage.getItem("test:blocked") === "1") for (const pane of copy.snapshot?.panes ?? []) if (pane.workspace_id === "w1L") pane.agent_status = "blocked";
+    if (localStorage.getItem("test:blocked") === "1") {
+      const pane = copy.snapshot?.panes.find((candidate) => candidate.workspace_id === "w1L");
+      if (pane) {
+        pane.agent_status = "blocked";
+        copy.snapshot.panes.push({ ...pane, pane_id: pane.pane_id + "-working", agent_status: "working" });
+      }
+    }
     return copy;
   });
   window.EventSource = class extends EventTarget {
@@ -92,6 +98,7 @@ try {
 
           // turned on: the tagged group after the others, folded; a tagged worktree stays under its repository
           await open(true);
+          await page.waitForFunction(() => document.querySelectorAll(".machine-workspaces li.workspace-group").length === 3);
           assert.deepEqual(await rows(page), ["w1C", "w1D", "w1H"], "a folded part hides cli-tools and its worktrees; flaky-retry-test stays with checkout-api");
           assert.equal(await heading(page).getAttribute("aria-expanded"), "false");
           assert.equal((await heading(page).textContent())?.replace(/\s+/g, " ").trim(), "Background workspaces1", "the heading says what it holds and how many");
@@ -118,7 +125,7 @@ try {
           await open(true, panes.cli);
           assert.deepEqual(await rows(page), ["w1C", "w1D", "w1H", "w1J", "w1K", "w1L"], "the open tagged workspace stays in sight");
           await open(true, panes.shell, true);
-          assert.deepEqual(await rows(page), ["w1C", "w1D", "w1H", "w1J", "w1K", "w1L"], "a question is never folded away");
+          assert.deepEqual(await rows(page), ["w1C", "w1D", "w1H", "w1J", "w1K", "w1L"], "a question beside a working sibling is never folded away");
           assert.deepEqual(errors, []);
           console.log(`PASS ${label}: off keeps herdr's order; on, tagged workspaces stand after the others under a folded heading with their count, the open one and a question in sight`);
         } finally { await context.close(); }
