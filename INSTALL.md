@@ -60,9 +60,21 @@ for a GitHub star, unless the account gh is signed in to has starred the reposit
 asks whether to give one only at a terminal, and goes on by itself after 20 seconds: do not answer
 the question, and do not star the repository for the user.
 
+On a Linux or macOS PC that has herdr-core (`hc`, the core the Herdr desktop app runs on) and no herdr,
+C installs neither herdr nor the plugin. It installs Bun when missing, puts Ovis in its own checkout
+(`~/.local/share/ovis/app`, built as herdr builds the plugin), writes `OVIS_RUNTIME=herdr-core` and
+the hc it found (`OVIS_HC_BIN`) to `~/.config/ovis/env`, and starts it with `bun ~/.local/share/ovis/app/scripts/plugin.ts start` from a
+user service that starts it again at login: `ovis.service` (`systemctl --user`) on Linux, the
+`sh.ovis.server` LaunchAgent on macOS. Without systemd it starts Ovis once and says how to start it
+again. `OVIS_RUNTIME=herdr` or `OVIS_RUNTIME=herdr-core` before `sh` picks the runtime instead.
+Where the herdr plugin already runs Ovis, it does not add a second one: it says to set
+`OVIS_RUNTIME=herdr-core` in the plugin's own settings instead. Updates work as for the plugin.
+
 On Windows x64, use `irm https://ovis.sh/install.ps1 | iex` in PowerShell.
 It requires Git for Windows and installs missing herdr and Bun for the user, without Node or WSL.
 It starts the plugin when herdr runs. Phone access stays optional: use the **Phone setup** action.
+On Windows it starts on herdr even where herdr-core is installed; **Settings → About → Terminals**
+then switches to the Herdr app's terminals (herdr-core).
 `OVIS_REF` selects a branch or tag for testing; otherwise it installs the latest release.
 
 ## 3A. Install as a herdr plugin
@@ -143,6 +155,21 @@ A checkout has no Rust PTY host until one is put in `bin/`: on a release tag,
 `bun scripts/pty-sidecar.ts install` fetches that release's, checked; on any branch,
 `cargo build --release --manifest-path crates/pty-sidecar/Cargo.toml` builds one. Without either,
 terminals run on Node 18+ where the PC has it, and are mirrored where it has none.
+
+On Linux and macOS, a service manager may start with a smaller `PATH` than an interactive shell.
+Use the existing launcher so Bun, Node and agents installed in `~/.local/bin` are discoverable.
+For example, a systemd unit's `[Service]` section can use:
+
+```ini
+WorkingDirectory=/absolute/path/to/ovis
+ExecStart=/bin/sh /absolute/path/to/ovis/scripts/with-bun.sh run start
+```
+
+Run the service as the user who installed the agents, with that user's `HOME`. The launcher adds
+the usual user-local directories after the existing `PATH`, preserving its command choices.
+If an installed agent such as Grok is missing from the new-session picker, check the service's
+`PATH`: the picker hides agents the server cannot find. Restart the web UI after changing the
+service configuration.
 
 ## 4. Verify
 
@@ -245,6 +272,15 @@ The old `HERDR_WEB_*` names still work. The [user guide](docs/guide.md#configura
 # an install from before the rename runs, or is registered, under its old id until the installer moves it
 herdr plugin action invoke devswha.ovis.stop || herdr plugin action invoke devswha.herdr-web-ui.stop
 herdr plugin uninstall devswha.ovis || herdr plugin uninstall devswha.herdr-web-ui
+```
+
+An install on herdr-core (no herdr) has no plugin: stop it and remove its service and checkout.
+
+```bash
+bun ~/.local/share/ovis/app/scripts/plugin.ts stop
+systemctl --user disable --now ovis && rm ~/.config/systemd/user/ovis.service   # Linux
+launchctl bootout gui/$(id -u)/sh.ovis.server; rm ~/Library/LaunchAgents/sh.ovis.server.plist   # macOS
+rm -rf ~/.local/share/ovis/app
 ```
 
 Uninstall removes herdr's managed checkout. It does not touch `~/.config/ovis` (push

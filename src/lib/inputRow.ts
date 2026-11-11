@@ -76,6 +76,20 @@ export function readScreen(buffer: IBuffer, cols: number, rows: number): ScreenS
   return { cols, rows: out };
 }
 
+/** The live screen as logical lines, preserving spaces across xterm wraps (as in useTerminalMount). */
+export function readScreenLines(buffer: IBuffer, rows: number): string[] | null {
+  const lines: string[] = [];
+  for (let y = 0; y < rows; y++) {
+    const line = buffer.getLine(buffer.baseY + y);
+    // A clipped first line or missing row cannot prove what the screen says.
+    if (!line || (y === 0 && line.isWrapped)) return null;
+    const text = line.translateToString(y === rows - 1 || !buffer.getLine(buffer.baseY + y + 1)?.isWrapped);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += text;
+    else lines.push(text);
+  }
+  return lines;
+}
+
 /** a full-width rule of pi's TUI and its family */
 const RULE = /^─{10,}$/;
 const blank = (cell: ScreenCell): boolean => cell.char.trim() === "";
@@ -144,8 +158,8 @@ export const claudeInputRow: InputRowRecognizer = (screen) => {
 const CODEX_HINT = /\besc (back|cancel|close|exit|dismiss)\b|\bq close\b|\benter (select|submit|save|continue|open|resume)\b/;
 
 /**
- * Codex: the bottom-most `› ` row (not a numbered `› 1.` choice), its `›` not inverse, every cell
- * after `› ` blank or dim (the placeholder rotates, so it is never matched), no picker or field hint
+ * Codex: the bottom-most `› ` row (`» ` at Ultra reasoning effort; not a numbered `› 1.` choice), its mark not
+ * inverse, every cell after it blank or dim (the placeholder rotates, so it is never matched), no picker or field hint
  * under it, and `? for shortcuts` (`? for shortc` at 40 columns) in one of the next 4 rows: the hint
  * leaves while the composer holds text. Picker rows (`› catppuccin-mocha`, `› [x] Use theme colors`)
  * and /rename's field (`› Type a name and press Enter`, over `enter submit · esc back`) look alike.
@@ -154,7 +168,8 @@ export const codexInputRow: InputRowRecognizer = (screen) => {
   const rows = filled(screen);
   const candidates = rows.filter((index) => {
     const text = screen.rows[index]!.text;
-    return (text === "›" || text.startsWith("› ")) && !/^› \d+\./.test(text);
+    // `»` is the composer's mark at Ultra reasoning effort (Codex 0.164 on); a list's cursor stays `›`
+    return /^[›»](?: |$)/.test(text) && !/^[›»] \d+\./.test(text);
   });
   const at = candidates.at(-1);
   if (at === undefined) return "gone";
@@ -422,10 +437,10 @@ const SYNC = /\u001b\[\?2026([hl])/g;
 
 /**
  * Whether the screen xterm has parsed is a frame the recognizers may read. herdr wraps each frame
- * it draws in a synchronized-update block (`CSI ? 2026 h` … `l`), which xterm 5.5 does not honour,
- * and a read of its stream can end inside one: a frame is read only once its block has closed. A
- * grid resized here (a fit, a phone peek's narrower grid, a pane's grid adopted) holds the old
- * screen until the agent draws again for the new one: from the resize on, nothing is read until a
+ * it draws in a synchronized-update block (`CSI ? 2026 h` … `l`). xterm 6 holds its drawing until a
+ * block closes, but what it has parsed can still end inside one: a frame is read only once its
+ * block has closed. A grid resized here (a fit, a phone peek's narrower grid, a pane's grid
+ * adopted) holds the old screen until the agent draws again for the new one: from the resize on, nothing is read until a
  * whole frame has come for the new grid, written after the pane's grid said it was that size. When
  * the pane's grid itself changes size, herdr may first draw the old screen again, reflowed for the
  * new size (an idle box cut at its borders reads as gone), before the agent's own redraw, or both

@@ -11,6 +11,8 @@ import { source as devin } from "./devin.ts";
 import { source as grok } from "./grok.ts";
 import { source as hermes } from "./hermes.ts";
 import { source as agy } from "./agy.ts";
+import { source as copilot } from "./copilot.ts";
+import { source as letta } from "./letta.ts";
 
 export interface ProcessRoots {
   readonly agentDir?: string | null;
@@ -25,6 +27,12 @@ export interface AgentCommandContext {
   readonly roots: ProcessRoots;
   /** the running agent's version, read from its own store; null or absent when unknown */
   readonly version?: string | null;
+  /**
+   * The server's own environment, the fallback for a setting the pane's process does not name
+   * (absent: `process.env`). A scan on a file thread (`file-pool.ts`) is handed the server's copy:
+   * a Bun thread keeps the environment the process started with, not what the server set since.
+   */
+  readonly serverEnv?: Readonly<Record<string, string | undefined>>;
 }
 export interface AgentCommandSource {
   readonly builtins: readonly string[];
@@ -49,4 +57,4 @@ const omoFirstByName: AgentCommandSource = {
     return omo.discover(ctx).filter(({ name }) => !names.has(name) && Boolean(names.add(name)));
   },
 };
-export const AGENT_SOURCES: Record<string, AgentCommandSource> = { omo: omoFirstByName, claude, codex, pi, cmd, omp, gjc, opencode, devin, grok, hermes, agy };
+export const AGENT_SOURCES: Record<string, AgentCommandSource> = { omo: omoFirstByName, claude, codex, pi, cmd, omp, gjc, opencode, devin, grok, hermes, agy, copilot, letta };

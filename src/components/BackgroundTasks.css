@@ -19,12 +19,21 @@
   border-radius: var(--radius-pill);
   color: var(--status-working);
   font-size: var(--fs-xs);
+  /* its figures (the plan's step, the count) change in place without a shift */
+  font-variant-numeric: var(--font-numeric);
   cursor: pointer;
 }
 
+/* a mouse's floor: the chip's own box is the --pointer-target, still a pill in the row's height */
+@media (pointer: fine) {
+  .bg-tasks-toggle {
+    min-height: var(--pointer-target);
+  }
+}
+
 .bg-tasks-toggle svg {
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   flex: none;
 }
 
@@ -140,7 +149,7 @@
   bottom: calc(100% + var(--space-2));
   left: 0;
   z-index: var(--z-popover);
-  max-height: max(var(--row-h), min(calc(var(--row-h) * 9), calc(var(--bg-tasks-room, 100vh) - var(--space-2) * 2)));
+  max-height: max(var(--row-h), min(calc(var(--row-h) * 9), calc(var(--bg-tasks-room, 100dvh) - var(--space-2) * 2)));
   overflow-y: auto;
   white-space: normal;
 }
@@ -180,14 +189,19 @@
 }
 
 .bg-ended-toggle svg {
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   flex: none;
 }
 
-.bg-ended-toggle:hover,
 .bg-ended-toggle[aria-expanded="true"] {
   color: var(--text);
+}
+
+@media (hover: hover) {
+  .bg-ended-toggle:hover {
+    color: var(--text);
+  }
 }
 
 .bg-ended-failed {
@@ -207,7 +221,7 @@
   padding: var(--space-1) var(--space-2);
 }
 
-/* a running task is a disclosure: the whole row is the button that opens its detail
+/* an openable task is a disclosure: the whole row is the button that opens its detail
    (BackgroundAgentDetail), with the caret of the ended fold at its end; the row's padding is the
    button's, so the hit area and the hover tint are the row */
 .bg-task.is-openable {
@@ -228,6 +242,11 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+/* an artifact's row (Artifacts.tsx) is a link to its page: drawn as a task's row, not as a link */
+a.bg-task-open {
+  text-decoration: none;
 }
 
 @media (hover: hover) {
@@ -252,6 +271,15 @@
 }
 
 .bg-task-caret {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  flex: none;
+  align-self: center;
+  color: var(--text-dim);
+}
+
+/* what kind of task it is (a subagent, a command, a monitor, a workflow), quietly before the caret */
+.bg-task-kind {
   width: 14px;
   height: 14px;
   flex: none;
@@ -260,8 +288,8 @@
 }
 
 .bg-task-icon {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
   flex: none;
   margin-top: 3px;
   color: var(--text-dim);
@@ -333,7 +361,7 @@
   flex-direction: column;
   gap: var(--space-1);
   margin: var(--space-1) 0 0;
-  padding: 0 0 0 calc(14px + var(--space-2));
+  padding: 0 0 0 calc(var(--icon-size-sm) + var(--space-2));
   list-style: none;
 }
 
@@ -357,7 +385,7 @@
   overflow-wrap: anywhere;
 }
 
-.bg-node svg { width: 12px; height: 12px; flex: none; }
+.bg-node svg { width: var(--icon-size-xs); height: var(--icon-size-xs); flex: none; }
 .bg-node.is-running { border-color: var(--status-working); color: var(--text); }
 .bg-node.is-running svg { color: var(--status-working); }
 .bg-node.is-completed svg { color: var(--status-done); }
@@ -368,7 +396,7 @@
 
 .bg-run-error {
   margin: var(--space-1) 0 0;
-  padding-left: calc(14px + var(--space-2));
+  padding-left: calc(var(--icon-size-sm) + var(--space-2));
   color: var(--status-blocked);
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;

@@ -1,0 +1,263 @@
+/*
+ * The hosted shell's screens (RelayShell.tsx, RelayShellScreens.tsx): the sign-in is one centred
+ * 368px (--relay-signin-w) unboxed column on --bg; pairing and recovery screens sit in a bordered
+ * panel card of the same width. Only tokens from the styles.css :root block; buttons and fields use
+ * the system's .btn and .input primitives.
+ */
+
+.relay-shell-screen {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  min-height: 100dvh;
+  min-height: var(--app-height, 100dvh);
+  padding: calc(var(--space-6) + env(safe-area-inset-top, 0px)) calc(var(--space-4) + env(safe-area-inset-right, 0px))
+    calc(var(--space-6) + env(safe-area-inset-bottom, 0px)) calc(var(--space-4) + env(safe-area-inset-left, 0px));
+  background: var(--bg);
+}
+
+.relay-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: min(100%, var(--relay-signin-w));
+  min-width: 0;
+  padding: var(--space-6);
+  background: var(--bg-panel);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+/* Sign-in is an unboxed 368px column directly on --bg: no card border, no panel background, no padding */
+.relay-shell-screen > .relay-shell.account-centered {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.relay-shell-mark {
+  display: block;
+  width: calc(var(--mark-size) * 2);
+  height: calc(var(--mark-size) * 2);
+  margin-bottom: var(--space-4);
+}
+
+.relay-shell-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--lh-tight);
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.relay-shell-signin-title {
+  margin: 0 0 var(--space-6);
+  font-size: var(--fs-display);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-display);
+  line-height: var(--lh-tight);
+}
+
+.relay-shell-copy {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+
+/* the saved PCs: one row each, the whole row the link, a hairline between rows */
+.relay-shell-pcs {
+  margin: var(--space-2) 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+  border-top: var(--hairline) solid var(--border);
+}
+
+.relay-shell-pc {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--touch-target);
+  padding: var(--space-2) 0;
+  border-bottom: var(--hairline) solid var(--border);
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .relay-shell-pc:hover {
+    color: var(--accent);
+  }
+}
+
+.relay-shell-pc-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.relay-shell-pc-glyph {
+  flex: none;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--text-dim);
+}
+
+.relay-shell-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.relay-shell-actions .btn {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: var(--touch-target);
+  padding-block: var(--space-2);
+  line-height: var(--lh-tight);
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.relay-shell-wait {
+  display: grid;
+  place-items: center;
+  margin: var(--space-4) 0 0;
+}
+
+/* a PC below the shell's minimum version: its steps to update, each command copyable whole */
+.relay-shell-more {
+  margin-top: var(--space-3);
+}
+
+.relay-shell-command-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.relay-shell-command {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-strong);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.relay-shell-copy-btn {
+  flex: none;
+  min-width: calc(var(--space-8) * 2 + var(--space-2));
+}
+
+.relay-shell-detail {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.relay-shell-hint {
+  margin: var(--space-5) 0 0;
+  padding-top: var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  color: var(--text-dim);
+}
+
+/* the six digits to compare with the PC's screen: the pairing code's size, in two groups of three */
+.relay-shell-digits {
+  margin: var(--space-4) 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-pairing);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-code);
+  text-align: center;
+  color: var(--text-strong);
+}
+
+/* a key that is not the PC's: the two ids, one above the other, the PC's first */
+.relay-shell-keys {
+  margin: var(--space-4) 0 0;
+  padding: var(--space-3);
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.relay-shell-keys dt {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.relay-shell-keys dd {
+  margin: var(--space-1) 0 var(--space-3);
+}
+
+/* Pair with a code / typed digits: visible label and .input field */
+.relay-shell-code-form {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.relay-shell-field-label {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-strong);
+  text-align: start;
+}
+
+.input.relay-shell-code-input,
+.relay-shell-code-input {
+  width: 100%;
+  height: var(--touch-target);
+  min-height: var(--touch-target);
+  padding: 0 var(--space-3);
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-input);
+  letter-spacing: var(--tracking-code);
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.input.relay-shell-code-input:focus-visible,
+.relay-shell-code-input:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
+/* the ID a typed code found, in the groups the PC draws it in under its code */
+.relay-shell-code-id {
+  margin: var(--space-4) 0;
+}
+
+/* under the hairline: the QR route ghost button */
+.relay-shell-sign-in-links {
+  margin: 0;
+}

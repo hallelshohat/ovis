@@ -13,8 +13,14 @@ import { userErrorMessage, type UserError } from "../lib/userError.ts";
 export interface AccessGateProps {
   /** why the server refused this browser, when it said */
   reason: AccessRefusal | null;
-  /** the code a scanned QR code brought along: submitted at once */
+  /** the unconsumed address code to display; automatic submission must claim it first */
   initialCode: string;
+  /** claim the address code before sending it, even if the request fails; empty means already consumed */
+  consumePairCode: () => string;
+  /** a successful pairing was followed by a health check that still refused this browser */
+  pairingUnconfirmed: boolean;
+  /** notify a caller tracking whether the successful pairing survives the next health check */
+  onPaired?: () => void;
   /** Fires once the server set a cookie: the shell can mount, and every later fetch and the WebSocket carry it. */
   onUnlocked: () => void;
 }
@@ -26,12 +32,12 @@ export interface AccessGateProps {
  * token stays as the other way. Nothing is stored here: the server answers with an
  * HttpOnly cookie either way.
  */
-export function AccessGate({ reason, initialCode, onUnlocked }: AccessGateProps) {
+export function AccessGate({ reason, initialCode, consumePairCode, pairingUnconfirmed, onPaired, onUnlocked }: AccessGateProps) {
   const t = useT();
   const codeRef = useRef<HTMLInputElement | null>(null);
   const tokenRef = useRef<HTMLInputElement | null>(null);
   const [code, setCode] = useState(initialCode);
-  const [token, setToken] = useState("");
+  // the token lives in its field alone, read at submit and cleared once it unlocked (src/AGENTS.md, G-108)
   const [submitting, setSubmitting] = useState<"code" | "token" | null>(null);
   const [error, setError] = useState<UserError | null>(null);
   const [codeShort, setCodeShort] = useState(false);
@@ -43,6 +49,7 @@ export function AccessGate({ reason, initialCode, onUnlocked }: AccessGateProps)
     setError(null);
     try {
       await pairDevice(value, deviceLabel(navigator.userAgent, navigator.maxTouchPoints ?? 0));
+      onPaired?.();
       onUnlocked();
     } catch (err) {
       setError(err instanceof ApiError && err.status === 401 ? { message: t("That code is wrong, used up or expired. Start a new pairing on the PC."), detail: null } : userErrorMessage(err));
@@ -52,7 +59,14 @@ export function AccessGate({ reason, initialCode, onUnlocked }: AccessGateProps)
   };
 
   // a scanned QR code brings the code along: no typing on the phone
-  useEffect(() => { if (scanned.current) { scanned.current = false; void pair(code); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!scanned.current) return;
+    scanned.current = false;
+    // the address code goes once: a failed attempt leaves an empty field, not a spent code to send again
+    setCode("");
+    const value = consumePairCode();
+    if (value) void pair(value);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submitCode = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -63,11 +77,13 @@ export function AccessGate({ reason, initialCode, onUnlocked }: AccessGateProps)
   const submitToken = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
     if (submitting) return;
+    const token = tokenRef.current?.value ?? "";
     if (token === "") { tokenRef.current?.focus(); return; }
     setSubmitting("token");
     setError(null);
     try {
       await authenticate(token);
+      if (tokenRef.current) tokenRef.current.value = "";
       onUnlocked();
     } catch (err) {
       setError(err instanceof ApiError && err.status === 401 ? { message: t("Token does not match."), detail: null } : userErrorMessage(err));
@@ -80,8 +96,9 @@ export function AccessGate({ reason, initialCode, onUnlocked }: AccessGateProps)
     <main className="access-gate-screen">
       <div className="access-gate" data-testid="token-gate">
         <img src="/icons/icon-192.png?v=sheep1" alt="" width="44" height="44" className="access-gate-mark" />
+        {/* the title names the task on this screen, not the app (G-140); the mark above carries the brand */}
         <h1 id="access-gate-title" className="access-gate-title">
-          Ovis
+          {t(reason === "token_required" ? "Unlock" : "Pair this device")}
         </h1>
         {reason === "other_user" && (
           <p className="access-gate-refused" role="status">{t("Tailscale says this device belongs to someone other than this PC's owner. The owner can still let it in with a pairing code.")}</p>
@@ -124,14 +141,15 @@ export function AccessGate({ reason, initialCode, onUnlocked }: AccessGateProps)
               name="token"
               autoComplete="current-password"
               inputMode="text"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
             />
             <button type="submit" className="access-gate-submit" disabled={submitting !== null}>
               {t(submitting === "token" ? "Unlocking…" : "Unlock")}
             </button>
           </form>
         </details>
+        {pairingUnconfirmed && error === null && (
+          <p className="access-gate-error" role="alert">{t("Could not confirm this browser is paired. Check that cookies are enabled, then try again.")}</p>
+        )}
         {error !== null && (
           <p id="access-gate-error" className="access-gate-error" role="alert">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}</p>
         )}

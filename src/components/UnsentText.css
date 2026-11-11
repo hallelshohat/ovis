@@ -1,0 +1,96 @@
+/* Recover unsent text (UnsentText.tsx): a list of plain-text records in a modal, each with its
+   PC, pane, kind and time on one muted line, prose in UI sans and terminal lines in mono, and its three actions under it */
+.unsent-modal {
+  width: min(100%, var(--dialog-w));
+}
+
+.unsent-lead {
+  margin: 0 0 var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.unsent-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.unsent-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-top: var(--hairline) solid var(--border);
+}
+
+.unsent-item.is-discarded > .unsent-text {
+  opacity: 0.6;
+}
+
+.unsent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.unsent-meta > * + *::before {
+  content: "·";
+  margin-right: var(--space-2);
+}
+
+/* the text as it was typed: kept whole, wrapped, and scrolled past a few lines; prose in UI face, terminal line in mono */
+.unsent-text {
+  max-height: 10lh;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.unsent-text[data-kind="line"] {
+  font-family: var(--font-mono);
+}
+
+.unsent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Discard and the Undo that takes its place for the undo window share one box, so the row does not shift */
+.unsent-discard,
+.unsent-undo {
+  min-width: 5rem;
+}
+
+.unsent-discard {
+  color: var(--status-blocked);
+}
+
+@media (hover: hover) {
+  .unsent-discard:hover:not(:disabled) {
+    background: var(--danger-tint);
+    color: var(--danger-text);
+  }
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .unsent-modal .btn {
+    min-height: var(--touch-target);
+    height: var(--touch-target);
+  }
+}

@@ -74,6 +74,18 @@ export function slugOf(label: string | null | undefined): string {
   return (end > SLUG_MAX / 2 ? cut.slice(0, end) : words.slice(0, SLUG_MAX)).replace(/-+$/, "");
 }
 
+/** Settings pages merged into another: a link or history entry naming one opens the page it went to. */
+const MOVED_SETTINGS: Readonly<Record<string, string>> = { usage: "agents", integrations: "agents", voice: "chat", remote: "devices" };
+/** The group a merged page became, for a link naming the old page alone. */
+const MOVED_SECTIONS: Readonly<Record<string, string>> = { voice: "voice", remote: "remote" };
+
+/** The Settings page a link or history entry names, as this version calls it. */
+export function currentSettingsPage(page: string): string;
+export function currentSettingsPage(page: string | null): string | null;
+export function currentSettingsPage(page: string | null): string | null {
+  return page === null ? null : MOVED_SETTINGS[page] ?? page;
+}
+
 const named = (value: string | null): string | null => {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -91,7 +103,7 @@ export function readLink(search: string): AppLink {
   // herdr's ids hold no hyphen: the first one starts the slug
   const ws = named(query.get("ws"));
   const cut = ws?.indexOf("-") ?? -1;
-  const settings = named(query.get("settings"));
+  const settings = currentSettingsPage(named(query.get("settings")));
   return {
     machine: named(query.get("machine")) ?? LOCAL,
     workspace: ws && cut > 0 ? ws.slice(0, cut) : ws,
@@ -100,7 +112,7 @@ export function readLink(search: string): AppLink {
     view: view === "chat" || view === "terminal" ? view : null,
     file: named(query.get("file")),
     settings,
-    section: settings ? named(query.get("section")) : null,
+    section: settings ? named(query.get("section")) ?? MOVED_SECTIONS[named(query.get("settings")) ?? ""] ?? null : null,
     create: readCreate(query),
     sidebar: SIDEBAR[query.get("sidebar") ?? ""] ?? null,
   };
@@ -111,7 +123,11 @@ function readCreate(query: URLSearchParams): CreateDraft | null {
   if (kind !== "workspace" && kind !== "tab") return null;
   const field = (name: "cwd" | "name") => named(query.get(name))?.slice(0, FIELD_MAX[name]) ?? null;
   const agent = query.get("agent");
-  return { kind, cwd: field("cwd"), name: field("name"), agent: agent === "" || agent === "shell" ? "" : agent && AGENT_KIND.test(agent) ? agent : null };
+  // A folder that begins with two separators is a network share on a Windows PC, and reading one asks its host for
+  // it with the user's sign-in. The dialog's Start reads the folder it shows, and shows a long path by its end, so
+  // an address fills in none: a share is typed or picked by the person who means it
+  const cwd = field("cwd");
+  return { kind, cwd: cwd !== null && /^(?:~\/)?[\\/]{2}/.test(cwd) ? null : cwd, name: field("name"), agent: agent === "" || agent === "shell" ? "" : agent && AGENT_KIND.test(agent) ? agent : null };
 }
 
 /** Whether an address names a place at all, as opposed to the app's own start. */

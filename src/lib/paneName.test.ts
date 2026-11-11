@@ -1,5 +1,28 @@
 import { expect, it } from "bun:test";
-import { codexThreadTitle, folderName, placeLine, shortPathTitle, taskRowLines, stripPaneChrome } from "./paneName.ts";
+import { codexThreadTitle, folderName, placeLine, shortPathTitle, tabTitle, taskRowLines, stripPaneChrome, unsaidLine, workspaceRowText } from "./paneName.ts";
+
+it("gives a workspace title its space and says a leading task key once", () => {
+  expect(workspaceRowText({ title: "MAIN-103 Add an MFA column" }))
+    .toEqual({ title: "Add an MFA column", place: "", key: "MAIN-103" });
+  expect(workspaceRowText({ title: "MAIN-103 MAIN-103 Add an MFA column", place: "MAIN-103 api" }))
+    .toEqual({ title: "Add an MFA column", place: "api", key: "MAIN-103" });
+  expect(workspaceRowText({ title: "MAIN-12 RD-130 Fix access for MAIN-12" }))
+    .toEqual({ title: "RD-130 Fix access for MAIN-12", place: "", key: "MAIN-12" });
+  expect(workspaceRowText({ title: "Review permissions", place: "MAIN-103 API workspace" }))
+    .toEqual({ title: "Review permissions", place: "API workspace", key: "MAIN-103" });
+});
+
+it("keeps plain and key-only workspace names readable", () => {
+  for (const title of ["main", "Cut integration test time", "MAIN-103", "", "release-cafe", "🔒 Check access"]) {
+    expect(workspaceRowText({ title })).toEqual({ title, place: "", key: null });
+  }
+  expect(workspaceRowText({ title: "MAIN-103", place: "MAIN-103 api" }))
+    .toEqual({ title: "MAIN-103", place: "api", key: null });
+  expect(workspaceRowText({ title: "MAIN-103 MAIN-103" }))
+    .toEqual({ title: "MAIN-103", place: "", key: null });
+  expect(workspaceRowText({ title: "Title", place: "api" }))
+    .toEqual({ title: "Title", place: "api", key: null });
+});
 
 it("shows a path title as its last folder, and leaves any other title alone", () => {
   expect(shortPathTitle("/tmp/audit-oDjsU2/lms-backend")).toBe("lms-backend");
@@ -69,4 +92,21 @@ it("strips a Codex title to its thread for a row, and keeps the folder for an al
   expect(stripPaneChrome("Fix the build | api", "claude")).toBe("Fix the build | api");
   // a shell's title is not an agent's: its user@host goes, a pipe in it stays
   expect(stripPaneChrome("me@host:~/work | notes", null)).toBe("~/work | notes");
+});
+
+it("drops an omp title's glyph and spinner for a row, and keeps them for the browser tab (#2568)", () => {
+  expect(stripPaneChrome("π ⠋ Fix the build", "omp")).toBe("Fix the build");
+  expect(tabTitle("π ⠋ Fix the build", "omp")).toBe("π ⠋ Fix the build");
+  // a path after the mark is still shortened to its folder, as a row's is
+  expect(tabTitle("π ⠋ /home/me/dev/api", "omp")).toBe("π ⠋ api");
+  // a shell's title has no mark to keep; a title that is only the mark leaves nothing
+  expect(tabTitle("me@host:~/work/api", null)).toBe("api");
+  expect(tabTitle("π ⠋ ", "omp")).toBe("");
+});
+
+it("says each part of a row's second line once, and never the name its first line leads with", () => {
+  // a linked worktree labelled Hotfix, its shell in fix-payment, on branch fix/payment: the Recent row leads with Hotfix
+  expect(unsaidLine("Hotfix", ["Hotfix", "fix/payment", "fix-payment"])).toBe("fix/payment · fix-payment");
+  expect(unsaidLine("api", ["Tab 2", "api"])).toBe("Tab 2");
+  expect(unsaidLine("vim", ["api", null, "api", ""])).toBe("api");
 });

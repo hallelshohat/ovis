@@ -1,0 +1,457 @@
+/* the first-run setup guide (SetupGuide), in the pane area beside the sidebar */
+.setup-guide {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-8) var(--space-6);
+  background: var(--bg);
+}
+
+.setup-guide-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: 100%;
+  max-width: var(--guide-w);
+  margin: 0 auto;
+}
+
+/* the screen's one title, the page's h1: the sidebar beside it holds no heading */
+.setup-guide h1,
+.setup-guide h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+/* the heading takes focus as its step opens, for a screen reader; no ring for that */
+.setup-guide h1:focus,
+.setup-guide h2:focus {
+  outline: none;
+}
+
+.setup-lead {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+.setup-muted {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.setup-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+}
+
+.setup-note svg {
+  flex: none;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  margin-top: var(--space-px-3);
+}
+
+.setup-error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--danger-tint);
+  color: var(--danger-text);
+  font-size: var(--fs-sm);
+}
+
+/* a quiet text button: Skip setup, Look again. Its words stay small; its box reaches the pointer
+   floor, and the touch floor on a phone, so the one way out of the guide is not a 20px line */
+.setup-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--pointer-target);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.setup-link:hover {
+  color: var(--text-strong);
+}
+
+.setup-link svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+@media (pointer: coarse) {
+  .setup-link {
+    min-height: var(--touch-target);
+  }
+}
+
+/* the welcome */
+.setup-welcome {
+  align-items: center;
+  padding-top: var(--space-8);
+  text-align: center;
+}
+
+.setup-welcome-mark {
+  border-radius: var(--radius-2xl);
+}
+
+.setup-welcome .setup-choices {
+  align-self: stretch;
+  text-align: left;
+}
+
+/* the welcome's sign-in: the account's buttons, Not now under them */
+.setup-signin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  align-self: stretch;
+  padding: var(--space-4);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-panel);
+}
+
+.setup-signin > .settings-item {
+  align-self: stretch;
+}
+
+.setup-signin-done {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+}
+
+/* the big choices: I'm new, I've used Ovis before */
+.setup-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.setup-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  min-height: calc(var(--touch-target) + var(--space-8) + var(--space-1));
+  padding: var(--space-4);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+/* the accent border is the pointer's; keyboard focus is the shared ring alone, never both lines */
+.setup-choice:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* the first-run path: the one tonal fill on the welcome, as the picked tile's; the other choice stays a plain card */
+.setup-choice-primary {
+  background: var(--accent-tint);
+}
+
+.setup-choice:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.setup-choice > svg {
+  flex: none;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--text-dim);
+}
+
+/* the choice's picture: a neutral ink, so the one accent on the screen is the action taken, not a decoration */
+.setup-choice-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: calc(var(--avatar-size) + var(--space-1));
+  height: calc(var(--avatar-size) + var(--space-1));
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.setup-choice-icon svg {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+.setup-choice-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-half);
+  min-width: 0;
+}
+
+.setup-choice-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+}
+
+.setup-choice-text span {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+/* Set up Ovis, and Skip setup */
+.setup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+/* one screen */
+.setup-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.setup-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.setup-actions .btn svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+/* the PC check, and the agents Start can open */
+.setup-check {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-half) var(--space-4);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  list-style: none;
+}
+
+.setup-check li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--avatar-size);
+  font-size: var(--fs-sm);
+}
+
+.setup-check-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-check-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.setup-check-status svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+.setup-check li[data-status="installed"] .setup-check-status {
+  color: var(--status-done);
+}
+
+/* You're set up */
+.setup-done-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.setup-done-head > svg {
+  flex: none;
+  width: var(--pointer-target);
+  height: var(--pointer-target);
+  padding: var(--space-px-3);
+  border: var(--space-half) solid var(--status-done);
+  border-radius: 50%;
+  color: var(--status-done);
+}
+
+.setup-done-head > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-half);
+}
+
+.setup-again {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* over the pane while the guide stands aside: a quiet line, not an alert */
+.setup-resume {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: var(--hairline) solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 768px) {
+  .setup-guide {
+    padding: var(--space-5) var(--space-4);
+  }
+
+  .setup-welcome {
+    padding-top: var(--space-4);
+  }
+
+  /* a phone reaches Start sooner: the agents screen's blocks sit a step closer (G-192) */
+  .setup-step {
+    gap: var(--space-3);
+  }
+
+  /* Start, then Connect your phone below it, each the full width */
+  .setup-actions .btn:not(.btn-ghost) {
+    flex: 1 1 100%;
+    justify-content: center;
+    min-height: var(--touch-target);
+  }
+}
+
+/* Connect your phone: the QR code and the address, under Start */
+.setup-phone-qr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+
+.setup-phone-qr-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.setup-phone-qr-text code {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+}
+
+.setup-phone-qr-text strong {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+}
+
+/* Connect your phone through the Ovis relay: its line and button, its state, then its QR code */
+.setup-phone-relay {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+
+.setup-phone-relay > .setup-actions,
+.setup-phone-relay > .setup-error {
+  align-self: stretch;
+}
+
+.setup-phone-relay-lead {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+
+.setup-phone-relay-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.setup-phone-relay-state svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+.setup-paired {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--status-done);
+}
+
+.setup-paired svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+/* Sign in to an installed Claude Code or Codex, under the tiles */
+.setup-sign-in .setup-link { margin-inline-start: var(--space-1); }

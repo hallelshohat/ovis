@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_VIRTUAL_FILE_METRICS, parsePatchFiles, trimPatchContext, type FileDiffMetadata, type VirtualizedFileDiff, type Virtualizer as VirtualizerInstance } from "@pierre/diffs";
+import { DEFAULT_VIRTUAL_FILE_METRICS, parsePatchFiles, trimPatchContext, type FileDiffLoadedFiles, type FileDiffMetadata, type VirtualizedFileDiff, type Virtualizer as VirtualizerInstance } from "@pierre/diffs";
 import { FileDiff, useVirtualizer, Virtualizer, type FileDiffOptions } from "@pierre/diffs/react";
+import { Plus } from "lucide-react";
 
 import { DiffWorkerPool } from "./DiffWorkerPool.tsx";
+import type { RepoDiffFileContents } from "../../shared/protocol.ts";
 import { useT } from "../lib/i18n.ts";
-import { diffFindLines, type DiffSide } from "../lib/repoDiffFind.ts";
+import { contentsMatchPatch, diffFindLines, type DiffSide } from "../lib/repoDiffFind.ts";
 import type { DiffStyle } from "../lib/settings.ts";
 import { VIRTUAL_HIGHLIGHT_LINES } from "../lib/sourcePreview.ts";
 import { contentKey, keepEmptyRows, SCROLL_CONFIG, SHADOW_CSS, SOURCE_THEME } from "../lib/sourceTheme.ts";
@@ -20,19 +22,35 @@ export interface RepoDiffProps {
   theme: "dark" | "light";
   /** colored in the pool's worker; false draws plain rows, still windowed by the pool's manager (the setting off, or too long, which the host says) */
   colored: boolean;
-  /** the active find match: its row is marked and its text highlighted, and it is brought to the middle of the view */
+  /** the active find match: its row is marked and its text highlighted, and it is brought to the middle of the view (the match itself, when its row is taller than the view) */
   active?: DiffMark | null;
   /** the active match is on a line the folded context leaves out: the host shows the context whole */
   onUnfold?: () => void;
+  /**
+   * A row was pointed at (#1603): `open` from the + a hovered row shows, which begins a note at once;
+   * otherwise a click or tap on the row, which only picks its line. The row by its side and number.
+   */
+  onLine?: (side: "deletions" | "additions", lineNumber: number, open: boolean) => void;
+  /** why no note can be begun (the hovered + then says so, disabled), or null */
+  noteBlocked?: string | null;
+  /** both whole sides of the file, read when a separator is first expanded; without it nothing between hunks expands */
+  loadContents?: () => Promise<RepoDiffFileContents>;
+  /** the whole files no longer match the patch shown (changed on disk since it was read): nothing expands, and the host says why */
+  onStaleContents?: () => void;
 }
 
-/** A logical line of the patch (an unchanged line is anchored to the new side) and the columns of a match in it. */
+/** A logical line of the patch (an unchanged line is anchored to the new side) and the columns of a match in it; `start === end` marks the row alone (a change, not a match). */
 export interface DiffMark {
   side: DiffSide;
   line: number;
   start: number;
   end: number;
+  /** ringed where it is, never scrolled to: a line just clicked or tapped is in view already */
+  quiet?: boolean;
 }
+
+/** The shadow roots whose expand controls already answer Enter and Space. */
+const pressable = new WeakSet<ShadowRoot>();
 
 /** The CSS highlight the active match's text is painted with (styled in the shadow CSS below). */
 const FIND_HIGHLIGHT = "repo-diff-find";
@@ -88,6 +106,9 @@ function revealColumns(row: HTMLElement, mark: DiffMark): void {
   scroller.scrollLeft += (match.left + match.right) / 2 - (left + right) / 2;
 }
 
+/** How many unchanged lines one press of a separator's expand control shows. */
+const EXPANSION_LINES = 20;
+
 /** The fewest context lines the package's trimmer keeps correct (at 0 it miscounts the lines it drops). */
 export const FOLDED_CONTEXT_LINES = 1;
 
@@ -111,6 +132,10 @@ const DIFF_SHADOW_CSS = `${SHADOW_CSS}
 [data-line][data-find-active] {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
+[data-expand-button]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 ::highlight(${FIND_HIGHLIGHT}) {
   background-color: var(--accent);
   color: var(--bg);
@@ -131,8 +156,11 @@ function parseFile(text: string): FileDiffMetadata | null {
  * the virtualizer renders by identity, and its host fills the scroll root so it has a box before
  * the first anchor pass (the contracts VirtualSource measured).
  */
-export default function RepoDiff({ patch, style, folded, wrap, theme, colored, active = null, onUnfold }: RepoDiffProps) {
+export default function RepoDiff({ patch, style, folded, wrap, theme, colored, active = null, onUnfold, onLine, noteBlocked = null, loadContents, onStaleContents }: RepoDiffProps) {
   const t = useT();
+  const onLineRef = useRef(onLine);
+  onLineRef.current = onLine;
+  const noting = onLine !== undefined;
   const hostRef = useRef<HTMLDivElement>(null);
   const [lineHeight, setLineHeight] = useState<number | null>(null);
   const fileRef = useRef<VirtualizedFileDiff<undefined> | null>(null);
@@ -169,7 +197,7 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     for (const marked of shadow?.querySelectorAll("[data-find-active]") ?? []) if (marked !== row) marked.removeAttribute("data-find-active");
     row?.setAttribute("data-find-active", "");
     if (typeof CSS === "undefined" || !("highlights" in CSS) || typeof Highlight === "undefined") return;
-    const range = row === null || mark === null ? null : textRange(row, mark.start, mark.end);
+    const range = row === null || mark === null || mark.start === mark.end ? null : textRange(row, mark.start, mark.end);
     if (range === null) CSS.highlights.delete(FIND_HIGHLIGHT);
     else CSS.highlights.set(FIND_HIGHLIGHT, new Highlight(range));
   }, []);
@@ -187,7 +215,7 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
 
   /**
    * One pass of the pending reveal, as VirtualSource's: a mounted row within a pixel of the middle
-   * ends it, one further off is scrolled there, and an unmounted one to the package's estimate of
+   * ends it (a row taller than the view, by the match's own lines), one further off is scrolled there, and an unmounted one to the package's estimate of
    * its place on its side. The render a scroll causes runs the next pass; a pass count bounds it.
    */
   const settle = useCallback((): void => {
@@ -198,13 +226,15 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     if (pending === null || file === null || !(root instanceof HTMLElement) || shadow === null) return;
     const row = markRow(shadow, pending.mark);
     // across first: a mounted row's text may lie past the scroller's right edge, also in a diff too short to scroll down
-    if (row !== null) revealColumns(row, pending.mark);
+    if (row !== null && pending.mark.start !== pending.mark.end) revealColumns(row, pending.mark);
     // the file's height arrives with its first rows: until then there is nothing to scroll, and the next render settles
     if (root.scrollHeight <= root.clientHeight + 1) return;
     const view = root.getBoundingClientRect();
     let target: number;
     if (row !== null) {
-      const rect = row.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      // a wrapped row taller than the view: its middle may not hold the match, so the match's own lines are centred
+      const rect = box.height > view.height ? textRange(row, pending.mark.start, pending.mark.end)?.getBoundingClientRect() ?? box : box;
       const delta = rect.top - view.top - (view.height - rect.height) / 2;
       if (Math.abs(delta) <= 1) { reveal.current = null; return; }
       target = root.scrollTop + delta;
@@ -219,16 +249,43 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     requestAnimationFrame(() => requestAnimationFrame(settle));
   }, [scrollTo]);
 
+  /**
+   * The package draws its expand controls as unnamed `div role=button`s outside the tab order: each
+   * gets a name and a tab stop, and Enter or Space presses it as a click does. Runs after every
+   * render, which may have drawn new separators.
+   */
+  const labelExpanders = useCallback((shadow: ShadowRoot): void => {
+    for (const button of shadow.querySelectorAll<HTMLElement>("[data-expand-button]")) {
+      button.tabIndex = 0;
+      button.setAttribute("aria-label", button.hasAttribute("data-expand-all-button") ? t("Show all unchanged lines")
+        : button.hasAttribute("data-expand-up") ? t("Show unchanged lines above")
+        : button.hasAttribute("data-expand-down") ? t("Show unchanged lines below")
+        : t("Show unchanged lines"));
+    }
+    if (pressable.has(shadow)) return;
+    pressable.add(shadow);
+    shadow.addEventListener("keydown", (event) => {
+      const key = (event as KeyboardEvent).key;
+      const button = event.target instanceof HTMLElement && event.target.hasAttribute("data-expand-button") ? event.target : null;
+      if (button === null || (key !== "Enter" && key !== " ")) return;
+      event.preventDefault();
+      button.click();
+    });
+  }, [t]);
+
   const onPostRender = useCallback<NonNullable<Options["onPostRender"]>>((node, instance, phase) => {
     if (phase === "unmount") { fileRef.current = null; containerRef.current = null; return; }
     // inside a Virtualizer the FileDiff component constructs a VirtualizedFileDiff
     fileRef.current = instance as unknown as VirtualizedFileDiff<undefined>;
     containerRef.current = node;
-    if (node.shadowRoot !== null) keepEmptyRows(node.shadowRoot);
+    if (node.shadowRoot !== null) {
+      keepEmptyRows(node.shadowRoot);
+      labelExpanders(node.shadowRoot);
+    }
     paint();
     // this fires inside the virtualizer's render pass, which ends by fixing its scroll anchor: the reveal waits for it
     queueMicrotask(settle);
-  }, [paint, settle]);
+  }, [paint, settle, labelExpanders]);
 
   const onVirtualizer = useCallback((instance: VirtualizerInstance | undefined): void => { virtualizerRef.current = instance; }, []);
 
@@ -246,12 +303,23 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
   useEffect(() => {
     paint();
     const mark = activeRef.current;
-    if (mark === null) { reveal.current = null; return; }
+    if (mark === null || mark.quiet === true) { reveal.current = null; return; }
     reveal.current = { mark, passes: 0 };
     settle();
   }, [activeSide, activeLine, activeStart, activeEnd, style, wrap, theme, folded, paint, settle]);
   useEffect(() => () => { if (typeof CSS !== "undefined" && "highlights" in CSS) CSS.highlights.delete(FIND_HIGHLIGHT); }, []);
   const selected = useMemo(() => activeSide === null || activeLine === null ? null : { start: activeLine, end: activeLine, side: activeSide === "old" ? "deletions" as const : "additions" as const }, [activeSide, activeLine]);
+  const loadDiffFiles = useMemo(() => loadContents === undefined ? undefined : async (diff: FileDiffMetadata): Promise<FileDiffLoadedFiles> => {
+    const answer = await loadContents();
+    // the package only asks for a change or a changed rename, which has both sides
+    if (answer.old === null || answer.new === null) throw new Error(`the whole file can't be read (${answer.unavailable ?? "one side missing"})`);
+    // files read after the patch may have moved on: mixed into its rows they would mark lines it never compared
+    if (!contentsMatchPatch(diffFindLines(patch), answer.old, answer.new)) {
+      onStaleContents?.();
+      throw new Error("the file changed since its diff was read");
+    }
+    return { oldFile: { name: diff.prevName ?? diff.name, contents: answer.old }, newFile: { name: diff.name, contents: answer.new } };
+  }, [loadContents, patch, onStaleContents]);
   const options = useMemo<Options>(() => ({
     disableFileHeader: true,
     diffStyle: style,
@@ -262,9 +330,23 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     tokenizeMaxLength: colored ? VIRTUAL_HIGHLIGHT_LINES : 0,
     lineHoverHighlight: "disabled",
     enableLineSelection: false,
+    enableGutterUtility: noting,
+    // a click that ends a text selection (copying code) picks no line; a selection in the shadow rows reads as collapsed to the page, so its type tells
+    onLineClick: noting ? ({ annotationSide, lineNumber }) => { if (getSelection()?.type !== "Range") onLineRef.current?.(annotationSide, lineNumber, false); } : undefined,
     unsafeCSS: DIFF_SHADOW_CSS,
+    // as VS Code's diff: word emphasis inside changed lines, and twenty more unchanged lines per expand
+    lineDiffType: "word-alt",
+    expansionLineCount: EXPANSION_LINES,
+    loadDiffFiles,
     onPostRender,
-  }), [style, wrap, theme, colored, onPostRender]);
+  }), [style, wrap, theme, colored, onPostRender, noting, loadDiffFiles]);
+  const noteLabel = noteBlocked ?? t("Add a note on this line");
+  // the + stands beside the hovered row's number: a pointer's shortcut, so it takes no tab stop (keys pick a line in the viewer)
+  const renderGutterUtility = useCallback((hovered: () => { lineNumber: number; side: "deletions" | "additions" } | undefined) => <button type="button" className="repo-diff-line-note-plus" tabIndex={-1}
+    aria-label={noteLabel} title={noteLabel} aria-disabled={noteBlocked !== null}
+    onClick={() => { const row = hovered(); if (row !== undefined) onLineRef.current?.(row.side, row.lineNumber, noteBlocked === null); }}>
+    <Plus aria-hidden="true" />
+  </button>, [noteLabel, noteBlocked]);
   const metrics = useMemo(() => (lineHeight === null ? null : { ...DEFAULT_VIRTUAL_FILE_METRICS, lineHeight }), [lineHeight]);
 
   if (fileDiff === null || fileDiff.hunks.length === 0) return <p className="repo-diff-note">{t("No lines changed.")}</p>;
@@ -277,7 +359,7 @@ export default function RepoDiff({ patch, style, folded, wrap, theme, colored, a
     <DiffWorkerPool>
       <Virtualizer className="repo-diff-scroll" contentClassName="repo-diff-column" config={SCROLL_CONFIG}>
         <VirtualizerProbe onInstance={onVirtualizer} />
-        {metrics !== null && <FileDiff className="repo-diff-file" fileDiff={fileDiff} options={options} metrics={metrics} selectedLines={selected} />}
+        {metrics !== null && <FileDiff className="repo-diff-file" fileDiff={fileDiff} options={options} metrics={metrics} selectedLines={selected} renderGutterUtility={noting ? renderGutterUtility : undefined} />}
       </Virtualizer>
     </DiffWorkerPool>
   </div>;

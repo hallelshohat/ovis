@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { dlopen, FFIType, ptr } from "bun:ffi";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import { Database } from "bun:sqlite";
-import { codexCallFailed, codexHistoryTail, codexHomeInPsLine, codexRolloutPath, interactiveCodexRollout, processCodexHome, forgetHistoryChains, matchCodexFirstExchange, matchCodexTranscript, matchShortCodexAnswers, parseCodexTranscript, codexPeersIn, resumedThread, rolloutInsideStore, sameDirectory, storedCwdCondition, storedCwds, unansweredCodexQuestions, withoutVerbatimPrefix } from "./codex.ts";
+import { codexCallFailed, codexHistoryTail, CodexStoreChanged, openCodexStore, codexHomeInPsLine, codexRolloutPath, interactiveCodexRollout, processCodexHome, forgetHistoryChains, matchCodexFirstExchange, matchCodexTranscript, matchShortCodexAnswers, parseCodexTranscript, codexPeersIn, resumedThread, rolloutInsideStore, sameDirectory, storedCwdCondition, storedCwds, unansweredCodexQuestions, footedShortTranscript, footedTailTranscript, withoutVerbatimPrefix } from "./codex.ts";
 import type { HerdrPane } from "../shared/protocol.ts";
 import { splitTurn } from "../src/lib/workBlocks.ts";
 import rolloutHeaders from "./fixtures/codex-rollout-headers.json";
@@ -15,6 +16,67 @@ const message = (role: string, text: string, phase?: string) => item({
   type: "message", role, content: [{ type: role === "user" ? "input_text" : "output_text", text }], ...(phase ? { phase } : {}),
 });
 const jsonl = (...records: unknown[]) => records.map((record) => JSON.stringify(record)).join("\n");
+
+/** This thread's CPU time in milliseconds, where the system keeps a clock for it (Linux, macOS), or null. */
+const threadClock = ((): (() => number) | null => {
+  const id = process.platform === "linux" ? 3 : process.platform === "darwin" ? 16 : null;
+  if (id === null) return null;
+  try {
+    const { symbols } = dlopen(process.platform === "linux" ? "libc.so.6" : "libSystem.B.dylib", { clock_gettime: { args: [FFIType.i32, FFIType.ptr], returns: FFIType.i32 } });
+    const time = new BigInt64Array(2);
+    return () => {
+      if (symbols.clock_gettime(id, ptr(time)) !== 0) throw new Error("clock_gettime(CLOCK_THREAD_CPUTIME_ID) failed");
+      return Number(time[0]!) * 1000 + Number(time[1]!) / 1e6;
+    };
+  } catch { return null; }
+})();
+
+/**
+ * How many times longer `make(subject)` runs than `make(reference)` in CPU time, and what the
+ * subject returns. A budget in wall-clock milliseconds failed on loaded GitHub runners (1,013 to
+ * 1,062 ms against 1,000, #2142) with nothing slower in the code: a busy host stretches the clock
+ * while the work waits for a core. CPU time does not stretch that way, but any budget in
+ * milliseconds still depends on the runner's processor, and the growth from a small input to a
+ * five times larger one still moved on a busy runner (3 times as written read 10.8). Against an
+ * input of the same size that the code reads in one pass, a scan that goes quadratic costs a
+ * multiple that grows with the size, while the work both share stays out of the ratio (so a cost
+ * that grows with the length alone, which both inputs share, is not what such a case bounds). This
+ * thread's CPU time where the system keeps it, else the process's. Each input runs once untimed,
+ * then three times, and the least of each is compared: being preempted or slowed only adds time.
+ */
+const cpuRatio = <K, T>(make: (input: K) => () => T, reference: K, subject: K): { result: T; ratio: number } => {
+  const now = (): number => {
+    if (threadClock !== null) return threadClock();
+    const { user, system } = process.cpuUsage();
+    return (user + system) / 1000;
+  };
+  const runReference = make(reference);
+  const runSubject = make(subject);
+  runReference();
+  const result = runSubject();
+  // a run of a fraction of a millisecond is timed over as many runs as take two; a hundred where
+  // the process's clock may count in steps of about 16 ms (Windows), so a step is a small part
+  // of what any reference reads. The least reference of the three is checked too, not only the
+  // first: runs that got faster after it may read less, or none on that clock, so the whole set
+  // is timed again over twice the runs
+  const shortest = threadClock === null ? 100 : 2;
+  let runs = 1;
+  const timed = (run: () => T): number => {
+    const start = now();
+    for (let index = 0; index < runs; index += 1) run();
+    return now() - start;
+  };
+  while (timed(runReference) < shortest) runs *= 2;
+  for (;; runs *= 2) {
+    let leastReference = Infinity;
+    let leastSubject = Infinity;
+    for (let round = 0; round < 3; round += 1) {
+      leastReference = Math.min(leastReference, timed(runReference));
+      leastSubject = Math.min(leastSubject, timed(runSubject));
+    }
+    if (leastReference >= shortest) return { result, ratio: leastSubject / leastReference };
+  }
+};
 
 describe("a Codex process's own store", () => {
   it.skipIf(process.platform !== "linux" && process.platform !== "darwin")("reads CODEX_HOME from the process's environment, and nothing from one without it", async () => {
@@ -175,12 +237,17 @@ describe("Codex conversation records", () => {
   });
 
   it("bounds citation parsing with many unmatched backtick lengths", () => {
-    const text = "Unmatched delimiters: " + Array.from({ length: 1000 }, (_, i) => "`".repeat(i + 1) + " x ").join("");
-    const transcript = jsonl(message("assistant", `${text}<oai-mem-citation>hidden</oai-mem-citation>`));
-    const started = performance.now();
-    expect(parseCodexTranscript(transcript)[0]?.parts).toEqual([{ kind: "text", text: text.trimEnd() }]);
-    expect(performance.now() - started).toBeLessThan(1000);
-  });
+    const delimiters = (count: number) => "Unmatched delimiters: " + Array.from({ length: count }, (_, i) => "`".repeat(i + 1) + " x ").join("");
+    const text = delimiters(1000);
+    // the text against one as long with no backticks: about 1.3 times the CPU time as written, over
+    // 600 when each unmatched delimiter looks for its match in the rest of the text
+    const { result, ratio } = cpuRatio((ticks: boolean) => {
+      const transcript = jsonl(message("assistant", `${ticks ? text : text.replaceAll("`", "'")}<oai-mem-citation>hidden</oai-mem-citation>`));
+      return () => parseCodexTranscript(transcript);
+    }, false, true);
+    expect(result[0]?.parts).toEqual([{ kind: "text", text: text.trimEnd() }]);
+    expect(ratio).toBeLessThan(20);
+  }, 30_000);
 
   it("hides injected context, metadata and developer messages while preserving the real request", () => {
     const turns = parseCodexTranscript(jsonl(
@@ -680,6 +747,101 @@ describe("Codex rollout resolution", () => {
     expect(matchCodexTranscript("Done", [{ path: "short", text: jsonl(message("assistant", "Done")) }])).toBeNull();
   });
 
+  // a finished turn as herdr read Codex 0.163.0 on macOS: the answer, then Codex's "Worked for" footer and the composer
+  const recordedScreen = "\r\n  >_ OpenAI Codex (v0.163.0)\r\n     /private/tmp/kiro2420-qa/proj\r\n\r\n\r\n› Write one paragraph of about 90 words about a ferryman named Oskar on the Elbe who counts swans at noon, with three\r\n  invented dates.\r\n\r\n\r\n• At noon, Oskar the ferryman rested his oars beside the Elbe and counted the swans as they drifted past: one, two,\r\n  then seven, whenever a ripple made him lose his place. He kept a little calendar in his coat, marked with three dates\r\n  nobody else had heard of: 31 Frostwake, 8 Swanrise, and 46 Lanternfall. Each was a day he swore the river had changed\r\n  its tune. When the last white neck slipped beneath the bridge, Oskar smiled, shut the calendar, and rowed toward the\r\n  far bank, carrying his strange year with him.\r\n\r\n  Worked for 4s • 7:05 PM                                                                                              \r\n\r\n\r\n\r\n› Ask Codex to do anything\r\n\r\n  GPT-6-Luna low · /private/tmp/kiro2420-qa/proj · Write Oskar’s Elbe paragraph\r\n  ← for agents · ? for shortcuts";
+  const recordedAnswer = "At noon, Oskar the ferryman rested his oars beside the Elbe and counted the swans as they drifted past: one, two, then seven, whenever a ripple made him lose his place. He kept a little calendar in his coat, marked with three dates nobody else had heard of: 31 Frostwake, 8 Swanrise, and 46 Lanternfall. Each was a day he swore the river had changed its tune. When the last white neck slipped beneath the bridge, Oskar smiled, shut the calendar, and rowed toward the far bank, carrying his strange year with him.";
+  it("matches an answer above Codex's completed-turn footer, and only that footer (regression)", () => {
+    // a turn as Codex 0.163 records it: the message asked, then the answer it finished on, by the turn's id
+    const turn = (id: string, asked: string, answer: string) => [
+      event({ type: "item_completed", turn_id: id, item: { type: "UserMessage", content: [{ type: "text", text: asked }] } }),
+      message("assistant", answer, "final_answer"),
+      event({ type: "task_complete", turn_id: id, last_agent_message: answer }),
+    ];
+    const asked = "Write one paragraph of about 90 words about a ferryman named Oskar on the Elbe who counts swans at noon, with three invented dates.";
+    const said = (path: string, ...records: unknown[]) => ({ path, text: jsonl(...records) });
+    const own = said("own", ...turn("t1", asked, recordedAnswer));
+    const other = said("other", message("assistant", "Another conversation's answer, long enough to be looked for on any screen that shows it."));
+    expect(matchCodexTranscript(recordedScreen, [other, own])).toBe("own");
+    // as Codex shows a turn: its prompt, the answer's first line after the bullet and each further line
+    // indented, its footer, then the composer idle and empty with Codex's own status rows below
+    const shownAs = (answer: string) => `\u2022 ${answer.replaceAll("\n", "\n  ")}`;
+    const footer = "  Worked for 4s \u2022 7:05 PM";
+    const idle = "\u203a Ask Codex to do anything\n\n  GPT-6-Luna low \u00b7 ~/proj\n  \u2190 for agents \u00b7 ? for shortcuts";
+    const done = (answer: string, below = footer, composer = idle) => `\u203a ${asked}\n\n${shownAs(answer)}\n\n${below}\n\n${composer}`;
+    for (const below of ["  Worked for <1s \u2022 11:19", "  Worked for 2m 14s \u2022 16:11", "  Worked for 0s", "  Worked for 4s \u2022 Oct 29 at 7:05 PM"]) {
+      expect(matchCodexTranscript(done(recordedAnswer, below), [own])).toBe("own");
+    }
+    expect(matchCodexTranscript(done(recordedAnswer, footer, "\u203a\n  GPT-6-Luna low \u00b7 ~/proj"), [own])).toBe("own");
+    // at Ultra reasoning effort Codex marks its composer "\u00bb" (0.164 on): the same turn, idle or with a draft in the box
+    const ultra = idle.replace("\u203a", "\u00bb").replace("low", "ultra");
+    expect(matchCodexTranscript(done(recordedAnswer, footer, ultra), [own])).toBe("own");
+    // a draft in that box is no answer shown: one quoting another conversation's answer binds nothing to it
+    const quoting = ultra.replace("Ask Codex to do anything", "Another conversation's answer, long enough to be looked for on any screen that shows it.");
+    expect(matchCodexTranscript(done(recordedAnswer, footer, quoting), [other])).toBeNull();
+    // and only one of this folder: a conversation herdr reported, or a title named, of another folder owns no footer
+    expect(matchCodexTranscript(recordedScreen, [own], new Set(), new Map(), false, new Set(["another-own"]))).toBeNull();
+    expect(matchCodexTranscript(recordedScreen, [own], new Set(), new Map(), false, new Set(["own"]))).toBe("own");
+    // only the one conversation whose last finished turn was asked that and ended on exactly that answer
+    expect(matchCodexTranscript(recordedScreen, [own, said("twin", ...turn("t2", asked, recordedAnswer))])).toBeNull();
+    expect(matchCodexTranscript(recordedScreen, [said("elsewhere", ...turn("t9", "Something else entirely", recordedAnswer))])).toBeNull();
+    expect(matchCodexTranscript(recordedScreen, [said("moved-on", ...turn("t3", asked, recordedAnswer), ...turn("t4", "A later question", "A later answer, long enough to be looked for on a screen."))])).toBeNull();
+    expect(matchCodexTranscript(recordedScreen, [said("unfinished", message("assistant", recordedAnswer))])).toBeNull();
+    expect(matchCodexTranscript(recordedScreen, [said("unasked", message("assistant", recordedAnswer), event({ type: "task_complete", turn_id: "u", last_agent_message: recordedAnswer }))])).toBeNull();
+    // nor while another candidate's last turn may be the one shown, read loosely: the pane's own with an answer
+    // Codex rendered its own way, a prompt the read cut off, or a turn steered with another message
+    const rendered = said("own-bold", ...turn("r1", asked, recordedAnswer.replace("31 Frostwake", "**31 Frostwake**")));
+    expect(matchCodexTranscript(recordedScreen, [rendered, said("plain-twin", ...turn("r2", asked, recordedAnswer))])).toBeNull();
+    const coded = said("own-code", ...turn("r3", asked, recordedAnswer.replace("31 Frostwake", "`31 Frostwake`")));
+    expect(matchCodexTranscript(recordedScreen, [coded, said("plain-twin", ...turn("r2", asked, recordedAnswer))])).toBeNull();
+    const cut = said("own-cut", message("assistant", recordedAnswer), event({ type: "task_complete", turn_id: "r4", last_agent_message: recordedAnswer }));
+    expect(matchCodexTranscript(recordedScreen, [cut, said("plain-twin", ...turn("r2", asked, recordedAnswer))])).toBeNull();
+    const steered = said("own-steered", event({ type: "item_completed", turn_id: "r5", item: { type: "UserMessage", content: [{ type: "text", text: "First thought." }] } }),
+      ...turn("r5", asked, recordedAnswer));
+    expect(matchCodexTranscript(recordedScreen, [steered, said("plain-twin", ...turn("r2", asked, recordedAnswer))])).toBeNull();
+    // a character Unicode folds into another is another one: 46\u00b2 is not 462
+    expect(matchCodexTranscript(done(recordedAnswer.replace("46 Lanternfall", "462 Lanternfall")), [said("squared", ...turn("r6", asked, recordedAnswer.replace("46 Lanternfall", "46\u00b2 Lanternfall")))])).toBeNull();
+    // each answer pairs with the prompt of its own turn: a turn asked the first prompt that finished on the second answer is neither
+    const second = "A second answer of this pane, long enough to be looked for on any screen that shows it.";
+    const twoTurns = `${done(recordedAnswer, footer, "")}\n\u203a Second prompt\n\n${shownAs(second)}\n\n${footer}\n\n${idle}`.replace("\n\n\n\u203a Second", "\n\n\u203a Second");
+    expect(matchCodexTranscript(twoTurns, [said("crossed", ...turn("x", asked, second))])).toBeNull();
+    expect(matchCodexTranscript(twoTurns, [said("own2", ...turn("y", "Second prompt", second))])).toBe("own2");
+    // compared with whitespace collapsed and every other character as written: a space more or less, a star or
+    // a backtick, is another prompt or answer (one Codex renders with emphasis falls back, as on main)
+    expect(matchCodexTranscript(recordedScreen, [said("spaced-prompt", ...turn("s1", asked.replace("the Elbe", "theElbe"), recordedAnswer))])).toBeNull();
+    expect(matchCodexTranscript(recordedScreen, [said("spaced-answer", ...turn("s2", asked, recordedAnswer.replace("the Elbe", "theElbe")))])).toBeNull();
+    const starred = "The ferryman kept every count in one ledger column he called base*value, beside the river's tide table.";
+    expect(matchCodexTranscript(done(starred.replace("*", "")), [said("starred", ...turn("u3", asked, starred))])).toBeNull();
+    expect(matchCodexTranscript(done(starred), [said("starred", ...turn("u3", asked, starred))])).toBe("starred");
+    // a footer-shaped line a candidate's answer ends in, finished or not, may be what the screen shows: the
+    // footer path takes no side, and main's whole-answer match finds the one whose answer ends in that line
+    const literal = `${recordedAnswer}\n\n${footer.trim()}`;
+    expect(matchCodexTranscript(done(recordedAnswer), [own, said("ends-in-it", message("assistant", literal))])).toBe("ends-in-it");
+    expect(matchCodexTranscript(done(recordedAnswer), [own, said("ends-in-it", ...turn("t5", asked, literal))])).toBe("ends-in-it");
+    // and a finish record alone that ends in it (its message cut by the read) takes the footer path's side away too
+    expect(matchCodexTranscript(done(recordedAnswer), [own, said("recorded-only", event({ type: "item_completed", turn_id: "t6", item: { type: "UserMessage", content: [{ type: "text", text: asked }] } }), event({ type: "task_complete", turn_id: "t6", last_agent_message: literal }))])).toBeNull();
+    // characters Unicode folds together are other characters here: a full-width letter, a ligature
+    expect(matchCodexTranscript(done(recordedAnswer), [said("folded-prompt", ...turn("n1", asked.replace("Oskar", "\uff2fskar"), recordedAnswer))])).toBeNull();
+    expect(matchCodexTranscript(done(recordedAnswer), [said("folded-answer", ...turn("n2", asked, recordedAnswer.replace("swans", "swan\u017f")))])).toBeNull();
+    // nor while the composer is not idle and empty: a message sent below with Codex working, an indented
+    // working row, text in the composer, or no status rows below it (a read cut there)
+    expect(matchCodexTranscript(`${done(recordedAnswer, footer, "\u203a Next question\n\n\u2022 Working (3s \u2022 esc to interrupt)\n\n" + idle)}`, [own])).toBeNull();
+    expect(matchCodexTranscript(done(recordedAnswer, footer, "\u203a Ask Codex to do anything\n  Working (3s \u2022 esc to interrupt)"), [own])).toBeNull();
+    expect(matchCodexTranscript(done(recordedAnswer, footer, "\u203a Next question\n\n  GPT-6-Luna low \u00b7 ~/proj"), [own])).toBeNull();
+    expect(matchCodexTranscript(done(recordedAnswer, footer, "\u203a Ask Codex to do anything"), [own])).toBeNull();
+    // nor the screen a Codex left when it exited, nor a turn of an earlier Codex above the one shown now
+    expect(matchCodexTranscript(`${done(recordedAnswer)}\n\nToken usage so far: total=10,360\nuser@host proj % codex`, [own])).toBeNull();
+    expect(matchCodexTranscript(`${done(recordedAnswer)}\n\n  >_ OpenAI Codex (v0.163.0)\n\n${idle}`, [own])).toBeNull();
+    // nor is any other line a footer: an impossible clock, text after the bullet, a wrapped clock, no blank
+    // line above it, or more answer below it
+    for (const shown of [
+      done(recordedAnswer, "  Worked for 4s \u2022 31:05 PM"),
+      done(recordedAnswer, "  Worked for 4s \u2022 this is part of the answer"),
+      done(recordedAnswer, "  Worked for 4s \u2022\n  7:05 PM"),
+      `\u203a ${asked}\n\n${shownAs(recordedAnswer)}\n${footer}\n\n${idle}`,
+      `\u203a ${asked}\n\n${shownAs(recordedAnswer)}\n\n${footer}\n  and more of the answer\n\n${idle}`,
+    ]) expect(matchCodexTranscript(shown, [own])).toBeNull();
+  });
+
   it("matches an answer that links a file, which Codex shows as the label and a path relative to the cwd", () => {
     const linked = `${answer} [The report](/home/user/repo/output/test/REPORT.md)`;
     const candidates = [{ path: "linked", text: jsonl(message("assistant", linked, "final_answer")) }];
@@ -688,6 +850,50 @@ describe("Codex rollout resolution", () => {
     const middle = `See [the report](/home/user/repo/REPORT.md) for the numbers. ${answer}`;
     expect(matchCodexTranscript(`• See the report (REPORT.md) for the numbers. ${answer}`, [{ path: "middle", text: jsonl(message("assistant", middle)) }])).toBe("middle");
     expect(matchCodexTranscript("• The report (output/test/REPORT.md)", candidates)).toBeNull();
+  });
+
+  it("matches rendered local file links containing spaces without selecting an ambiguous conversation", () => {
+    for (const target of ["/home/user/My Project/Daily notes/report.md", "C:/Users/User/My Project/report.md",
+      "C:\\Users\\User\\My Project\\report.md", "</home/user/My Project/Daily notes/report.md>",
+      "<C:/Users/User/My Project/report.md>", "<C:\\Users\\User\\My Project\\report.md>"]) {
+      const linked = `${answer} [Daily report](${target})`;
+      const candidates = [{ path: "own", text: jsonl(message("assistant", linked, "final_answer")) }];
+      const screen = `• ${answer} Daily report (Daily notes/report.md)`;
+      expect(matchCodexTranscript(screen, candidates)).toBe("own");
+      expect(matchCodexTranscript(screen, [...candidates, { ...candidates[0]!, path: "copy" }])).toBeNull();
+      expect(matchCodexTranscript("• Daily report (Daily notes/report.md)", candidates)).toBeNull();
+    }
+  });
+
+  it("does not select a conversation from only an angle-wrapped file link containing parentheses", () => {
+    const filename = "report (old) with detailed quarterly analysis and supporting documentation for project milestones.md";
+    const linked = `${answer} [Daily report](</home/user/My Project/${filename}>)`;
+    const candidates = [{ path: "own", text: jsonl(message("assistant", linked, "final_answer")) }];
+    expect(matchCodexTranscript(`• Daily report (${filename})`, candidates)).toBeNull();
+    expect(matchCodexTranscript(`• ${answer} Daily report (${filename})`, candidates)).toBe("own");
+  });
+
+  it("keeps local link destinations containing a line break as literal answer text", () => {
+    for (const newline of ["\n", "\r", "\r\n"]) {
+      for (const target of [`/home/user/My Project${newline}Daily notes/report.md`,
+        `</home/user/My Project${newline}Daily notes/report (old).md>`]) {
+        const literal = `${answer} [Daily report](${target})`;
+        const candidates = [{ path: "own", text: jsonl(message("assistant", literal, "final_answer")) }];
+        expect(matchCodexTranscript(`• ${answer} Daily report`, candidates)).toBeNull();
+        // as Codex shows the answer: its second line indented below the bullet
+        expect(matchCodexTranscript(`• ${literal.replace(/\r?\n/g, "\n  ")}`, candidates)).toBe("own");
+      }
+    }
+  });
+
+  it("keeps unclosed local file links as literal answer text", () => {
+    for (const target of ["/home/user/My Project/Daily notes/report.md", "</home/user/My Project/Daily notes/report.md>",
+      "</home/user/My Project/Daily notes/report (old).md)"]) {
+      const literal = `${answer} [Daily report](${target}`;
+      const candidates = [{ path: "own", text: jsonl(message("assistant", literal, "final_answer")) }];
+      expect(matchCodexTranscript(`• ${answer} Daily report`, candidates)).toBeNull();
+      expect(matchCodexTranscript(`• ${literal}`, candidates)).toBe("own");
+    }
   });
 
   // issue #283: no answer of this session reaches 64 letters and digits (40, 29 and 38)
@@ -706,8 +912,10 @@ describe("Codex rollout resolution", () => {
     "• 세 화면이 모두 보이도록, 올려주신 순서대로 가로로 나란히 배치할게요.",
     "• imagegen으로 세 사진을 올려주신 순서대로 가로로 합쳤어요.\n\n  합친 이미지 다운로드 (.herdr-web-ui/combined-20261002.png)",
   ];
-  const answered = (...texts: string[]) => jsonl(...texts.map((text) => message("assistant", text)));
-  const bullets = (...texts: string[]) => texts.map((text) => `• ${text}`).join("\n");
+  // answers below the prompt they answered, as Codex shows them: short answers count only there
+  const asked = "Work through the fixture task";
+  const answered = (...texts: string[]) => jsonl(message("user", asked), ...texts.map((text) => message("assistant", text)));
+  const bullets = (...texts: string[]) => [`› ${asked}`, ...texts.map((text) => `• ${text}`)].join("\n");
 
   it("reads a session whose answers are all short by its newest answers shown together, in order", () => {
     const candidates = [
@@ -823,6 +1031,26 @@ describe("Codex rollout resolution", () => {
     expect(matchShortCodexAnswers(screen, [{ path: "older", text: answered(...older) }, { path: "else", text: answered("See [the notes](docs/notes.md) for the migration plan.") }])).toBe("older");
   });
 
+  it("reads no short answers whose prompt is past the top of the read: another conversation may have said them to another", () => {
+    const texts = ["The build finished without errors this time.", "All checks on the feature branch pass again."];
+    expect(matchShortCodexAnswers(bullets(...texts), [{ path: "only", text: answered(...texts) }])).toBe("only");
+    expect(matchShortCodexAnswers(texts.map((text) => `• ${text}`).join("\n"), [{ path: "only", text: answered(...texts) }])).toBeNull();
+    // and none queued to be sent counts as their prompt or as an answer
+    expect(matchShortCodexAnswers(`  ↳ ${asked}\n${texts.map((text) => `• ${text}`).join("\n")}`, [{ path: "only", text: answered(...texts) }])).toBeNull();
+  });
+
+  it("reads no short answers below a prompt that differs from theirs only in punctuation, and reads a prompt wrapped over lines", () => {
+    const replies = ["The condition evaluates to true in this example.", "All checks on the feature branch pass again."];
+    const rollout = (prompt: string) => jsonl(message("user", prompt), ...replies.map((text) => message("assistant", text)));
+    const screen = (...prompt: string[]) => [`› ${prompt[0]}`, ...prompt.slice(1).map((line) => `  ${line}`), ...replies.map((text) => `• ${text}`)].join("\n");
+    for (const [said, shown] of [["Check whether a < b for these inputs", "Check whether a > b for these inputs"], ["Check the branch named feature-one", "Check the branch named feature_one"]] as const) {
+      expect(matchShortCodexAnswers(screen(shown), [{ path: "peer", text: rollout(said) }])).toBeNull();
+      expect(matchShortCodexAnswers(screen(said), [{ path: "peer", text: rollout(said) }])).toBe("peer");
+    }
+    const long = "Check the branch named feature-one, then compare a < b against the release branch";
+    expect(matchShortCodexAnswers(screen("Check the branch named feature-one, then compare", "a < b against the release branch"), [{ path: "own", text: rollout(long) }])).toBe("own");
+  });
+
   it("reads no short answers when a rollout was not read whole, the one that shows them included", () => {
     const texts = ["The build finished without errors this time.", "All checks on the feature branch pass again."];
     const screen = bullets(...texts);
@@ -841,22 +1069,32 @@ describe("Codex rollout resolution", () => {
   });
 
   it("reads short answers in bounded time however many unclosed links the answers hold", () => {
-    const many = answered(...Array.from({ length: 450 }, () => "](".repeat(1000)));
-    const candidates = Array.from({ length: 32 }, (_, index) => ({ path: `unclosed-${index}`, text: many }));
     const screen = Array.from({ length: 400 }, () => "q".repeat(120)).join("\n");
-    const started = performance.now();
-    expect(matchShortCodexAnswers(screen, candidates)).toBeNull();
-    expect(performance.now() - started).toBeLessThan(1000);
-  });
+    // answers of 8,000 characters, all unclosed "](", against answers as long with one closed link:
+    // about 1.5 times the CPU time as written, over 400 when cutting at /\]\([^)\s]*\)/ rescans from
+    // every unclosed "]("
+    const { result, ratio } = cpuRatio((unclosed: boolean) => {
+      const text = unclosed ? "](".repeat(4000) : `](${"a".repeat(7997)})`;
+      const many = answered(...Array.from({ length: 5 }, () => text));
+      const candidates = Array.from({ length: 32 }, (_, index) => ({ path: `unclosed-${index}`, text: many }));
+      return () => matchShortCodexAnswers(screen, candidates);
+    }, false, true);
+    expect(result).toBeNull();
+    expect(ratio).toBeLessThan(10);
+  }, 30_000);
 
   it("reads short answers in bounded time however many links a large answer has", () => {
-    const huge = answered("[abcdefghijklmnop](/a)".repeat(40_000));
-    const candidates = Array.from({ length: 32 }, (_, index) => ({ path: `large-${index}`, text: huge }));
     const screen = Array.from({ length: 400 }, () => "q".repeat(120)).join("\n");
-    const started = performance.now();
-    expect(matchShortCodexAnswers(screen, candidates)).toBeNull();
-    expect(performance.now() - started).toBeLessThan(1000);
-  });
+    // 40,000 links against an answer as long with one: about 4 times the CPU time as written, over
+    // 200 when the work per link grows with the links before it (an unshift)
+    const { result, ratio } = cpuRatio((links: boolean) => {
+      const huge = answered(links ? "[abcdefghijklmnop](/a)".repeat(40_000) : `${"[abcdefghijklmnop] /a)".repeat(39_999)}[abcdefghijklmnop](/a)`);
+      const candidates = Array.from({ length: 8 }, (_, index) => ({ path: `large-${index}`, text: huge }));
+      return () => matchShortCodexAnswers(screen, candidates);
+    }, false, true);
+    expect(result).toBeNull();
+    expect(ratio).toBeLessThan(20);
+  }, 30_000);
 
   it("does not bind using user context, tool output or a previous session above the welcome card", () => {
     expect(matchCodexTranscript(answer, [{ path: "user", text: jsonl(message("user", answer)) }])).toBeNull();
@@ -878,6 +1116,12 @@ describe("Codex submitted first exchange", () => {
     expect(matchCodexFirstExchange(screen, [row()], started)).toBe("new");
     expect(matchCodexFirstExchange(screen.replace(prompt, "Check\n  fixture"), [row()], started)).toBe("new");
     expect(matchCodexFirstExchange(screen, [row(), row("old", started - 60_000, "Other fixture", "Different answer")], started)).toBe("new");
+  });
+
+  it("ends the first answer at the composer also at Ultra reasoning effort, where its mark is \u00bb", () => {
+    const ultra = screen.replace(/\u203a $/, "\u00bb Ask Codex to do anything\n\n  GPT-6-Sol ultra \u00b7 ~/proj\n  \u2190 for agents \u00b7 ? for shortcuts");
+    expect(matchCodexFirstExchange(ultra, [row()], started)).toBe("new");
+    expect(matchCodexFirstExchange(ultra.replace("Ask Codex to do anything", "a draft"), [row()], started)).toBe("new");
   });
 
   it("matches a short greeting only when the complete exchange is unique", () => {
@@ -949,6 +1193,8 @@ describe("Codex submitted first exchange", () => {
       "Worked for a while on this.",
       "Worked for 1s • unknown time",
       "Worked for 1s • 11:11 AM\nMore answer text",
+      // a line Codex 0.166 writes for a turn of another day, which this reader never took for its footer
+      "Worked for 1s • Oct 29 at 7:05 PM",
     ]) {
       expect(matchCodexFirstExchange(screen.replace(answer, answer + "\n\n" + suffix), [row()], started)).toBeNull();
     }
@@ -1087,5 +1333,429 @@ describe("incremental Codex records", () => {
     parser.write(final);
     expect(parser.snapshot()).toEqual(parseCodexTranscript(`${first}\n${second}\n${final}`));
     expect(parser.snapshot().at(-1)?.parts.at(-1)).toMatchObject({ phase: "final_answer", text: "Finished" });
+  });
+});
+
+describe("Codex's store, read whether or not a Codex holds it (#2444)", () => {
+  const made = (home: string) => {
+    const writer = new Database(join(home, "state_5.sqlite"));
+    writer.exec("PRAGMA journal_mode = WAL; CREATE TABLE threads (id TEXT, note TEXT); INSERT INTO threads (id) VALUES ('t1');");
+    return writer;
+  };
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("reads a WAL-mode store left with no -wal or -shm, making nothing beside it", () => {
+    const home = mkdtempSync(join(tmpdir(), "ovis-codex-store-"));
+    try {
+      made(home).close();
+      // as Codex leaves it once no Codex holds it: the store alone, which SQLite may not open read-only when
+      // it cannot make the -shm (macOS's SQLite; here a folder it may not write into)
+      expect(readdirSync(home)).toEqual(["state_5.sqlite"]);
+      chmodSync(home, 0o555);
+      expect(() => new Database(join(home, "state_5.sqlite"), { readonly: true, create: false }).query("SELECT id FROM threads").all()).toThrow();
+      const { db, immutable, settled } = openCodexStore(home);
+      try {
+        expect(immutable).toBe(true);
+        expect(db.query("SELECT id FROM threads").all()).toEqual([{ id: "t1" }]);
+        expect(settled).not.toThrow();
+      } finally { db.close(); }
+      expect(readdirSync(home)).toEqual(["state_5.sqlite"]);
+    } finally {
+      chmodSync(home, 0o755);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses what it read once a Codex opened the store or wrote it meanwhile", () => {
+    const home = mkdtempSync(join(tmpdir(), "ovis-codex-store-"));
+    try {
+      made(home).close();
+      const opened = openCodexStore(home);
+      try {
+        expect(opened.db.query("SELECT id FROM threads").all()).toEqual([{ id: "t1" }]);
+        // a Codex opens the store and writes a thread: its -wal appears beside it
+        const writer = new Database(join(home, "state_5.sqlite"));
+        try {
+          writer.exec("INSERT INTO threads (id) VALUES ('t2')");
+          expect(opened.settled).toThrow(CodexStoreChanged);
+        } finally { writer.close(); }
+      } finally { opened.db.close(); }
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it("refuses what it read once a Codex wrote the store and closed it again meanwhile", () => {
+    const home = mkdtempSync(join(tmpdir(), "ovis-codex-store-"));
+    try {
+      made(home).close();
+      const opened = openCodexStore(home);
+      try {
+        expect(opened.db.query("SELECT id FROM threads").all()).toEqual([{ id: "t1" }]);
+        // Codex opens the store, writes, checkpoints and closes it: no side file is left, the file itself moved
+        const writer = new Database(join(home, "state_5.sqlite"));
+        // a row larger than a page, so the file surely grows: timestamps alone may not move within one tick
+        writer.query("INSERT INTO threads VALUES ('t2', ?)").run("x".repeat(64 * 1024));
+        writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+        writer.close();
+        expect(readdirSync(home)).toEqual(["state_5.sqlite"]);
+        expect(opened.settled).toThrow(CodexStoreChanged);
+      } finally { opened.db.close(); }
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it.skipIf(process.platform === "win32")("reads a store behind a link as the store a Codex holds, rows not yet checkpointed included", () => {
+    const home = mkdtempSync(join(tmpdir(), "ovis-codex-store-"));
+    const target = mkdtempSync(join(tmpdir(), "ovis-codex-store-target-"));
+    const writer = made(target);
+    try {
+      symlinkSync(join(target, "state_5.sqlite"), join(home, "state_5.sqlite"));
+      writer.exec("PRAGMA wal_autocheckpoint = 0; INSERT INTO threads (id) VALUES ('t2');");
+      // the live -wal lies beside the store, not beside the link to it
+      expect(readdirSync(home)).toEqual(["state_5.sqlite"]);
+      const { db, immutable, settled } = openCodexStore(home);
+      try {
+        expect(immutable).toBe(false);
+        expect(db.query("SELECT id FROM threads ORDER BY id").all()).toEqual([{ id: "t1" }, { id: "t2" }]);
+        expect(settled).not.toThrow();
+      } finally { db.close(); }
+    } finally {
+      writer.close();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("refuses what it read once the link to the store was pointed at another store", () => {
+    const home = mkdtempSync(join(tmpdir(), "ovis-codex-store-"));
+    const first = mkdtempSync(join(tmpdir(), "ovis-codex-store-a-"));
+    const second = mkdtempSync(join(tmpdir(), "ovis-codex-store-b-"));
+    try {
+      made(first).close();
+      made(second).close();
+      const link = join(home, "state_5.sqlite");
+      symlinkSync(join(first, "state_5.sqlite"), link);
+      const opened = openCodexStore(home);
+      try {
+        expect(opened.db.query("SELECT id FROM threads").all()).toEqual([{ id: "t1" }]);
+        // another store now stands where the pane's Codex keeps its own
+        rmSync(link);
+        symlinkSync(join(second, "state_5.sqlite"), link);
+        expect(opened.settled).toThrow(CodexStoreChanged);
+      } finally { opened.db.close(); }
+    } finally {
+      for (const dir of [home, first, second]) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a store a Codex holds open, rows not yet checkpointed included", () => {
+    const home = mkdtempSync(join(tmpdir(), "ovis-codex-store-"));
+    const writer = made(home);
+    try {
+      writer.exec("PRAGMA wal_autocheckpoint = 0; INSERT INTO threads (id) VALUES ('t2');");
+      const { db, immutable, settled } = openCodexStore(home);
+      try {
+        expect(immutable).toBe(false);
+        expect(db.query("SELECT id FROM threads ORDER BY id").all()).toEqual([{ id: "t1" }, { id: "t2" }]);
+        expect(settled).not.toThrow();
+      } finally { db.close(); }
+    } finally {
+      writer.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+/** A rollout read with one finished turn: the prompt it was asked, and the short answer it finished on. */
+const shortTurn = (turn: string, prompt: string, answer: string): string => [
+  JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "item_completed", turn_id: turn, item: { type: "UserMessage", content: [{ type: "input_text", text: prompt }] } } }),
+  JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "task_complete", turn_id: turn, last_agent_message: answer } }),
+].join("\n");
+
+/**
+ * A Codex pane that answered a short word, as Codex 0.164 draws it: a Stop hook's message under the answer, the
+ * hint row under the idle composer, which a split pane cuts short.
+ */
+const shortAnswerScreen = (prompt: string, answer: string, options: { hook?: boolean; hint?: string } = {}): string => [
+  "  >_ OpenAI Codex (v0.164.0)",
+  "     /tmp/proj",
+  "",
+  `› ${prompt}`,
+  "",
+  "",
+  `• ${answer}`,
+  "",
+  ...(options.hook ? ["  ↳ Hook · Stop completed", "  ran the project's stop-check", ""] : []),
+  "  Worked for 1s • 7:05 PM",
+  "",
+  "",
+  "",
+  "› Ask Codex to do anything",
+  "",
+  "  GPT-6-Luna low · /tmp/proj · Reply with one word",
+  `  ${options.hint ?? "← for agents · ? for shortcuts"}`,
+].join("\n");
+
+describe("a Codex pane whose last answer is shorter than 64 letters and digits (#3262 case 2)", () => {
+  const prompt = "Do not run any tools. Reply with just the word ok and nothing else.";
+  const path = "/tmp/rollouts/short.jsonl";
+  const other = "/tmp/rollouts/other.jsonl";
+  const owners = new Set([path]);
+  const both = new Set([path, other]);
+  const candidates = [{ path, text: shortTurn("t1", prompt, "ok") }];
+
+  it("binds the one conversation whose last finished turn the screen shows footed", () => {
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), candidates, owners)).toBe(path);
+  });
+
+  it("binds past a Stop hook's message between the answer and its footer", () => {
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok", { hook: true }), candidates, owners)).toBe(path);
+  });
+
+  it("binds in a split pane whose hint row is cut", () => {
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok", { hint: "← for agents · ? for shortcu" }), candidates, owners)).toBe(path);
+  });
+
+  it("binds a prompt or an answer the pane wraps, inside a word too", () => {
+    const long = "Reply with just the word ok about electroencephalography and nothing else.";
+    const wrappedPrompt = shortAnswerScreen(long, "ok").replace(`› ${long}`, "› Reply with just the word ok about electroencephalo\n  graphy and nothing else.");
+    expect(footedShortTranscript(wrappedPrompt, [{ path, text: shortTurn("t1", long, "ok") }], owners)).toBe(path);
+    const word = shortAnswerScreen(prompt, "electroencephalography").replace("• electroencephalography", "• electroencephalo\n  graphy");
+    expect(footedShortTranscript(word, [{ path, text: shortTurn("t1", prompt, "electroencephalography") }], owners)).toBe(path);
+    const sentence = shortAnswerScreen(prompt, "The fixture is ready for inspection.").replace("• The fixture is ready for inspection.", "• The fixture is ready\n  for inspection.");
+    expect(footedShortTranscript(sentence, [{ path, text: shortTurn("t1", prompt, "The fixture is ready for inspection.") }], owners)).toBe(path);
+  });
+
+  it("takes no answer that differs from the shown one in its punctuation, nor a prompt that does", () => {
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "a < b"), [{ path, text: shortTurn("t1", prompt, "a > b") }], owners)).toBeNull();
+    expect(footedShortTranscript(shortAnswerScreen("Is a < b? Reply ok.", "ok"), [{ path, text: shortTurn("t1", "Is a > b? Reply ok.", "ok") }], owners)).toBeNull();
+  });
+
+  it("takes no conversation when another one also finished on that word", () => {
+    const two = [...candidates, { path: other, text: shortTurn("t9", "Say ok.", "ok") }];
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), two, both)).toBeNull();
+  });
+
+  it("takes no conversation while another's latest turn was asked the prompt shown, whatever it recorded", () => {
+    // one that recorded a link Codex draws as the text shown, one whose finish is not written yet, one that answered more
+    for (const theirs of [shortTurn("t9", prompt, "[ok](/tmp/proj/ok)"), shortTurn("t9", prompt, "ok").split("\n")[0]!, shortTurn("t9", prompt, "ok\n\n↳ Hook · Stop completed\nextra")]) {
+      expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), [...candidates, { path: other, text: theirs }], both)).toBeNull();
+    }
+  });
+
+  it("takes no conversation while another's read shows no prompt at all: it may have cut the one asked", () => {
+    const unread = JSON.stringify({ timestamp: ts, type: "session_meta", payload: { id: "t", cwd: "/tmp/proj" } });
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), [...candidates, { path: other, text: unread }], both)).toBeNull();
+  });
+
+  it("takes no conversation whose answer goes on in a paragraph shaped like a hook row, beside one that answered the word alone", () => {
+    // the pane's own answer, drawn under its bullet: the second paragraph indented like the first
+    const screen = shortAnswerScreen(prompt, "ok").replace("• ok\n", "• ok\n\n  ↳ Hook · Stop completed\n  extra\n");
+    const own = { path, text: shortTurn("t1", prompt, "ok\n\n↳ Hook · Stop completed\nextra") };
+    expect(footedShortTranscript(screen, [own, { path: other, text: shortTurn("t9", prompt, "ok") }], both)).toBeNull();
+  });
+
+  it("leaves a thread that was only started out of the doubt once its read is known whole", () => {
+    const started = { path: other, text: JSON.stringify({ timestamp: ts, type: "session_meta", payload: { id: "t", cwd: "/tmp/proj" } }) };
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), [...candidates, started], both)).toBeNull();
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), [...candidates, started], both, (read) => read === other)).toBe(path);
+    // one with a turn begun is no such thread, however its read was made
+    const begun = { path: other, text: `${started.text}\n${JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "task_started", turn_id: "t9" } })}` };
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), [...candidates, begun], both, () => true)).toBeNull();
+  });
+
+  it("leaves an answer long enough for an anchor to matchCodexTranscript", () => {
+    const long = "The migration rewrote every legacy record in place, and all of the remaining verification steps completed.";
+    expect(footedShortTranscript(shortAnswerScreen(prompt, long), [{ path, text: shortTurn("t1", prompt, long) }], owners)).toBeNull();
+  });
+
+  it("takes no conversation whose last turn answered another word", () => {
+    const done = [{ path, text: shortTurn("t1", prompt, "done") }];
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), done, owners)).toBeNull();
+  });
+
+  it("takes no conversation whose last turn was asked another prompt", () => {
+    const asked = [{ path, text: shortTurn("t1", "Say ok.", "ok") }];
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), asked, owners)).toBeNull();
+  });
+
+  it("reads nothing from a screen whose turn has not finished, nor from an earlier Codex above the header", () => {
+    const screen = shortAnswerScreen(prompt, "ok").replace("  Worked for 1s • 7:05 PM", "");
+    expect(footedShortTranscript(screen, candidates, owners)).toBeNull();
+    const restarted = `${shortAnswerScreen(prompt, "ok")}\n$ codex\n  >_ OpenAI Codex (v0.164.0)\n     /tmp/proj\n\n› Ask Codex to do anything\n\n  GPT-6-Luna low · /tmp/proj\n  ← for agents · ? for shortcuts`;
+    expect(footedShortTranscript(restarted, candidates, owners)).toBeNull();
+  });
+
+  it("never takes a conversation that is not this folder's: one only a title or herdr's report offered", () => {
+    expect(footedShortTranscript(shortAnswerScreen(prompt, "ok"), candidates, new Set())).toBeNull();
+  });
+});
+
+/**
+ * A Codex screen with one finished turn as Codex 0.164 draws it on macOS, for the cases in #3262 where herdr
+ * reports no thread for the pane and only the screen binds it. `top`: the rows above what the turn ended on (its
+ * header and prompt; none for an answer whose start has scrolled off the screen).
+ */
+const codexTurnScreen = (asked: string | null, body: readonly string[]): string => [
+  ...(asked === null ? [] : ["  >_ OpenAI Codex (v0.164.0)", "     /tmp/proj", "", `› ${asked}`, ""]),
+  ...body,
+  "",
+  "  Worked for 12s • 7:05 PM",
+  "",
+  "",
+  "",
+  "› Ask Codex to do anything",
+  "",
+  "  GPT-6-Luna low · /tmp/proj · Write a script",
+  "  ← for agents · ? for shortcuts",
+].join("\n");
+
+/** A rollout read that records one finished turn with that answer. */
+const finishedOn = (answer: string): string => JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "task_complete", last_agent_message: answer } });
+
+describe("a Codex pane whose last answer the screen never shows whole (#3262 case 1)", () => {
+  // a code block Codex draws indented, without its fences and without a bullet, 60 lines long: the screen read
+  // is 40 rows, so only its tail is on screen when the turn finishes
+  const script = Array.from({ length: 60 }, (_, at) => `value_${at} = compute_step(${at}) + carried_${at}`).join("\n");
+  const fenced = `\`\`\`python\n${script}\n\`\`\``;
+  const tail = script.split("\n").slice(-14).map((line) => `  ${line}`);
+  const path = "/tmp/rollouts/aa.jsonl";
+  const other = "/tmp/rollouts/bb.jsonl";
+  const candidates = [{ path, text: finishedOn(fenced) }];
+  const owners = new Set([path]);
+  const both = new Set([path, other]);
+  const asked = "Print a Python script of about 60 lines in one fenced code block and nothing else.";
+  /** A candidate that finished a turn on something else: `records` are what else its read holds. */
+  const elsewhere = (...records: Record<string, unknown>[]) => ({ path: other, text: [...records.map((payload) => JSON.stringify({ timestamp: ts, type: "event_msg", payload })), finishedOn("Unrelated.")].join("\n") });
+
+  it("binds the one conversation whose finished answer ends above the footer, its start scrolled off the screen", () => {
+    expect(footedTailTranscript(codexTurnScreen(null, tail), candidates, owners)).toBe(path);
+    // however the pane wraps its rows
+    const wrapped = tail.flatMap((line) => [line.slice(0, 24), `  ${line.slice(24)}`]);
+    expect(footedTailTranscript(codexTurnScreen(null, wrapped), candidates, owners)).toBe(path);
+  });
+
+  it("reads the idle composer under the footer also at Ultra reasoning effort, where its mark is »", () => {
+    const ultra = codexTurnScreen(null, tail).replace("› Ask Codex to do anything", "» Ask Codex to do anything").replace("GPT-6-Luna low", "GPT-6-Luna ultra");
+    expect(footedTailTranscript(ultra, candidates, owners)).toBe(path);
+    // a draft in the box is a message on its way: no finished turn is read then, as under ›
+    expect(footedTailTranscript(ultra.replace("» Ask Codex to do anything", "» and then"), candidates, owners)).toBeNull();
+  });
+
+  it("binds an answer with a code block shown whole under its bullet, which matchCodexTranscript cannot read", () => {
+    const short = script.split("\n").slice(0, 8);
+    const answer = `Here is the script:\n\n\`\`\`python\n${short.join("\n")}\n\`\`\``;
+    const screen = codexTurnScreen(asked, ["• Here is the script:", "", ...short.map((line) => `  ${line}`)]);
+    const own = (reply: string, prompt = asked) => [{ path, text: shortTurn("t1", prompt, reply) }];
+    expect(matchCodexTranscript(screen, own(answer))).toBeNull();
+    expect(footedTailTranscript(screen, own(answer), owners)).toBe(path);
+    // with more at its start than the conversation said, or less, it is another answer
+    expect(footedTailTranscript(screen.replace("• Here is the script:", "• Note. Here is the script:"), own(answer), owners)).toBeNull();
+    expect(footedTailTranscript(screen, own(`Note.\n\n${answer}`), owners)).toBeNull();
+    expect(footedTailTranscript(screen, own(answer.replace("Here is the script:\n\n", "")), owners)).toBeNull();
+    // and under another prompt than the one it was asked, another turn: its prompt is on screen, and tells
+    expect(footedTailTranscript(screen, own(answer, "Print the script once more."), owners)).toBeNull();
+    expect(footedTailTranscript(screen, [{ path, text: finishedOn(answer) }], owners)).toBeNull();
+    // nor while another candidate's latest turn was asked the prompt shown: it may be the one that drew this answer its own way
+    expect(footedTailTranscript(screen, [...own(answer), { path: other, text: shortTurn("t9", asked, "Here is [the script](/tmp/proj/script.py).") }], both)).toBeNull();
+  });
+
+  it("takes no answer that starts like a tool's call, as matchCodexTranscript takes none", () => {
+    const said = "Ran the full test suite and verified that all checks pass successfully across the migrated legacy records and reports.";
+    const screen = codexTurnScreen(asked, [`• ${said}`]);
+    expect(matchCodexTranscript(screen, [{ path, text: finishedOn(said) }])).toBeNull();
+    // (asked the prompt shown, so that only the row's shape decides)
+    expect(footedTailTranscript(screen, [{ path, text: shortTurn("t1", asked, said) }], owners)).toBeNull();
+    expect(footedTailTranscript(screen.replace("• Ran the full", "• We ran the full"), [{ path, text: shortTurn("t1", asked, `We r${said.slice(1)}`) }], owners)).toBe(path);
+  });
+
+  it("leaves the terminal standing when the screen shows another answer", () => {
+    const shown = tail.map((line) => line.replace(/compute_step/g, "describe_page"));
+    expect(footedTailTranscript(codexTurnScreen(null, shown), candidates, owners)).toBeNull();
+  });
+
+  it("takes no answer that differs from the shown one in an operator", () => {
+    const strict = Array.from({ length: 12 }, (_, at) => `if (check_permission(user_${at}) && is_admin(user_${at})) { execute_sensitive_operation(${at}); }`);
+    const said = [{ path, text: finishedOn(`\`\`\`js\n${strict.join("\n")}\n\`\`\``) }];
+    const rows = (lines: string[]) => lines.map((line) => `  ${line}`);
+    expect(footedTailTranscript(codexTurnScreen(null, rows(strict)), said, owners)).toBe(path);
+    expect(footedTailTranscript(codexTurnScreen(null, rows(strict.map((line) => line.replace("&&", "||")))), said, owners)).toBeNull();
+  });
+
+  it("takes no conversation the pane only quotes in a prompt or shows as a tool's output, above its own short answer", () => {
+    const quoted = `Another agent proposed this, answer yes or no:\n${tail.join("\n")}`;
+    expect(footedTailTranscript(codexTurnScreen(quoted, ["• Yes."]), candidates, owners)).toBeNull();
+    expect(footedTailTranscript(codexTurnScreen("Show the notes", ["• Ran cat notes.txt", `  └ ${tail[0]!.trim()}`, ...tail.slice(1).map((line) => `  ${line}`), "", "• Yes."]), candidates, owners)).toBeNull();
+    // nor as the rows a prompt or a tool's output wraps onto, with nothing below them
+    expect(footedTailTranscript(codexTurnScreen(quoted, []).replace("\n\n\n  Worked", "\n\n  Worked"), candidates, owners)).toBeNull();
+    expect(footedTailTranscript(codexTurnScreen("Show the notes", ["• Ran cat notes.txt", `  └ ${tail[0]!.trim()}`, ...tail.slice(1).map((line) => `  ${line}`)]), candidates, owners)).toBeNull();
+  });
+
+  it("reads no turn of an earlier Codex above the header of the one shown now", () => {
+    const restarted = [codexTurnScreen(null, tail).split("\n› Ask Codex")[0], "$ codex", "  >_ OpenAI Codex (v0.164.0)", "     /tmp/proj", "", "› Ask Codex to do anything", "",
+      "  GPT-6-Luna low · /tmp/proj", "  ← for agents · ? for shortcuts"].join("\n");
+    expect(footedTailTranscript(restarted, candidates, owners)).toBeNull();
+  });
+
+  it("takes an answer whose start scrolled off only from the top of a read: not below a header, a prompt or an earlier turn", () => {
+    expect(footedTailTranscript(codexTurnScreen(asked, tail), candidates, owners)).toBeNull();
+    expect(footedTailTranscript(`• An earlier answer.\n\n  Worked for 3s • 7:01 PM\n\n${codexTurnScreen(null, tail)}`, candidates, owners)).toBeNull();
+  });
+
+  it("takes no conversation when two candidates finished on that same text", () => {
+    const fork = [{ path: other, text: finishedOn(fenced) }, ...candidates];
+    expect(footedTailTranscript(codexTurnScreen(null, tail), fork, both)).toBeNull();
+  });
+
+  it("takes no conversation while another candidate's read holds that text anywhere, or has a turn under way", () => {
+    const screen = codexTurnScreen(null, tail);
+    // an older answer of it, a prompt that quoted it, a tool that printed it
+    for (const record of [
+      { type: "agent_message", message: fenced },
+      { type: "user_message", message: `Review this:\n${script}` },
+      { type: "item_completed", turn_id: "t3", item: { type: "CommandExecution", aggregated_output: script } },
+    ]) expect(footedTailTranscript(screen, [...candidates, elsewhere(record)], both)).toBeNull();
+    expect(footedTailTranscript(screen, [...candidates, elsewhere()], both)).toBe(path);
+    // a turn begun and not ended: its screen may show an answer it has not written yet
+    const running = { path: other, text: `${finishedOn("Unrelated.")}\n${JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "task_started", turn_id: "t4" } })}` };
+    expect(footedTailTranscript(screen, [...candidates, running], both)).toBeNull();
+    // and its own turn begun since: the answer shown is no longer its last word
+    const moved = [{ path, text: `${finishedOn(fenced)}\n${JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message: "And now?" } })}` }];
+    expect(footedTailTranscript(screen, moved, owners)).toBeNull();
+  });
+
+  it("counts what another candidate said as Codex draws it: a fence's language is in its read, not on screen", () => {
+    // an answer that ends on a short fenced block: the last 160 letters and digits shown run across the fence line
+    const answer = "Run the fast checks from the repository root before every push, with a temp folder of your own:\n\n```bash\nmkdir -p $HOME/.cache/ovis-tmp/checks && TMPDIR=$HOME/.cache/ovis-tmp/checks bun run check fast\n```";
+    const screen = codexTurnScreen("How do I run the fast checks?", ["• Run the fast checks from the repository root before every push, with a temp folder of your own:", "",
+      "  mkdir -p $HOME/.cache/ovis-tmp/checks && TMPDIR=$HOME/.cache/ovis-tmp/checks bun run check fast"]);
+    const own = [{ path, text: shortTurn("t1", "How do I run the fast checks?", answer) }];
+    expect(footedTailTranscript(screen, own, owners)).toBe(path);
+    // an earlier answer of another conversation, and one another folder's conversation ended on
+    expect(footedTailTranscript(screen, [...own, elsewhere({ type: "agent_message", message: answer })], both)).toBeNull();
+    expect(footedTailTranscript(screen, [...own, { path: other, text: finishedOn(answer) }], owners)).toBeNull();
+  });
+
+  it("counts what another candidate said where Codex draws every stretch of it its own way: a list it numbers, a language on each fence", () => {
+    // short items: every 48 letters and digits of the list hold a number, which the record wrote "1." each time
+    const items = Array.from({ length: 40 }, (_, at) => `${"abcdefghij"[at % 10]}${"klmnopqrst"[(at * 3) % 10]} region read`);
+    const counted = items.map((item, at) => `${at + 1}. ${item}`);
+    const list = codexTurnScreen(null, counted.slice(-30).map((row) => `  ${row}`));
+    const relayed = [{ path, text: finishedOn(counted.join("\n")) }];
+    expect(footedTailTranscript(list, relayed, owners)).toBe(path);
+    expect(footedTailTranscript(list, [...relayed, elsewhere({ type: "agent_message", message: items.map((item) => `1. ${item}`).join("\n") })], both)).toBeNull();
+    // small blocks: every 48 letters hold a fence's language, which the screen does not show
+    const steps = Array.from({ length: 40 }, (_, at) => `run step ${"abcdefghij"[at % 10]}${"klmnopqrst"[(at * 7) % 10]} of the check`);
+    const blocks = codexTurnScreen(null, steps.slice(-30).map((row) => `  ${row}`));
+    const plain = [{ path, text: finishedOn(steps.join("\n\n")) }];
+    expect(footedTailTranscript(blocks, plain, owners)).toBe(path);
+    expect(footedTailTranscript(blocks, [...plain, elsewhere({ type: "agent_message", message: steps.map((step) => `\`\`\`sh\n${step}\n\`\`\``).join("\n") })], both)).toBeNull();
+  });
+
+  it("never takes a conversation that is not this folder's: one only a title or herdr's report offered", () => {
+    expect(footedTailTranscript(codexTurnScreen(null, tail), candidates, new Set())).toBeNull();
+  });
+
+  it("reads nothing from a screen whose turn has not finished, nor from an answer too short to tell", () => {
+    expect(footedTailTranscript(codexTurnScreen(null, tail).replace("  Worked for 12s • 7:05 PM", ""), candidates, owners)).toBeNull();
+    expect(footedTailTranscript(codexTurnScreen(null, tail).replace("› Ask Codex to do anything", "› and then"), candidates, owners)).toBeNull();
+    expect(footedTailTranscript(codexTurnScreen(null, tail.slice(-1)), candidates, owners)).toBeNull();
   });
 });

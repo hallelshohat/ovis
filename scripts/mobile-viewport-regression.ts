@@ -32,7 +32,7 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
     await page.locator(".conn-live").waitFor();
-    await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+    await page.getByTitle(/^Chat transcript \(.+\)$/).click();
     const composer = page.getByRole("textbox", { name: "Message", exact: true });
     await composer.waitFor();
     // read in one step: the transcript's first node is replaced as the conversation loads, and a node
@@ -120,7 +120,7 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     await page.setViewportSize({ width: 390, height: 844 });
     await height(500);
 
-    await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+    await page.getByTitle(/^Live terminal \(.+\)$/).click();
     const terminal = page.locator(".xterm-helper-textarea");
     await terminal.focus();
     await shell(false, "", 844);
@@ -132,10 +132,15 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
       mkdirSync(process.env.UI_EVIDENCE_DIR, { recursive: true });
       await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "viewport-direct-typing.png") });
     }
+    // back to the line with the keyboard up: the line takes the grid's keyboard, focus and all, so
+    // the switch neither drops nor raises it (#2333)
     await direct.click();
     await shell(true, "500px", 500);
+    assert.equal(await page.evaluate(() => document.activeElement?.className), "terminal-input-text", "direct to line with the keyboard up hands the focus to the line");
     await height(795);
     await shell(false, "", 844);
+    // with no field focused, a smaller viewport is not a keyboard
+    await blur();
     await height(500);
     await shell(false, "", 844);
     await page.getByRole("textbox", { name: "Terminal input line", exact: true }).focus();
@@ -145,7 +150,7 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
     await height(795);
     await shell(false, "", 844);
 
-    await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+    await page.getByTitle(/^Chat transcript \(.+\)$/).click();
     await composer.focus();
     await height(500);
     await shell(true, "500px", 500);

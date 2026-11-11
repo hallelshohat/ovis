@@ -62,8 +62,11 @@ async function checkChatLoading(): Promise<void> {
         if (cold) { forgetTranscriptState(); cold = false; }
         const start = performance.now();
         const before = url.searchParams.get("before"), from = url.searchParams.get("from"), since = url.searchParams.get("since");
+        const prompts = url.searchParams.has("prompts") ? Number(url.searchParams.get("prompts")) : undefined;
+        assert.ok(prompts === undefined || Number.isInteger(prompts) && prompts > 0);
         const answer = transcriptPage("omp-transcript", short ? shortPath : path, {
           ...(before === null ? {} : { before }), ...(from === null ? {} : { from }), ...(since === null ? {} : { since }),
+          ...(prompts === undefined ? {} : { prompts }),
         });
         parseMs = performance.now() - start;
         const body = JSON.stringify({ ...answer, activity: working ? "working" : "idle" });

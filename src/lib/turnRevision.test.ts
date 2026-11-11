@@ -5,6 +5,15 @@ import { RenderBoundary } from "../components/RenderBoundary.tsx";
 
 const turn = (text: string, end?: string): ConversationTurn => ({ role: "assistant", ts: "2026-10-02T00:00:00Z", ...(end ? { end_ts: end } : {}), parts: [{ kind: "text", text }] });
 
+test("native visibility and steering identity change the rendered revision", () => {
+  for (const kind of ["thinking", "notice"] as const) {
+    const value: ConversationTurn = { ...turn(""), parts: [{ kind, text: "summary" }] };
+    expect(turnRevision(value)).not.toBe(turnRevision({ ...value, parts: [{ kind, text: "summary", native: true }] }));
+  }
+  const value = { ...turn("continued"), native_turn_id: "task", turn_complete: false };
+  expect(turnRevision(value)).not.toBe(turnRevision({ ...value, turn_complete: true }));
+});
+
 test("an immutable settled message is scanned only once across repeated renders", () => {
   const value = turn("settled");
   const parts = value.parts;

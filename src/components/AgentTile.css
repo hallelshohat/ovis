@@ -1,0 +1,129 @@
+/* AgentTile: one coding agent as a tile (the setup guide, Add another agent, Settings) */
+/* the agents, two to a line: one installed is picked by a tap; one missing has its Install */
+.setup-found {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* a line's two tiles share its height: a name that wraps, or a version under it, lengthens both */
+.setup-found > li {
+  display: flex;
+  min-width: 0;
+}
+
+.setup-tile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--touch-target);
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+
+button.setup-tile {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  button.setup-tile:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+}
+
+/* the one picked: its check and a tonal fill say so; the accent ring is the keyboard's focus alone */
+.setup-tile[aria-pressed="true"] {
+  background: var(--accent-tint);
+}
+
+.setup-tile > svg {
+  flex: none;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  color: var(--accent);
+}
+
+.setup-tile[data-missing] .setup-found-name strong {
+  color: var(--text-dim);
+  font-weight: var(--fw-medium);
+}
+
+.setup-tile-install {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-half) var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+.setup-tile-install svg {
+  width: calc(var(--icon-size-sm) - var(--hairline));
+  height: calc(var(--icon-size-sm) - var(--hairline));
+}
+
+.setup-found-name {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-half) var(--space-2);
+  min-width: 0;
+}
+/* the product's whole name, wrapped at its spaces where the tile is narrow: it is what is picked or installed */
+.setup-found-name strong {
+  min-width: 0;
+  color: var(--text-strong);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+.setup-found-name span {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 768px) {
+  /* two tiles to a line leave no room for the word: Install is its icon (its name stays for screen readers) */
+  .setup-tile-install-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .setup-tile-install {
+    min-width: var(--touch-target);
+    justify-content: center;
+  }
+
+  .setup-found-name strong {
+    font-size: var(--fs-sm);
+  }
+}
+
+/* the ring of the PC check and of an install on its tile */
+.setup-spin {
+  animation: setup-spin var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes setup-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-spin {
+    animation: none;
+  }
+}

@@ -1,20 +1,26 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Check, Columns2, Copy, CopySlash, FileText, FoldVertical, Rows3, Search, TriangleAlert, X } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Columns2, Copy, CopySlash, FileDiff, FileText, FileWarning, FoldVertical, MessageSquarePlus, RefreshCw, Rows3, Search, TriangleAlert, X } from "lucide-react";
+import { EmptyState } from "./EmptyState.tsx";
 
 import "./FindBar.css";
+import "./RepoChanges.css";
 import "./RepoDiffViewer.css";
 import { RenderBoundary } from "./RenderBoundary.tsx";
 import { Skeleton } from "./Skeleton.tsx";
 
-import type { RepoDiffFilePatch } from "../../shared/protocol.ts";
+import { paneStorageId } from "../../shared/machines.ts";
+import type { RepoDiffFile, RepoDiffFilePatch } from "../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
 import { copyText } from "../lib/clipboard.ts";
+import { composerDrafts } from "../lib/composerDraft.ts";
+import { capturedComparison, diffNoteQuote, lineAtRow, noteOverflows } from "../lib/diffLineNotes.ts";
+import { replyComments, replyCommentsKey } from "../lib/replyComments.ts";
 import { pathParts } from "../lib/filePaths.ts";
 import { canHighlight, languageForPath } from "../lib/highlight.ts";
 import { useT, type Translate } from "../lib/i18n.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
-import { comparisonChangedWord, comparisonWord, diffColorable, diffErrorMessage, diffStyleFor, repositoryFilePath, sameComparison, statusWord, unavailableMessage, type RepoDiffTarget } from "../lib/repoDiff.ts";
-import { DIFF_FIND_MAX_QUERY, diffFindLines, findInDiff, stepMatch, type DiffFindMatch } from "../lib/repoDiffFind.ts";
+import { comparisonChangedWord, comparisonWord, diffColorable, diffErrorMessage, diffStyleFor, repositoryFilePath, sameComparison, STATUS_MARK, statusWord, unavailableMessage, type RepoDiffTarget } from "../lib/repoDiff.ts";
+import { DIFF_FIND_MAX_QUERY, diffChanges, diffFindLines, findInDiff, stepMatch, type DiffFindLine } from "../lib/repoDiffFind.ts";
 import { useSettings } from "../lib/settings.ts";
 import { SHEET_QUERY, useSheetSwipe } from "../lib/sheets.ts";
 import { skeletonRows } from "../lib/skeleton.ts";
@@ -30,6 +36,94 @@ export interface RepoDiffViewerProps {
   onOpenFile: (path: string) => void;
   /** a file preview or Settings above it takes Escape */
   keyboardActive?: boolean;
+  /**
+   * Notes on a line (#1603), for the next message of the diff's own pane (`target`'s PC and pane):
+   * the PC's name the note names, and why that pane cannot take one now (null when it can).
+   */
+  note?: { machine: string; blocked: string | null };
+  /** another changed file of the same comparison, picked in the file column or stepped to */
+  onSwitchFile: (file: RepoDiffFile) => void;
+}
+
+/** The file column beside the rows: from this width, as VS Code's changes list beside its diff; narrower, a stepper in the header. */
+const FILE_COLUMN_QUERY = "(min-width: 901px)";
+
+/** Whether a key press belongs to a text field, where arrows and function keys keep their own meaning. */
+function typing(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || target.closest("input, textarea, select") !== null);
+}
+
+/** A note being written: the line and the quote captured when it was begun, which a later patch does not change. */
+interface Writing { line: DiffFindLine; quote: string }
+
+interface DiffNoteDraft {
+  writing: Writing;
+  text: string;
+  open: boolean;
+}
+
+const diffTargetDrafts = new Map<string, DiffNoteDraft>();
+/** a closed note's words, kept with the quote it was begun on: reopened on a changed patch it still goes with that code */
+interface DiffLineDraft { text: string; quote: string }
+const diffLineDrafts = new Map<string, DiffLineDraft>();
+
+function diffTargetDraftKey(target: RepoDiffTarget): string {
+  return `${target.machineId}\n${target.paneId ?? ""}\n${target.directory ?? ""}\n${target.scope}\n${target.base ?? ""}\n${target.head ?? ""}\n${target.path}`;
+}
+
+function diffLineDraftKey(target: RepoDiffTarget, line: Pick<DiffFindLine, "side" | "line">): string {
+  return `${diffTargetDraftKey(target)}\n${line.side}:${line.line}`;
+}
+
+function readDiffTargetDraft(target: RepoDiffTarget): DiffNoteDraft | null {
+  const key = diffTargetDraftKey(target);
+  const mem = diffTargetDrafts.get(key);
+  if (mem !== undefined) return mem;
+  try {
+    const raw = window.sessionStorage?.getItem(`ovis:diff-note-target:${key}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<DiffNoteDraft>;
+    if (parsed.writing && typeof parsed.text === "string") {
+      return { writing: parsed.writing, text: parsed.text, open: parsed.open === true };
+    }
+  } catch { /* private mode */ }
+  return null;
+}
+
+function writeDiffTargetDraft(target: RepoDiffTarget, draft: DiffNoteDraft | null): void {
+  const key = diffTargetDraftKey(target);
+  if (draft === null || draft.text.trim() === "") {
+    diffTargetDrafts.delete(key);
+    try { window.sessionStorage?.removeItem(`ovis:diff-note-target:${key}`); } catch { /* private mode */ }
+    return;
+  }
+  diffTargetDrafts.set(key, draft);
+  try { window.sessionStorage?.setItem(`ovis:diff-note-target:${key}`, JSON.stringify(draft)); } catch { /* private mode */ }
+}
+
+function readDiffLineDraft(target: RepoDiffTarget, line: Pick<DiffFindLine, "side" | "line">): DiffLineDraft | null {
+  const key = diffLineDraftKey(target, line);
+  const mem = diffLineDrafts.get(key);
+  if (mem !== undefined) return mem;
+  try {
+    const raw = window.sessionStorage?.getItem(`ovis:diff-note-line:${key}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<DiffLineDraft>;
+    if (typeof parsed.text === "string" && typeof parsed.quote === "string") return { text: parsed.text, quote: parsed.quote };
+  } catch { /* private mode, or a draft without its quote */ }
+  return null;
+}
+
+function writeDiffLineDraft(target: RepoDiffTarget, writing: Writing, text: string): void {
+  const key = diffLineDraftKey(target, writing.line);
+  if (text.trim() === "") {
+    diffLineDrafts.delete(key);
+    try { window.sessionStorage?.removeItem(`ovis:diff-note-line:${key}`); } catch { /* private mode */ }
+    return;
+  }
+  const draft = { text, quote: writing.quote };
+  diffLineDrafts.set(key, draft);
+  try { window.sessionStorage?.setItem(`ovis:diff-note-line:${key}`, JSON.stringify(draft)); } catch { /* private mode */ }
 }
 
 /** `stale`: a branch patch answered for another identity than the list's, which is never drawn as this one */
@@ -59,13 +153,43 @@ function CopyButton({ text, label, doneLabel, icon, onShowText }: { text: string
 }
 
 /** Where the active match is, in words: its kind and its line on its side, so it is not told by the row's tint alone. */
-function matchPlace(t: Translate, match: DiffFindMatch): string {
+function matchPlace(t: Translate, match: DiffFindLine): string {
   const line = match.line.toLocaleString();
   switch (match.kind) {
     case "addition": return t("Added line {line}", { line });
     case "deletion": return t("Removed line {line}", { line });
     case "context": return t("Unchanged line {line}", { line });
   }
+}
+
+/**
+ * The small editor of a note on one line (#1603): where the line is, its text as captured, the note,
+ * and Add to next message (Mod+Enter) or Cancel. Docked along the viewer's bottom edge, over the
+ * rows, so a phone's keyboard meets it.
+ */
+function DiffNoteForm({ writing, path, text, error, disabled, onText, onSave, onCancel }: {
+  writing: Writing; path: string; text: string; error: string | null; disabled: boolean;
+  onText: (value: string) => void; onSave: () => void; onCancel: () => void;
+}) {
+  const t = useT();
+  const field = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => { field.current?.focus({ preventScroll: true }); }, []);
+  return <form className="repo-diff-line-note-form" aria-label={t("Note on {place}", { place: matchPlace(t, writing.line) })}
+    onSubmit={(event) => { event.preventDefault(); onSave(); }}>
+    <p className="repo-diff-line-note-place"><span>{matchPlace(t, writing.line)}</span><span className="repo-diff-line-note-path" dir="ltr">{path}</span></p>
+    <pre className="repo-diff-line-note-line" data-kind={writing.line.kind}><code>{writing.line.text === "" ? " " : writing.line.text}</code></pre>
+    <textarea ref={field} className="input repo-diff-line-note-field" rows={2} value={text} placeholder={t("What should the agent know about this line?")}
+      aria-label={t("Note")} onChange={(event) => onText(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSave(); }
+      }} />
+    {error !== null && <p className="repo-diff-line-note-error" role="alert">{error}</p>}
+    <div className="repo-diff-line-note-actions">
+      <button type="button" className="btn" onClick={onCancel}>{t("Cancel")}</button>
+      <button type="submit" className="btn btn-primary" disabled={disabled || text.trim() === ""}>{t("Add to next message")}</button>
+    </div>
+  </form>;
 }
 
 const DIFF_SKELETON_ROWS = 6;
@@ -88,12 +212,21 @@ function DiffSkeleton({ label }: { label: string }) {
  * (their places kept while the patch is on its way), the file itself a tap away in the file viewer,
  * and the patch copied as git printed it, or the file's path on its own.
  */
-export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = true }: RepoDiffViewerProps) {
+export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = true, note, onSwitchFile }: RepoDiffViewerProps) {
   const t = useT();
   const { settings, update, resolvedEntry } = useSettings();
-  const { fetchRepoDiffFile } = useMachineApi();
+  const { fetchRepoDiffFile, fetchRepoDiffFiles, fetchRepoDiffContents } = useMachineApi();
   const surface = useFocusTrap<HTMLElement>(true);
   const narrow = useMediaQuery(SHEET_QUERY);
+  const columned = useMediaQuery(FILE_COLUMN_QUERY);
+  // the comparison's other files, for the column and the stepper: read by the viewer itself, so a reload that restores it has them too
+  const [siblings, setSiblings] = useState<RepoDiffFile[] | null>(null);
+  // the change brought into view by Previous/Next change; none until the reader steps
+  const [changeIndex, setChangeIndex] = useState<number | null>(null);
+  // the whole files read for expanding no longer match the patch shown: it stays as it was read
+  const [staleContents, setStaleContents] = useState(false);
+  const markStale = useCallback(() => setStaleContents(true), []);
+  const filesRef = useRef<HTMLUListElement>(null);
   const [load, setLoad] = useState<Load>(PENDING);
   const [folded, setFolded] = useState(false);
   const [shown, setShown] = useState<Shown | null>(null);
@@ -110,9 +243,33 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const findOpener = useRef<HTMLElement | null>(null);
   const findingRef = useRef(finding);
   findingRef.current = finding;
+  // a note on a line: the line picked (an index into the patch's logical lines), and the note being written
+  const initialDraft = readDiffTargetDraft(target);
+  const [cursor, setCursor] = useState<{ index: number; quiet: boolean } | null>(null);
+  const [writing, setWriting] = useState<Writing | null>(() => initialDraft?.open ? initialDraft.writing : null);
+  const [noteText, setNoteText] = useState(() => initialDraft?.open ? initialDraft.text : "");
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const [noteAdded, setNoteAdded] = useState(false);
+  const writingRef = useRef<{ open: boolean; empty: boolean }>({ open: false, empty: true });
+  writingRef.current = { open: writing !== null, empty: noteText.trim() === "" };
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // the row's + calls the latest, which reads the answer of the render it was drawn in
+  const beginNoteRef = useRef<(line: DiffFindLine) => void>(() => {});
   useSheetSwipe(surface, onClose);
 
-  const { paneId, directory, scope, base, head, comparison, path, oldPath } = target;
+  const { machineId, paneId, directory, scope, base, head, comparison, path, oldPath } = target;
+  useEffect(() => {
+    const saved = readDiffTargetDraft(target);
+    if (saved?.open) {
+      setWriting(saved.writing);
+      setNoteText(saved.text);
+    } else {
+      setWriting(null);
+      setNoteText("");
+    }
+    setNoteError(null);
+    setNoteAdded(false);
+  }, [machineId, paneId, directory, scope, base, head, path]);
   useEffect(() => {
     let live = true;
     setLoad(PENDING);
@@ -125,11 +282,28 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
     return () => { live = false; };
   }, [fetchRepoDiffFile, paneId, directory, scope, base, head, comparison, path, oldPath]);
 
+  useEffect(() => {
+    let live = true;
+    setSiblings(null);
+    // a list names its base, never the pinned identity; one that answers for another identity (HEAD moved) is not this comparison's
+    fetchRepoDiffFiles({ paneId, directory, scope, base: comparison?.base_oid ?? base, head, comparison: null }).then(
+      (list) => { if (live && sameComparison(list.comparison ?? null, comparison)) setSiblings(list.files); },
+      () => undefined,
+    );
+    return () => { live = false; };
+  }, [fetchRepoDiffFiles, paneId, directory, scope, base, head, comparison]);
+
+  const loadContents = useCallback(() => fetchRepoDiffContents({ paneId, directory, scope, base, head, comparison }, path, oldPath), [fetchRepoDiffContents, paneId, directory, scope, base, head, comparison, path, oldPath]);
+
   const patchText = load.status === "ready" ? load.answer.patch : null;
   // a new file, comparison or patch drops the query and its active match: their lines were another patch's
   useEffect(() => {
     setQuery("");
     setActiveIndex(null);
+    // the picked line was another patch's; a note being written keeps what it captured
+    setCursor(null);
+    setChangeIndex(null);
+    setStaleContents(false);
   }, [patchText]);
 
   const openFind = useCallback((): void => {
@@ -158,17 +332,39 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
     if (!keyboardActive) return;
     const onKey = (event: KeyboardEvent): void => {
       if (event.isComposing || event.keyCode === 229 || nativeModalOver(surface.current)) return;
-      // Ctrl/Cmd+F is this dialog's: the browser's own find cannot reach the rows not mounted
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
-        // a dialog above the viewer (the palette) keeps its own keys while it has the focus
+      // a dialog above the viewer (the palette) keeps its own keys while it has the focus
+      const coveredBy = (): boolean => {
         const focused = document.activeElement;
         const owner = focused instanceof Element && surface.current?.contains(focused) !== true ? focused.closest("dialog, [aria-modal='true']") : null;
-        if (owner !== null && surface.current !== null && !owner.contains(surface.current)) return;
+        return owner !== null && surface.current !== null && !owner.contains(surface.current);
+      };
+      // Ctrl/Cmd+F is this dialog's: the browser's own find cannot reach the rows not mounted
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+        if (coveredBy()) return;
         event.preventDefault();
         if (patchText !== null || findingRef.current) openFind();
         return;
       }
+      // VS Code's F7 / Shift+F7 and Alt+Down / Alt+Up step the changes; Alt+Shift+Down / Up steps the files
+      if (!event.ctrlKey && !event.metaKey && !typing(event.target)) {
+        const down = event.key === "ArrowDown";
+        const step = event.key === "F7" && !event.altKey ? (event.shiftKey ? -1 : 1) : event.altKey && (down || event.key === "ArrowUp") ? (down ? 1 : -1) : null;
+        if (step !== null && !coveredBy()) {
+          event.preventDefault();
+          if (event.altKey && event.shiftKey) stepsRef.current.file(step);
+          else stepsRef.current.change(step);
+          return;
+        }
+      }
       if (event.key !== "Escape") return;
+      // Escape in the find bar is Find's; otherwise a note being written takes it: it closes while empty, and a written one is never lost to it
+      const inFind = document.activeElement instanceof Element && document.activeElement.closest(".repo-diff-find") !== null;
+      if (findingRef.current && inFind) { event.preventDefault(); closeFind(); return; }
+      if (writingRef.current.open) {
+        event.preventDefault();
+        if (writingRef.current.empty) { setWriting(null); bodyRef.current?.focus({ preventScroll: true }); }
+        return;
+      }
       // Escape closes Find first, the viewer on the next press
       if (findingRef.current) { event.preventDefault(); closeFind(); return; }
       onClose();
@@ -192,6 +388,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const notes = [
     wantsColor && patch !== null && !colored ? t("Too long to highlight") : null,
     narrow && settings.diffStyle === "split" ? t("Split view needs a wider screen; showing one column.") : null,
+    staleContents ? t("The file changed since this diff was read; reopen it to show unchanged lines.") : null,
   ].filter((note): note is string => note !== null);
   const { stem, extension } = pathParts(path);
   const { folder } = pathParts(path);
@@ -200,23 +397,125 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
   const matches = useMemo(() => findInDiff(findLines, query), [findLines, query]);
   const current = activeIndex !== null && activeIndex < matches.length ? activeIndex : null;
   const activeMatch = current === null ? null : matches[current] ?? null;
-  const step = (direction: 1 | -1): void => setActiveIndex(stepMatch(current, matches.length, direction));
+  const step = (direction: 1 | -1): void => { setActiveIndex(stepMatch(current, matches.length, direction)); setCursor(null); };
+  // the line a note goes on: Find's active match while Find is open, else the line picked by a click, a tap or the arrow keys
+  const cursorLine = cursor === null ? null : findLines[cursor.index] ?? null;
+  // a line picked since Find's match moved (a click, a tap, the arrow keys) is the one the note goes on
+  const pointed: DiffFindLine | null = finding && activeMatch !== null && cursor === null ? activeMatch : cursorLine;
+  /** A line's place among the patch's logical lines, by side and number: Find's matches are copies. */
+  const indexOf = (line: DiffFindLine): number => findLines.findIndex((item) => item.side === line.side && item.line === line.line);
+  const blocked = note?.blocked ?? null;
+  const commentsKey = target.paneId === null ? null : replyCommentsKey(paneStorageId(target.machineId, target.paneId));
+  const beginNote = (line: DiffFindLine): void => {
+    // a note being written is never replaced by another line's
+    if (note === undefined || answer === null || patch === null || blocked !== null || (writing !== null && noteText.trim() !== "")) return;
+    const quote = diffNoteQuote({ machine: note.machine, repository: answer.repository.root, comparison: capturedComparison(answer, patch), path, line });
+    // a note closed on this line comes back with the quote it was written against, not the code now there
+    const restored = readDiffLineDraft(target, line);
+    const nextWriting = { line, quote: restored?.quote ?? quote };
+    const text = restored?.text ?? "";
+    setWriting(nextWriting);
+    setNoteText(text);
+    writeDiffTargetDraft(target, { writing: nextWriting, text, open: text.trim() !== "" });
+    setNoteError(null);
+    setNoteAdded(false);
+  };
+  beginNoteRef.current = beginNote;
+  const closeNote = (): void => {
+    if (writing !== null) writeDiffLineDraft(target, writing, noteText);
+    writeDiffTargetDraft(target, null);
+    setWriting(null);
+    setNoteError(null);
+    bodyRef.current?.focus({ preventScroll: true });
+  };
+  const updateNoteText = (value: string): void => {
+    setNoteText(value);
+    setNoteError(null);
+    if (writing !== null) {
+      writeDiffLineDraft(target, writing, value);
+      writeDiffTargetDraft(target, { writing, text: value, open: value.trim() !== "" });
+    }
+  };
+  const saveNote = (): void => {
+    if (writing === null || commentsKey === null || target.paneId === null || noteText.trim() === "" || blocked !== null) return;
+    const draft = composerDrafts.read(`ovis:composer-draft:${paneStorageId(target.machineId, target.paneId)}`).text;
+    // the draft and the comments already waiting stay as they are: a note that would not fit is refused, not cut
+    if (noteOverflows(replyComments.unreserved(replyComments.read(commentsKey)), draft, writing.quote, noteText)) {
+      setNoteError(t("This note would make your next message too long. Shorten the note or the message, or remove a waiting comment."));
+      return;
+    }
+    if (!replyComments.add(commentsKey, writing.quote, noteText, "diff")) {
+      setNoteError(t("This note could not be saved on this device."));
+      return;
+    }
+    writeDiffLineDraft(target, writing, "");
+    writeDiffTargetDraft(target, null);
+    setNoteAdded(true);
+    setWriting(null);
+    setNoteText("");
+    setNoteError(null);
+    bodyRef.current?.focus({ preventScroll: true });
+  };
+  const onLine = useCallback((side: "deletions" | "additions", lineNumber: number, open: boolean): void => {
+    const line = lineAtRow(findLines, side, lineNumber);
+    if (line === null) return;
+    setChangeIndex(null);
+    setCursor({ index: findLines.indexOf(line), quiet: true });
+    setNoteAdded(false);
+    if (open) beginNoteRef.current(line);
+  }, [findLines]);
+  const moveCursor = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (note === undefined || findLines.length === 0 || !(event.target instanceof Element) || event.target.closest("input, textarea, button, a") !== null || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const from = pointed === null ? -1 : indexOf(pointed);
+      const index = from < 0 ? (event.key === "ArrowDown" ? 0 : findLines.length - 1) : Math.min(Math.max(from + (event.key === "ArrowDown" ? 1 : -1), 0), findLines.length - 1);
+      setChangeIndex(null);
+      setCursor({ index, quiet: false });
+      setNoteAdded(false);
+    } else if (event.key === "Enter" && pointed !== null) {
+      event.preventDefault();
+      beginNote(pointed);
+    }
+  };
+  const mark = finding && cursor === null ? activeMatch : cursorLine === null || cursor === null ? null : { side: cursorLine.side, line: cursorLine.line, start: 0, end: 0, quiet: cursor.quiet };
+  const changes = useMemo(() => diffChanges(findLines), [findLines]);
+  const currentChange = changeIndex !== null && changeIndex < changes.length ? changeIndex : null;
+  const changeLine = finding || currentChange === null ? null : changes[currentChange] ?? null;
+  // a change's row is ringed and brought to the middle as a match's is, with no text painted
+  const changeMark = useMemo(() => (changeLine === null ? null : { side: changeLine.side, line: changeLine.line, start: 0, end: 0 }), [changeLine]);
+  const fileIndex = siblings?.findIndex((file) => file.path === path) ?? -1;
+  const neighbour = (direction: 1 | -1): RepoDiffFile | null => (siblings === null || fileIndex < 0 ? null : siblings[fileIndex + direction] ?? null);
+  const stepChange = (direction: 1 | -1): void => {
+    // Find's match holds the ring while its bar is open: a change step hands it back to the changes
+    if (finding) closeFind();
+    setCursor(null);
+    setChangeIndex(stepMatch(currentChange, changes.length, direction));
+  };
+  const stepFile = (direction: 1 | -1): void => {
+    const file = neighbour(direction);
+    if (file !== null) onSwitchFile(file);
+  };
+  const stepsRef = useRef({ change: stepChange, file: stepFile });
+  stepsRef.current = { change: stepChange, file: stepFile };
+  const changeCount = currentChange === null ? "" : t("Change {current} of {total}", { current: (currentChange + 1).toLocaleString(), total: changes.length.toLocaleString() });
   const unfold = useCallback(() => setFolded(false), []);
   const findCount = query === "" ? "" : current !== null ? t("{current} of {total}", { current: current + 1, total: matches.length }) : matches.length === 0 ? t("No matches") : "";
 
   const body = (() => {
     if (shown !== null) return <textarea ref={textRef} className="repo-diff-select-source" readOnly value={shown.text} aria-label={shown.kind === "patch" ? t("Patch") : t("Path")} spellCheck={false} />;
     if (load.status === "pending") return <DiffSkeleton label={t("Opening…")} />;
-    if (load.status === "stale") return <p className="repo-diff-note" role="alert">{comparisonChangedWord(t)}</p>;
+    if (load.status === "stale") return <EmptyState className="repo-diff-note" role="alert" icon={RefreshCw} title={comparisonChangedWord(t)} />;
     if (load.status === "failed") {
       const stale = load.error instanceof ApiError && load.error.status === 404 && load.error.code === "not_found";
-      return <p className="repo-diff-note" role="alert">{stale ? t("This file has no changes here any more; the list is out of date.") : diffErrorMessage(t, load.error)}</p>;
+      return <EmptyState className="repo-diff-note" role="alert" icon={FileWarning} title={stale ? t("This file has no changes here any more; the list is out of date.") : diffErrorMessage(t, load.error)} />;
     }
     const unavailable = unavailableMessage(t, load.answer);
-    if (unavailable !== null || patch === null) return <p className="repo-diff-note">{unavailable ?? t("No lines changed.")}</p>;
-    return <RenderBoundary resetKey={patch} fallback={() => <p className="repo-diff-note" role="alert">{t("This change can't be shown.")}</p>}>
+    if (unavailable !== null || patch === null) return <EmptyState className="repo-diff-note" icon={FileDiff} title={unavailable ?? t("No lines changed.")} />;
+    return <RenderBoundary resetKey={patch} fallback={() => <EmptyState className="repo-diff-note" role="alert" icon={FileWarning} title={t("This change can't be shown.")} />}>
       <Suspense fallback={<DiffSkeleton label={t("Opening…")} />}>
-        <RepoDiff patch={patch} style={style} folded={folded} wrap={settings.wrapCode} theme={resolvedEntry.mode} colored={colored} active={finding ? activeMatch : null} onUnfold={unfold} />
+        <RepoDiff patch={patch} style={style} folded={folded} wrap={settings.wrapCode} theme={resolvedEntry.mode} colored={colored} active={mark ?? changeMark} onUnfold={unfold}
+          onLine={note === undefined ? undefined : onLine} noteBlocked={blocked} loadContents={loadContents} onStaleContents={markStale} />
       </Suspense>
     </RenderBoundary>;
   })();
@@ -244,14 +543,27 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
                 <span className="visually-hidden">{notes.join(". ")}</span>
               </span>}
               <span className="repo-diff-compare">{comparisonWord(t, target)}</span>
-              {folder !== "" && <span className="repo-diff-path"><span dir="ltr">{folder}</span></span>}
+              {/* a rename shows where it came from, cut from its start as the folder is */}
+              {oldPath !== null
+                ? <span className="repo-diff-path" title={t("Renamed from {path}", { path: oldPath })}><span dir="ltr">{oldPath} → {path}</span></span>
+                : folder !== "" && <span className="repo-diff-path"><span dir="ltr">{folder}</span></span>}
             </p>
           </div>
           <div className="repo-diff-actions">
             <div className="segmented repo-diff-styles" role="group" aria-label={t("Diff layout")}>
-              <button type="button" aria-pressed={style === "unified"} onClick={() => update({ diffStyle: "unified" })}><Rows3 aria-hidden="true" /><span className="repo-diff-style-word">{t("Unified")}</span></button>
-              <button type="button" aria-pressed={style === "split"} disabled={narrow} title={narrow ? t("Split view needs a wider screen") : undefined} onClick={() => update({ diffStyle: "split" })}><Columns2 aria-hidden="true" /><span className="repo-diff-style-word">{t("Split")}</span></button>
+              <button type="button" aria-pressed={style === "unified"} title={t("Unified")} onClick={() => update({ diffStyle: "unified" })}><Rows3 aria-hidden="true" /><span className="repo-diff-style-word">{t("Unified")}</span></button>
+              <button type="button" aria-pressed={style === "split"} disabled={narrow} title={narrow ? t("Split view needs a wider screen") : t("Split")} onClick={() => update({ diffStyle: "split" })}><Columns2 aria-hidden="true" /><span className="repo-diff-style-word">{t("Split")}</span></button>
             </div>
+            <div className="repo-diff-changes" role="group" aria-label={t("Changes")}>
+              <button type="button" className="icon-button repo-diff-action" aria-label={t("Previous change")} title={`${t("Previous change")} (Shift+F7)`} disabled={changes.length === 0} onClick={() => stepChange(-1)}><ChevronUp aria-hidden="true" /></button>
+              <button type="button" className="icon-button repo-diff-action" aria-label={t("Next change")} title={`${t("Next change")} (F7)`} disabled={changes.length === 0} onClick={() => stepChange(1)}><ChevronDown aria-hidden="true" /></button>
+              <span className="repo-diff-change-count" role="status">{changeCount}</span>
+            </div>
+            {!columned && siblings !== null && siblings.length > 1 && fileIndex >= 0 && <div className="repo-diff-stepper" role="group" aria-label={t("Changed files")}>
+              <button type="button" className="icon-button repo-diff-action" aria-label={t("Previous file")} title={t("Previous file")} disabled={neighbour(-1) === null} onClick={() => stepFile(-1)}><ChevronLeft aria-hidden="true" /></button>
+              <span className="repo-diff-file-count"><span aria-hidden="true">{(fileIndex + 1).toLocaleString()}/{siblings.length.toLocaleString()}</span><span className="visually-hidden">{t("File {current} of {total}", { current: (fileIndex + 1).toLocaleString(), total: siblings.length.toLocaleString() })}</span></span>
+              <button type="button" className="icon-button repo-diff-action" aria-label={t("Next file")} title={t("Next file")} disabled={neighbour(1) === null} onClick={() => stepFile(1)}><ChevronRight aria-hidden="true" /></button>
+            </div>}
             <div className="repo-diff-group">
               <button ref={findButton} type="button" className="icon-button repo-diff-action" aria-pressed={finding} aria-label={t("Find in diff")} title={patch === null && !finding ? t("There is no loaded patch to search.") : t("Find in diff")} disabled={patch === null && !finding} onClick={() => (finding ? closeFind() : openFind())}><Search aria-hidden="true" /></button>
               <button type="button" className="icon-button repo-diff-action" aria-pressed={folded} aria-label={t("Fold context")} title={folded ? t("Showing one line around each change") : t("Fold context")} disabled={patch === null} onClick={() => setFolded((value) => !value)}><FoldVertical aria-hidden="true" /></button>
@@ -270,7 +582,7 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
               <Search size={16} aria-hidden="true" />
               <span className="repo-diff-find-label">{t("Find in diff")}</span>
               <input ref={findInput} className="input" type="search" value={query} maxLength={DIFF_FIND_MAX_QUERY} disabled={patch === null} spellCheck={false}
-                onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }}
+                onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); setCursor(null); }}
                 onKeyDown={(event) => {
                   if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
                   if (event.key === "Enter") { event.preventDefault(); step(event.shiftKey ? -1 : 1); }
@@ -286,7 +598,56 @@ export function RepoDiffViewer({ target, onClose, onOpenFile, keyboardActive = t
           </div>
           <p className="find-bar-hint">{patch === null ? t("There is no loaded patch to search.") : t("Searches this loaded patch, including context. Content outside the patch is not searched.")}</p>
         </form>}
-        <div className="repo-diff-body">{body}</div>
+        <div className="repo-diff-panes">
+          {columned && siblings !== null && siblings.length > 1 && <nav className="repo-diff-files" aria-label={t("Changed files")}>
+            <ul ref={filesRef} onKeyDown={(event) => {
+              // the column is one stop for Tab; Up and Down move between its files, Enter or a tap opens one
+              if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+              if (event.altKey || event.ctrlKey || event.metaKey) return;
+              const buttons = [...(filesRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+              const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+              const next = buttons[Math.min(buttons.length - 1, Math.max(0, at + (event.key === "ArrowDown" ? 1 : -1)))];
+              if (next === undefined) return;
+              event.preventDefault();
+              next.focus();
+            }}>
+              {siblings.map((file) => {
+                const parts = pathParts(file.path);
+                const current = file.path === path;
+                return <li key={file.path}>
+                  <button type="button" className="repo-diff-pick" aria-current={current ? "page" : undefined} tabIndex={current || (fileIndex < 0 && file === siblings[0]) ? 0 : -1} title={file.old_path === null ? file.path : t("Renamed from {path}", { path: file.old_path })} onClick={() => { if (!current) onSwitchFile(file); }}>
+                    <span className="repo-change-mark" data-status={file.status} aria-hidden="true">{STATUS_MARK[file.status]}</span>
+                    <span className="visually-hidden">{statusWord(t, file.status)}</span>
+                    <span className="repo-diff-pick-name">{parts.stem}{parts.extension}</span>
+                    {parts.folder !== "" && <span className="repo-diff-pick-folder" dir="ltr">{parts.folder}</span>}
+                    {file.binary === true
+                      ? <span className="repo-diff-pick-counts">{t("Binary")}</span>
+                      : file.additions !== null && file.deletions !== null && <span className="repo-diff-pick-counts">
+                        <span className="repo-diff-added">+{file.additions.toLocaleString()}</span>
+                        <span className="repo-diff-deleted">−{file.deletions.toLocaleString()}</span>
+                      </span>}
+                  </button>
+                </li>;
+              })}
+            </ul>
+          </nav>}
+          <div className="repo-diff-body" ref={bodyRef} onKeyDown={moveCursor}
+          {...(note !== undefined && patch !== null && shown === null ? { tabIndex: 0, "aria-label": t("Diff lines: the arrow keys pick a line, Enter adds a note on it") } : {})}>{body}</div>
+        </div>
+        {note !== undefined && patch !== null && shown === null && writing === null && <div className="repo-diff-line-bar">
+          <p className="repo-diff-line-place" role="status">
+            {noteAdded ? t("Note added. It goes first in the next message you send from this pane's Chat (not with a slash command, a ! line or an answer to a question).")
+              : blocked !== null ? blocked
+              : pointed !== null ? matchPlace(t, pointed)
+              : t("Pick a line to add a note.")}
+          </p>
+          <button type="button" className="btn repo-diff-line-note-open" disabled={pointed === null || blocked !== null} title={blocked ?? undefined}
+            onClick={() => pointed !== null && beginNote(pointed)}>
+            <MessageSquarePlus aria-hidden="true" />{t("Add a note")}
+          </button>
+        </div>}
+        {writing !== null && <DiffNoteForm writing={writing} path={path} text={noteText} error={noteError ?? blocked} disabled={blocked !== null}
+          onText={updateNoteText} onSave={saveNote} onCancel={closeNote} />}
       </section>
     </div>
   );

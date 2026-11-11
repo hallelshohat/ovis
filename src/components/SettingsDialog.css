@@ -25,6 +25,10 @@
   grid-row: 1;
 }
 
+.settings-dialog .modal-title {
+  font-size: var(--fs-section-title);
+}
+
 .settings-nav {
   display: flex;
   grid-column: 1;
@@ -34,7 +38,7 @@
   min-height: 0;
   padding: var(--space-4) var(--space-3);
   overflow-y: auto;
-  background: var(--bg);
+  background: var(--bg-nav);
   border-right: var(--hairline) solid var(--border);
 }
 
@@ -42,14 +46,91 @@
   margin: 0;
   padding: var(--space-1) var(--space-3) 0;
   color: var(--text-strong);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-section-title);
   font-weight: var(--fw-semibold);
 }
 
 .settings-tabs {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-half);
+}
+
+.settings-tabs[hidden] {
+  display: none;
+}
+
+/* Settings' search, over the list of pages; its results take the page's place (a phone's list's) */
+.settings-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.settings-search > svg {
+  position: absolute;
+  left: var(--space-3);
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.settings-search-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding-left: calc(var(--space-3) + var(--icon-size-md) + var(--space-2));
+}
+
+/* each page with a row that matches: its name, which opens it, over the groups it holds there */
+.settings-search-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.settings-search-page-title {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: var(--pointer-target);
+  min-height: var(--pointer-target);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.settings-search-page-title svg {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  color: var(--text-dim);
+}
+
+.settings-search-empty {
+  display: none;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.settings-search-results:not(:has(> .settings-search-page > [data-found], > .settings-search-page > .settings-section > .settings-card > [data-setting])) > .settings-search-empty {
+  display: block;
+}
+
+/* a group is found by a setting it holds (SettingsControls.tsx SettingsRow) or by its title: it is
+   drawn with its note and what goes with those settings (a form, a status line); a group or a page
+   with nothing found, and what a page holds outside its groups, stay on the page itself */
+.settings-search-page > :not(.settings-section, .settings-search-page-title),
+.settings-search-results .settings-section:not([data-found]):not(:has(> .settings-card > [data-setting])),
+.settings-search-page:not(:has(> [data-found], > .settings-section > .settings-card > [data-setting])) {
+  display: none;
 }
 
 .settings-tab {
@@ -71,8 +152,8 @@
 
 .settings-tab svg {
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
   color: var(--text-dim);
 }
 
@@ -98,6 +179,7 @@
 .settings-tab[aria-selected="true"] {
   background: var(--bg-hover);
   color: var(--text-strong);
+  font-weight: var(--fw-selected);
 }
 
 /* the open page carries the selection color on its glyph, as a chosen segment does */
@@ -230,23 +312,40 @@
 
 .settings-integration-check {
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: var(--icon-size);
+  height: var(--icon-size);
   color: var(--status-done);
 }
 
 .settings-integration-command {
   display: block;
-  margin-top: 2px;
+  margin-top: var(--space-half);
   font-family: var(--font-mono);
   color: var(--text-strong);
   overflow-wrap: anywhere;
 }
 
 .settings-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--pointer-target);
   color: var(--accent);
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;
+}
+
+.settings-telemetry details:not([open]) > :not(summary) {
+  display: none;
+}
+
+.settings-telemetry details > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--pointer-target);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
 }
 
 /* a column, not a grid: a grid's track is as wide as a text field asks to be, and on a phone
@@ -275,6 +374,41 @@
   min-width: 0;
 }
 
+/* Named agent groups: the new name and its Add share a row, the field taking the room */
+.agent-group-add {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin-top: var(--space-2);
+}
+
+.agent-group-add .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Alerts → Also send to: the URL or token and its buttons share a row */
+.alert-webhook-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.alert-webhook-input {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.alert-webhook-chat {
+  flex: 0 1 9rem;
+  min-width: 0;
+}
+
+.alert-webhook-error {
+  color: var(--danger-text);
+}
+
 /* Voice input: the key field and its buttons share a row, the notes stay dim */
 .voice-key {
   display: flex;
@@ -286,6 +420,31 @@
 .voice-key-input {
   flex: 1 1 12rem;
   min-width: 0;
+}
+
+.relay-pc-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.relay-pc-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.relay-pc-found {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.relay-pc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .voice-error {
@@ -329,18 +488,21 @@
   white-space: nowrap;
 }
 
-.usage-accounts-actions {
+.usage-accounts-actions,
+.settings-order-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
 }
 
-.usage-accounts-actions .icon-button {
+.usage-accounts-actions .icon-button,
+.settings-order-actions .icon-button {
   color: var(--text-dim);
 }
 
 /* the ends of the list cannot move further: that arrow keeps its place in the column, unseen */
-.usage-accounts-actions .icon-button:disabled {
+.usage-accounts-actions .icon-button:disabled,
+.settings-order-actions .icon-button:disabled {
   visibility: hidden;
 }
 
@@ -355,13 +517,33 @@
 
 @media (pointer: fine) {
   .usage-accounts-actions .icon-button {
-    width: 28px;
-    height: 28px;
+    width: var(--bar-control-h);
+    height: var(--bar-control-h);
   }
 
   .usage-accounts-actions .icon-button svg {
-    width: 16px;
-    height: 16px;
+    width: var(--icon-size-md);
+    height: var(--icon-size-md);
+  }
+}
+
+@media (pointer: coarse) {
+  .settings-dialog .input {
+    min-height: var(--touch-target);
+  }
+
+  .settings-search-page-title {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+
+  .settings-link {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+
+  .settings-telemetry details > summary {
+    min-height: var(--touch-target);
   }
 }
 
@@ -417,6 +599,20 @@
     display: block;
   }
 
+  /* searching, the field stays over its results, which take the list's place */
+  .settings-dialog.is-searching {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .settings-dialog.is-searching .settings-nav {
+    padding-bottom: 0;
+    overflow: visible;
+  }
+
+  .settings-dialog.is-searching .settings-body {
+    grid-row: 3;
+  }
+
   .settings-shortcut-select {
     width: 100%;
   }
@@ -431,7 +627,8 @@
   }
 
   /* the key takes the line; Save and Remove share the next one */
-  .voice-key-input {
+  .voice-key-input,
+  .alert-webhook-input {
     flex-basis: 100%;
   }
 
@@ -522,7 +719,12 @@
   cursor: pointer;
 }
 
-.settings-font-option:hover,
+@media (hover: hover) {
+  .settings-font-option:hover {
+    background: var(--bg-hover);
+  }
+}
+
 .settings-font-option:focus-visible {
   background: var(--bg-hover);
 }
@@ -534,6 +736,46 @@
   color: var(--text-dim);
   font-size: var(--fs-xs);
   list-style: none;
+}
+
+/* the one dim line under a page's title: what the page holds (G-173) */
+.settings-page-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 640px) {
+  .settings-page-note {
+    font-size: var(--fs-sm);
+  }
+}
+
+/* a read-only fact beside its label (Phone & devices, Access): text, never a control */
+.settings-fact {
+  flex: 0 1 auto;
+  max-width: 45%;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+/* Access is read, not operated: its text takes reading sizes (14 px on a desktop; 18 and 15 on a
+   phone), scoped to this group so the other settings keep their scale */
+[data-section="access"] :is(.settings-label, .settings-description) {
+  font-size: var(--fs-md);
+}
+
+@media (max-width: 640px) {
+  [data-section="access"] :is(.settings-label, .settings-fact) {
+    font-size: var(--fs-xl);
+  }
+
+  [data-section="access"] .settings-description {
+    font-size: var(--fs-chat);
+  }
 }
 
 @media (max-width: 640px) {

@@ -1,7 +1,8 @@
 import { afterEach, expect, it, jest } from "bun:test";
 import { MAX_ATTACHMENT_BYTES } from "../../shared/attachments.ts";
 import { NOTICE_VERSION } from "../../shared/telemetry.ts";
-import { AttachmentTooLargeError, ApiError, changeTelemetry, fetchAgentKinds, fetchTelemetry, uploadPaneImage, verifySourceBoot } from "./api.ts";
+import { AttachmentTooLargeError, ApiError, cancelUsageLogin, changeTelemetry, fetchAgentCatalog, fetchAgentKinds, fetchTelemetry, movePaneBeside, swapPaneWith, uploadPaneImage, verifySourceBoot } from "./api.ts";
+import { movingHerdrFocusOn } from "./followFocus.ts";
 import { DEFAULT_SETTINGS, telemetrySettingsSnapshot } from "./settings.ts";
 
 const realFetch = globalThis.fetch;
@@ -10,6 +11,72 @@ afterEach(() => {
   globalThis.fetch = realFetch;
   Object.defineProperties(AbortSignal, { any: abortSignalStatics.any!, timeout: abortSignalStatics.timeout! });
   jest.useRealTimers();
+});
+
+it("reports a refused cancellation instead of allowing a terminal handoff", async () => {
+  globalThis.fetch = (async (_url: string) => Response.json({ error: { code: "login_not_found", message: "Not found" } }, { status: 404 })) as typeof fetch;
+  await expect(cancelUsageLogin("fixture-login")).rejects.toMatchObject({ status: 404, code: "login_not_found" });
+});
+
+it("suppresses this PC's focus frames until an explicit swap answers, including refusals", async () => {
+  for (const changed of [true, false]) {
+    const response = Promise.withResolvers<Response>();
+    globalThis.fetch = (async (_url: string) => response.promise) as typeof fetch;
+    const pending = swapPaneWith("source", "target", "office");
+    try {
+      expect(movingHerdrFocusOn("office")).toBe(true);
+      expect(movingHerdrFocusOn("local")).toBe(false);
+    } finally {
+      response.resolve(Response.json({ ok: true, changed, reason: changed ? null : "same_pane", target_pane_id: "target" }));
+      await pending;
+    }
+    expect(movingHerdrFocusOn("office")).toBe(false);
+  }
+});
+
+it("asks the pane's PC to move it beside another pane, holding that PC's focus frames until it answers", async () => {
+  const response = Promise.withResolvers<Response>();
+  const sent: { url: string; body: unknown }[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    sent.push({ url, body: JSON.parse(String(init?.body)) });
+    return response.promise;
+  }) as typeof fetch;
+  const pending = movePaneBeside("source", "target", "up", "office");
+  try {
+    expect(movingHerdrFocusOn("office")).toBe(true);
+    expect(movingHerdrFocusOn("local")).toBe(false);
+  } finally {
+    response.resolve(Response.json({ ok: true, changed: true, reason: null }));
+  }
+  expect(await pending).toEqual({ ok: true, changed: true, reason: null });
+  expect(sent).toEqual([{ url: "/api/machines/office/pane/move", body: { pane_id: "source", target_pane_id: "target", side: "up" } }]);
+  expect(movingHerdrFocusOn("office")).toBe(false);
+});
+
+it("offers installed Copilot in agent menus while filtering missing and unsupported agents", async () => {
+  const agents = [
+    { kind: "copilot", label: "GitHub Copilot", installed: true },
+    { kind: "hermes", label: "Hermes", installed: false },
+    { kind: "unknown", label: "Unknown", installed: true },
+    { kind: "claude", label: "Claude Code" },
+  ];
+  globalThis.fetch = (async (_url: string) => Response.json({ agents })) as typeof fetch;
+
+  expect(await fetchAgentKinds()).toEqual([agents[0]!, agents[3]!]);
+  agents[0]!.installed = false;
+  expect(await fetchAgentKinds()).toEqual([agents[3]!]);
+});
+
+it("offers Copilot from an older remote bridge without installation metadata", async () => {
+  const requests: string[] = [];
+  const copilot = { kind: "copilot", label: "GitHub Copilot" };
+  globalThis.fetch = (async (url: string) => {
+    requests.push(url);
+    return Response.json({ agents: [copilot, { kind: "hermes", label: "Hermes", installed: false }] });
+  }) as typeof fetch;
+
+  expect(await fetchAgentKinds("remote-pc")).toEqual([copilot]);
+  expect(requests).toEqual(["/api/machines/remote-pc/agents"]);
 });
 
 it("refuses a file over the attachment limit before any of it is sent, and sends one at the limit", async () => {
@@ -149,6 +216,23 @@ it("ends a source boot check when the caller aborts it or after 20 s, without Ab
   expect(requests[2]!.signal.aborted).toBe(false);
   jest.advanceTimersByTime(1);
   expect(await slow).toMatchObject({ name: "AbortError" });
+});
+
+it("ends an agent catalog read that never answers after 30 s, so Check again can try again", async () => {
+  withoutAbortSignalStatics("any", "timeout");
+  jest.useFakeTimers();
+  const requests = heldFetch();
+
+  const stalled = fetchAgentCatalog("local", new AbortController().signal).catch((error: unknown) => error);
+  jest.advanceTimersByTime(29_999);
+  expect(requests[0]!.signal.aborted).toBe(false);
+  jest.advanceTimersByTime(1);
+  expect(await stalled).toMatchObject({ name: "AbortError" });
+
+  const caller = new AbortController();
+  const cancelled = fetchAgentCatalog("local", caller.signal).catch((error: unknown) => error);
+  caller.abort();
+  expect(await cancelled).toMatchObject({ name: "AbortError" });
 });
 
 it("offers Letta Code in the agent menus where it is installed, and from an older bridge that does not say", async () => {

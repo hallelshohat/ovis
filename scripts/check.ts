@@ -25,17 +25,22 @@
  * tests are bound by timing, so too many side by side fail each other. Each run holds a slot, a
  * loopback port it listens on (CHECK_LOCK_PORT, default 41737, and the ports after it: the slots,
  * the admission port, the queue's ticket desk and its ticket ports, MAX_RUNS_LIMIT + 2 + QUEUE_TICKETS
- * in all), so a run that died holds nothing.
+ * in all), so a run that died holds nothing. Where the runs of a PC share no loopback (the containers
+ * of a self-hosted CI runner), each port is a lock file instead, in the directory CHECK_SLOTS_DIR
+ * names (slotsDir).
  * A run that finds every slot taken names the holders and exits, and so does a second run in the
- * same checkout, which would share its dist/ and generated types.
+ * same checkout, which would share its dist/ and generated types. `fast` takes no slot, but it claims
+ * its checkout all the same: it rewrites the generated types file while it checks it and builds into
+ * dist/, so it and any other mode refuse each other in one checkout.
  *
- * What a run still shares with the PC: the checkout (`fast` rewrites the generated types file
- * while it checks it, and fast/lane modes build into dist/), herdr's worktree root, and Playwright's
- * browser cache. `run` does not rebuild dist/ unless asked with `--build`.
+ * What a run still shares with the PC: the checkout with whatever else writes there outside a check
+ * (a `bun run build` beside it), herdr's worktree root, and Playwright's browser cache. `run` does
+ * not rebuild dist/ unless asked with `--build`.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, createWriteStream, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dlopen, FFIType } from "bun:ffi";
+import { chmodSync, closeSync, constants, createWriteStream, existsSync, ftruncateSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { availableParallelism, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -282,6 +287,12 @@ export function maxRuns(env: Record<string, string | undefined>, cores = availab
  * workflow's expressions cannot read. Every runner of a host shares its slots, so the host, not a job,
  * knows how many fit. Unset or empty leaves the workflow's value; the named variable's own check
  * still applies.
+ *
+ * A launcher that keeps the slots in a directory (slotsDir) names the run limit beside it, in
+ * CHECK_SLOTS_MAX_RUNS. What it leaves in CHECK_HOST_MAX_RUNS is no number: a sentence for a check.ts
+ * from before the directory, which takes loopback ports that are now its container's own and would
+ * count only itself. That one reads the sentence as its run limit and stops on it; this one never
+ * reads it there.
  */
 export const HOST_LIMITS = {
   CHECK_HOST_MAX_RUNS: "CHECK_MAX_RUNS",
@@ -291,14 +302,14 @@ export const HOST_LIMITS = {
 } as const;
 export function applyHostLimits(env: Record<string, string | undefined>): void {
   for (const [host, name] of Object.entries(HOST_LIMITS)) {
-    const value = env[host];
+    const value = host === "CHECK_HOST_MAX_RUNS" && env["CHECK_SLOTS_DIR"] ? env["CHECK_SLOTS_MAX_RUNS"] : env[host];
     if (value) env[name] = value;
   }
 }
 
 /**
  * What a run calls its checkout to the runs that share its slots. A self-hosted CI runner shares its
- * loopback with the other runner containers of its PC (scripts/self-hosted-runner/run.sh), and every
+ * slots with the other runner containers of its PC (scripts/self-hosted-runner/run.sh), and every
  * one of them checks out to the same path, so there the runner's name (RUNNER_NAME, set by the
  * Actions runner) is part of it: two runners are two checkouts.
  */
@@ -335,8 +346,122 @@ export function warnNodeVersionMismatch(version: string | null, warn: (message: 
 /** What a slot's holder says: its pid (NaN when what listens there is no run) and its checkout, when it names one. */
 export type Holder = { heldBy: number; checkout?: string };
 
-/** Asks the holder of a port who it is; null when nothing listens there. */
-function ask(port: number): Promise<Holder | null> {
+/**
+ * Where the PC's slots are when its runs share no loopback: CHECK_SLOTS_DIR, a directory with one
+ * lock file for each port a run would listen on, named after it (41737 and the ones after it). The
+ * launcher of a self-hosted CI runner gives every runner container a network of its own, so that no
+ * job reaches a server another job's tests keep on their loopback, and mounts this directory in all
+ * of them (scripts/self-hosted-runner/run.sh). A run holds a file with flock(2), which the kernel
+ * alone arbitrates and lets go of however the holder ends, as it does a listening port, and writes in
+ * it what a port's holder answers. The launcher makes the files: a run creates none, and one it
+ * cannot open fails the run, which never falls back to ports that would count only its own
+ * container. A run that names a lock range of its own (CHECK_LOCK_PORT) keeps its ports: that range
+ * was never the PC's.
+ */
+export function slotsDir(env: Record<string, string | undefined>): string | undefined {
+  const dir = env["CHECK_SLOTS_DIR"];
+  return dir && !env["CHECK_LOCK_PORT"] ? dir : undefined;
+}
+
+const LOCK_SH = 1, LOCK_EX = 2, LOCK_NB = 4;
+/** O_CLOEXEC on Linux, which node:fs does not name and Bun does not add: a program the run starts never holds a lock file open. */
+const O_CLOEXEC = 0o2000000;
+let flock: ((fd: number, operation: number) => number) | undefined;
+/** flock(2) on `fd` without waiting, from the C library: whether the lock was granted. Where that library cannot be loaded, this throws. */
+function tryFlock(fd: number, operation: number): boolean {
+  flock ??= dlopen("libc.so.6", { flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 } }).symbols.flock as (fd: number, operation: number) => number;
+  return flock(fd, operation | LOCK_NB) === 0;
+}
+
+const noRoom = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOSPC";
+
+/**
+ * Takes the lock file of `port` in `dir` and writes `answer` in it; null when a run holds it. The lock
+ * is its open file: it goes when `release` closes it, or with the run.
+ * The files share one small volume, any job may write in them, and what a job wrote stays when the
+ * job is gone. So a run that finds no room for its answer empties every file no run holds
+ * (emptyUnheld) and writes once more: what a job left behind keeps no run out, only what a job
+ * that still holds a file wrote. `write` is the write itself, for a test to stand in for a volume
+ * with no room.
+ */
+export function holdFile(
+  dir: string, port: number, answer: string,
+  write: (fd: number, text: string) => void = (fd, text) => { writeSync(fd, text, 0); },
+): { release: () => void } | null {
+  const fd = openSync(join(dir, String(port)), constants.O_RDWR | O_CLOEXEC);
+  let held = false;
+  try {
+    if (tryFlock(fd, LOCK_EX)) {
+      ftruncateSync(fd, 0);
+      try {
+        write(fd, answer);
+      } catch (error) {
+        if (!noRoom(error)) throw error;
+        emptyUnheld(dir);
+        try {
+          write(fd, answer);
+        } catch (again) {
+          if (!noRoom(again)) throw again;
+          throw new Error(`no room in ${dir} for the lock file ${port}, also after emptying every file no run holds: a job that runs now fills them (${(again as Error).message})`);
+        }
+      }
+      held = true;
+    }
+  } finally {
+    // not taken, or taken and not written: nothing is kept
+    if (!held) closeSync(fd);
+  }
+  return held ? { release: () => { if (held) { held = false; closeSync(fd); } } } : null;
+}
+
+/**
+ * Empties every lock file of `dir` that no run holds. What is written there is no holder's (fileSaid
+ * never reads it), and it takes room from the runs that are here. Under a shared lock, as fileSaid
+ * asks: granted, no run holds the file, and none takes it before the lock is given back. A run that
+ * asks who holds the file meanwhile is granted its own shared lock, so it never reads what is being
+ * emptied as a holder's. A file that cannot be opened is left as it is.
+ */
+function emptyUnheld(dir: string): void {
+  for (const name of readdirSync(dir)) {
+    if (!/^\d+$/.test(name)) continue;
+    let fd: number;
+    try { fd = openSync(join(dir, name), constants.O_RDWR | O_CLOEXEC); } catch { continue; }
+    try {
+      if (tryFlock(fd, LOCK_SH)) ftruncateSync(fd, 0);
+    } finally {
+      closeSync(fd);
+    }
+  }
+}
+
+/**
+ * What the holder of `port`'s lock file wrote in it; null when no run holds it, whatever a run that
+ * is gone left written there. A shared lock is granted unless a run holds the file: granted, it is
+ * given back at once.
+ */
+function fileSaid(dir: string, port: number): string | null {
+  const fd = openSync(join(dir, String(port)), constants.O_RDONLY | O_CLOEXEC);
+  try {
+    if (tryFlock(fd, LOCK_SH)) return null;
+    const text = Buffer.alloc(4_096);
+    return text.toString("utf8", 0, readSync(fd, text, 0, text.length, 0));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Who a slot's holder says it is: `<pid>` from a run before slots, `<pid>\n<checkout>` from one since. */
+function holderOf(said: string): Holder {
+  const match = /^(\d+)(?:\n([^]+))?$/.exec(said);
+  return !match ? { heldBy: Number.NaN } : match[2] ? { heldBy: Number(match[1]), checkout: match[2] } : { heldBy: Number(match[1]) };
+}
+
+/** Asks the holder of a port (in `dir`, of its lock file) who it is; null when nothing listens there. */
+function ask(port: number, dir?: string): Promise<Holder | null> {
+  if (dir !== undefined) {
+    const said = fileSaid(dir, port);
+    return Promise.resolve(said === null ? null : holderOf(said));
+  }
   return new Promise((resolve) => {
     let said = "";
     let refused = false;
@@ -346,9 +471,7 @@ function ask(port: number): Promise<Holder | null> {
     client.on("error", (error: NodeJS.ErrnoException) => { refused = error.code === "ECONNREFUSED"; });
     client.on("close", () => {
       if (refused) { resolve(null); return; }
-      // `<pid>` from a run before slots, `<pid>\n<checkout>` from one since
-      const match = /^(\d+)(?:\n([^]+))?$/.exec(said);
-      resolve(!match ? { heldBy: Number.NaN } : match[2] ? { heldBy: Number(match[1]), checkout: match[2] } : { heldBy: Number(match[1]) });
+      resolve(holderOf(said));
     });
   });
 }
@@ -357,11 +480,13 @@ function ask(port: number): Promise<Holder | null> {
  * One slot. The lock is a listening loopback port: taking it is one step, and it is free again the
  * moment its run is gone, however it ended, so there is no lock left behind to take over. Whoever
  * holds it answers a connection with its pid and checkout. Resolves with the release, or with who
- * holds it (NaN when something else listens there).
+ * holds it (NaN when something else listens there). With `dir` the lock is the port's file there
+ * (slotsDir), held and asked the same way.
  */
-export function lock(port = DEFAULT_LOCK_PORT, pid = process.pid, checkout?: string): Promise<{ release: () => void } | Holder> {
+export function lock(port = DEFAULT_LOCK_PORT, pid = process.pid, checkout?: string, dir?: string): Promise<{ release: () => void } | Holder> {
+  const answer = checkout === undefined ? String(pid) : `${pid}\n${checkout}`;
+  if (dir !== undefined) return lockFile(dir, port, answer);
   return new Promise((resolve, reject) => {
-    const answer = checkout === undefined ? String(pid) : `${pid}\n${checkout}`;
     const server = createServer((socket) => { socket.on("error", () => undefined); socket.end(answer); });
     server.once("error", (error: NodeJS.ErrnoException) => {
       if (error.code !== "EADDRINUSE") { reject(error); return; }
@@ -375,9 +500,15 @@ export function lock(port = DEFAULT_LOCK_PORT, pid = process.pid, checkout?: str
   });
 }
 
+/** `lock` on the lock file of `port` in `dir`. */
+async function lockFile(dir: string, port: number, answer: string): Promise<{ release: () => void } | Holder> {
+  return holdFile(dir, port, answer) ?? await ask(port, dir) ?? { heldBy: Number.NaN };
+}
+
 /** A slot's holder, or a run waiting ahead in the queue (`queuedAt`, ms since 1970: when it first found the PC busy). */
 export type SlotHolder = Holder & { port: number; queuedAt?: number };
-type MarkerOwner = { pid: number; checkout: string };
+/** Who holds a claim: its pid, its checkout and, where the system can say, when that process started (processStart). */
+type MarkerOwner = { pid: number; checkout: string; start?: string };
 
 /** A waiting run's place in the queue: when it first found the PC busy, and the ticket port it holds. */
 export type Ticket = { at: number; port: number };
@@ -403,7 +534,14 @@ export const DESK_WAIT_MS = 2 * TICKET_LOOKUP_MS;
  * ticket answers with one short message and closes; a listener that says anything else is dropped at
  * once, and none is waited on past TICKET_LOOKUP_MS, however it keeps talking.
  */
-function askTicket(port: number): Promise<(SlotHolder & { queuedAt: number }) | null> {
+function askTicket(port: number, dir?: string): Promise<(SlotHolder & { queuedAt: number }) | null> {
+  if (dir !== undefined) {
+    // A held file is a waiting run, whatever it says: its holder writes its ticket only after it took
+    // the lock, and a run that read the file in between must not take the slot ahead of it. It ranks
+    // first, and the run asks again on its next round, when the ticket is there.
+    const said = fileSaid(dir, port);
+    return Promise.resolve(said === null ? null : ticketOf(port, said) ?? { port, heldBy: Number.NaN, queuedAt: Number.NEGATIVE_INFINITY });
+  }
   return new Promise((resolve) => {
     let said = "";
     const client = connect(port, "127.0.0.1");
@@ -415,10 +553,15 @@ function askTicket(port: number): Promise<(SlotHolder & { queuedAt: number }) | 
     client.on("error", () => undefined);
     client.on("close", () => {
       clearTimeout(deadline);
-      const match = /^ticket\n(\d+)\n(\d+)\n([^]+)$/.exec(said);
-      resolve(match ? { port, queuedAt: Number(match[1]), heldBy: Number(match[2]), checkout: match[3]! } : null);
+      resolve(ticketOf(port, said));
     });
   });
+}
+
+/** The waiting run a ticket port's holder says it is; null when what it says is no ticket. */
+function ticketOf(port: number, said: string): (SlotHolder & { queuedAt: number }) | null {
+  const match = /^ticket\n(\d+)\n(\d+)\n([^]+)$/.exec(said);
+  return match ? { port, queuedAt: Number(match[1]), heldBy: Number(match[2]), checkout: match[3]! } : null;
 }
 
 /**
@@ -428,13 +571,13 @@ function askTicket(port: number): Promise<(SlotHolder & { queuedAt: number }) | 
  * and tries again on its next round.
  */
 export async function takeTicket(
-  { base, slots, scan = MAX_RUNS_LIMIT, at, pid = process.pid, checkout, deskWaitMs = DESK_WAIT_MS }: { base: number; slots: number; scan?: number; at: number; pid?: number; checkout: string; deskWaitMs?: number },
+  { base, slots, scan = MAX_RUNS_LIMIT, at, pid = process.pid, checkout, deskWaitMs = DESK_WAIT_MS, dir }: { base: number; slots: number; scan?: number; at: number; pid?: number; checkout: string; deskWaitMs?: number; dir?: string },
 ): Promise<{ ticket: Ticket; release: () => void } | null> {
   // One run at a time looks at the places taken and takes its own: two that looked at once could
   // each miss the other, and the later one rank ahead on a clock stepped back between them.
   // Bound directly: whoever holds it is never asked who it is, so nothing on that port can keep
   // this run talking.
-  const bindDesk = (): Promise<{ release: () => void } | null> => new Promise((resolve, reject) => {
+  const bindDesk = (): Promise<{ release: () => void } | null> => dir !== undefined ? Promise.resolve(holdFile(dir, ticketDesk(base, slots, scan), "")) : new Promise((resolve, reject) => {
     const server = createServer((socket) => { socket.destroy(); });
     server.once("error", (error: NodeJS.ErrnoException) => { if (error.code === "EADDRINUSE") resolve(null); else reject(error); });
     server.listen(ticketDesk(base, slots, scan), "127.0.0.1", () => { server.unref(); resolve({ release: () => { server.close(); } }); });
@@ -454,11 +597,11 @@ export async function takeTicket(
   try {
     // after every place already taken, whatever the clock says: a clock stepped back must not put a
     // run that came later ahead of one that waits
-    const waiting = await Promise.all(ticketPorts(base, slots, scan).map(askTicket));
+    const waiting = await Promise.all(ticketPorts(base, slots, scan).map((port) => askTicket(port, dir)));
     for (const run of waiting) if (run !== null && run.queuedAt >= at) at = run.queuedAt + 1;
     for (const port of ticketPorts(base, slots, scan)) {
-      const taken = await new Promise<{ release: () => void } | null>((resolve, reject) => {
-        const answer = `ticket\n${at}\n${pid}\n${checkout}`;
+      const answer = `ticket\n${at}\n${pid}\n${checkout}`;
+      const taken = dir !== undefined ? holdFile(dir, port, answer) : await new Promise<{ release: () => void } | null>((resolve, reject) => {
         const server = createServer((socket) => { socket.on("error", () => undefined); socket.end(answer); });
         server.once("error", (error: NodeJS.ErrnoException) => { if (error.code === "EADDRINUSE") resolve(null); else reject(error); });
         server.listen(port, "127.0.0.1", () => { server.unref(); resolve({ release: () => { server.close(); } }); });
@@ -475,9 +618,9 @@ export async function takeTicket(
 const ahead = (a: Ticket, b: Ticket): boolean => a.at < b.at || (a.at === b.at && a.port < b.port);
 
 /** The runs waiting ahead of `ticket` (every waiting run, for a run without one), oldest first. */
-async function queuedAhead(base: number, slots: number, scan: number, ticket: Ticket | undefined): Promise<SlotHolder[]> {
+async function queuedAhead(base: number, slots: number, scan: number, ticket: Ticket | undefined, dir: string | undefined): Promise<SlotHolder[]> {
   const mine = ticket ?? { at: Number.POSITIVE_INFINITY, port: Number.POSITIVE_INFINITY };
-  const waiting = await Promise.all(ticketPorts(base, slots, scan).filter((port) => port !== ticket?.port).map(askTicket));
+  const waiting = await Promise.all(ticketPorts(base, slots, scan).filter((port) => port !== ticket?.port).map((port) => askTicket(port, dir)));
   return waiting
     .filter((run): run is SlotHolder & { queuedAt: number } => run !== null && ahead({ at: run.queuedAt, port: run.port }, mine))
     .sort((a, b) => a.queuedAt - b.queuedAt || a.port - b.port);
@@ -490,6 +633,61 @@ function pidAlive(pid: number): boolean {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     return false;
   }
+}
+
+const BOOT_ID = "/proc/sys/kernel/random/boot_id";
+let bootId: string | null | undefined;
+
+/** This boot's id, or null when it cannot be read: then starts are not named and the pid check stands alone. */
+function readBootId(path: string): string | null {
+  try { return readFileSync(path, "utf8").trim() || null; }
+  catch { return null; }
+}
+
+/** A Linux process's state letter and start in clock ticks since boot (/proc/<pid>/stat, fields 3 and 22), or null when it cannot be read. */
+function procStat(pid: number): { state: string; ticks: string } | null {
+  let stat: string;
+  try { stat = readFileSync(`/proc/${pid}/stat`, "utf8"); }
+  catch { return null; }
+  // the command name before the fields is in parentheses and may hold spaces or parentheses itself
+  const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  return fields[0] && fields[19] ? { state: fields[0], ticks: fields[19] } : null;
+}
+
+/**
+ * When a process started, as this system names it, or null when that cannot be read (the process is
+ * gone, /proc hides it, or the system has no way to say). With the pid it tells a claim's run from a
+ * process that was given the same pid later, after a crash or a reboot. Linux: the boot id and the
+ * start time in clock ticks since boot (/proc/<pid>/stat, field 22). macOS: ps's start time.
+ */
+export function processStart(pid: number, platform: NodeJS.Platform = process.platform, bootIdPath = BOOT_ID): string | null {
+  if (platform === "linux") {
+    const boot = bootIdPath === BOOT_ID ? (bootId ??= readBootId(BOOT_ID)) : readBootId(bootIdPath);
+    const stat = procStat(pid);
+    return boot && stat ? `${boot}:${stat.ticks}` : null;
+  }
+  if (platform === "darwin") {
+    // one clock and one language whoever asks: ps writes the start in the caller's TZ and locale
+    const ps = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
+    const started = ps.status === 0 ? ps.stdout.trim() : "";
+    return started || null;
+  }
+  return null;
+}
+
+/**
+ * Whether a claim's run still runs: its pid is alive and has not exited (a zombie on Linux), and, when
+ * the claim recorded when it started and that can be read now, it is the same process, not a later one
+ * given the same pid.
+ */
+function ownerAlive(owner: MarkerOwner): boolean {
+  // a run that has exited and waits for its parent to reap it holds nothing, whatever its claim says
+  if (process.platform === "linux" && /^[ZX]$/.test(procStat(owner.pid)?.state ?? "")) return false;
+  if (typeof owner.start === "string") {
+    const now = processStart(owner.pid);
+    if (now !== null) return now === owner.start;
+  }
+  return pidAlive(owner.pid);
 }
 
 /**
@@ -509,33 +707,75 @@ function claimTarget(path: string, report: boolean): { canonical: string; marker
 function liveMarkerOwner(marker: string): MarkerOwner | null {
   let owner: MarkerOwner;
   try { owner = JSON.parse(readFileSync(marker, "utf8")) as MarkerOwner; } catch { return null; }
-  return owner !== null && typeof owner === "object" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && pidAlive(owner.pid) ? owner : null;
+  return owner !== null && typeof owner === "object" && Number.isSafeInteger(owner.pid) && owner.pid > 0 && ownerAlive(owner) ? owner : null;
+}
+
+/**
+ * The lock a run holds on Linux while it takes over a dead run's claim at `marker`: an abstract socket
+ * named after the marker. The kernel lets go of it however its holder ends, as it does the slots'
+ * loopback ports, so a run killed while taking over leaves nothing behind; like them it is shared by
+ * the processes of one network namespace. Its holder answers a connection with `owner` (its claim)
+ * once its event loop turns, which a run taking over (synchronous work) mostly does only after it has
+ * let go: then the asker hears nothing and tries again. Resolves with the release, with the run that
+ * holds it, or with "again" when no claim came back within the wait.
+ */
+export function takeoverLock(marker: string, owner: string): Promise<{ release: () => void } | { holder: MarkerOwner } | "again"> {
+  const name = `\0ovis-check-takeover-${createHash("sha256").update(marker).digest("hex").slice(0, 40)}`;
+  return new Promise((resolve, reject) => {
+    const server = createServer((socket) => { socket.on("error", () => undefined); socket.end(owner); });
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EADDRINUSE") { reject(error); return; }
+      let said = "";
+      const client = connect(name);
+      client.setTimeout(2_000, () => client.destroy());
+      client.on("data", (chunk) => { said += chunk.toString(); });
+      client.on("error", () => undefined);
+      client.on("close", () => {
+        let holder: MarkerOwner | null = null;
+        try { holder = JSON.parse(said) as MarkerOwner; } catch { /* let go, or closed before it answered */ }
+        resolve(holder !== null && typeof holder === "object" && Number.isSafeInteger(holder.pid) && holder.pid > 0 ? { holder } : "again");
+      });
+    });
+    server.listen(name, () => {
+      server.unref();
+      resolve({ release: () => { server.close(); } });
+    });
+  });
 }
 
 /**
  * Claims `marker` for this run, or names the live run that holds it. A marker a dead run left, or one
- * an older check cut short, is taken over only by the run holding `<marker>.reclaim`, which reads the
+ * an older check cut short, is taken over only by the run holding the takeover lock, which reads the
  * marker again under it: runs on other CHECK_LOCK_PORT bases are not serialized by this run's
- * admission port. A marker that is gone is created again, never removed. Both files are written beside
- * and linked into place, so a reader never sees one half written. A `.reclaim` a dead run left is not
- * removed: no lock guards that removal, so two runs could each take the other's fresh claim. The run
- * stops and names the file, to be deleted by hand once no check is running.
+ * admission port. That lock is takeoverLock on Linux; elsewhere (`fileTakeover`) the file
+ * `<marker>.reclaim`, which a run killed while holding it leaves behind and the next run clears. A
+ * marker that is gone is created again. Files are written beside and linked into place, so a reader
+ * never sees one half written, and each names its run's pid, its start (processStart) and a nonce.
  */
-function claimMarker(marker: string, pid: number, checkout: string, alive: (pid: number) => boolean): MarkerOwner | null {
-  const create = (path: string): boolean => {
-    const draft = `${path}.${pid}.draft`;
+async function claimMarker(marker: string, pid: number, checkout: string, alive: (owner: MarkerOwner) => boolean, fileTakeover: boolean): Promise<MarkerOwner | null> {
+  const start = processStart(pid);
+  // beside the claim under a short name of its own: one named after the claim would not fit beside a
+  // long report name, under the 255-byte limit on a name
+  const workingFile = (path: string, nonce: string, kind: string): string => join(dirname(path), `.check-${pid}-${nonce}.${kind}`);
+  // the text written, so this run knows its own file again
+  const create = (path: string): string | null => {
+    const nonce = randomBytes(8).toString("hex");
+    // a name of its own, made new: a draft a killed run left may still be the claim's file under
+    // another name, and writing through it would rewrite that claim
+    const draft = workingFile(path, nonce, "draft");
+    const text = JSON.stringify({ pid, checkout, ...(start === null ? {} : { start }), nonce });
     try {
-      writeFileSync(draft, JSON.stringify({ pid, checkout }), { mode: 0o600 });
+      writeFileSync(draft, text, { mode: 0o600, flag: "wx" });
       linkSync(draft, path);
-      return true;
+      return text;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return null;
       throw error;
     } finally { rmSync(draft, { force: true }); }
   };
   // who a file names: gone, a live run, or a dead run (a write cut short counts as dead). A file that
   // cannot be read may be a live holder's, so that error is not swallowed
-  const state = (path: string): { gone: true } | { owner: MarkerOwner } | { dead: true } => {
+  const state = (path: string): { gone: true } | { owner: MarkerOwner } | { dead: true; text: string } => {
     let text: string;
     try { text = readFileSync(path, "utf8"); }
     catch (error) {
@@ -543,34 +783,68 @@ function claimMarker(marker: string, pid: number, checkout: string, alive: (pid:
       throw error;
     }
     let owner: MarkerOwner;
-    try { owner = JSON.parse(text) as MarkerOwner; } catch { return { dead: true }; }
+    try { owner = JSON.parse(text) as MarkerOwner; } catch { return { dead: true, text }; }
     if (owner === null || typeof owner !== "object" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error(`invalid check lock owner: ${path}`);
-    return alive(owner.pid) ? { owner } : { dead: true };
+    return alive(owner) ? { owner } : { dead: true, text };
+  };
+  // Clears a dead run's file: moves the name aside and drops it only when it is still the file read as
+  // `text`. Under takeoverLock no other run clears this name, so what moves is that file. With the
+  // `.reclaim` file, two runs may clear one dead file at once: the claim one of them made since is
+  // what the other moves, and it goes back; only a third run taking the empty name in that instant
+  // would leave two claims.
+  const retire = (path: string, text: string): void => {
+    const aside = workingFile(path, randomBytes(8).toString("hex"), "retired");
+    try { renameSync(path, aside); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    try {
+      if (readFileSync(aside, "utf8") === text) return;
+      try { linkSync(aside, path); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    } finally { rmSync(aside, { force: true }); }
   };
   const reclaim = `${marker}.reclaim`;
+  const reclaimFile = (): { release: () => void } | { holder: MarkerOwner } | "again" => {
+    const held = create(reclaim);
+    if (held === null) {
+      const reclaimer = state(reclaim);
+      if ("owner" in reclaimer) return { holder: reclaimer.owner };
+      // a run killed while it took over left it: clear it and try again
+      if ("dead" in reclaimer) retire(reclaim, reclaimer.text);
+      return "again";
+    }
+    return {
+      release: () => {
+        // only this run's own: removing by name could take a claim another run has made since
+        let now: string | null = null;
+        try { now = readFileSync(reclaim, "utf8"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        if (now === held) rmSync(reclaim, { force: true });
+      },
+    };
+  };
   // other runs claiming and releasing at the same moment can make one attempt come back empty-handed
   for (let attempt = 0; attempt < 5; attempt++) {
-    if (create(marker)) return null;
+    if (create(marker) !== null) return null;
     const found = state(marker);
     if ("owner" in found) return found.owner;
     if ("gone" in found) continue;
-    if (!create(reclaim)) {
-      const reclaimer = state(reclaim);
-      if ("owner" in reclaimer) return reclaimer.owner;
-      if ("dead" in reclaimer) throw new Error(`${reclaim} was left by a check that ended while taking over a lock; delete it if no \`bun run check\` is running`);
-      continue;
-    }
+    const lock = fileTakeover ? reclaimFile() : await takeoverLock(marker, JSON.stringify({ pid, checkout }));
+    if (lock === "again") continue;
+    if ("holder" in lock) return lock.holder;
     try {
       const again = state(marker);
       if ("owner" in again) return again.owner;
       if ("gone" in again) continue;
-      // dead under the reclaim: no other run can replace it until it is removed
-      rmSync(marker, { force: true });
-      if (create(marker)) return null;
+      // dead under the lock: no other run takes it over until the lock is let go
+      retire(marker, again.text);
+      if (create(marker) !== null) return null;
       const winner = state(marker);
       if ("owner" in winner) return winner.owner;
     } finally {
-      rmSync(reclaim, { force: true });
+      lock.release();
     }
   }
   throw new Error(`could not claim ${marker}`);
@@ -579,16 +853,18 @@ function claimMarker(marker: string, pid: number, checkout: string, alive: (pid:
 /**
  * Admission is serialized on the port after the slot range. While holding it, claim explicit
  * resources and take a candidate slot, then scan ALL slots again: an earlier holder may have
- * turned over while we asked it. Zero slots claims only resources (fast needs no herdr slot).
- * Taking over a dead run's marker is serialized by claimMarker's reclaim file, not by this port, since
+ * turned over while we asked it. Zero slots (fast needs no herdr) takes neither the admission port nor
+ * a slot: it only claims its resources and checkout, whose markers are taken atomically, so a fast run
+ * is never refused because another run is being admitted at that moment.
+ * Taking over a dead run's marker is serialized by claimMarker's takeover lock, not by this port, since
  * runs on other CHECK_LOCK_PORT bases do not share it. A busy admission port refuses rather than waits.
  */
 export async function acquire(
-  { slots, checkout, base = DEFAULT_LOCK_PORT, pid = process.pid, scan = MAX_RUNS_LIMIT, resources = [], reports = [], checkoutLock, ticket, retry = false }: { slots: number; checkout: string; base?: number; pid?: number; scan?: number; resources?: readonly string[]; reports?: readonly string[]; checkoutLock?: string; ticket?: Ticket; retry?: boolean },
+  { slots, checkout, base = DEFAULT_LOCK_PORT, pid = process.pid, scan = MAX_RUNS_LIMIT, resources = [], reports = [], checkoutLock, ticket, retry = false, fileTakeover = process.platform !== "linux", dir }: { slots: number; checkout: string; base?: number; pid?: number; scan?: number; resources?: readonly string[]; reports?: readonly string[]; checkoutLock?: string; ticket?: Ticket; retry?: boolean; fileTakeover?: boolean; dir?: string },
 ): Promise<{ release: () => void; port: number | null } | { refused: "busy" | "same-checkout" | "resource"; holders: SlotHolder[]; resource?: string }> {
   const admissionPort = base + Math.max(slots, scan);
   const claims = [...resources.map((path) => ({ path, report: false, checkout: false })), ...reports.map((path) => ({ path, report: true, checkout: false }))];
-  if (slots > 0 && checkoutLock) claims.push({ path: checkoutLock, report: true, checkout: true });
+  if (checkoutLock) claims.push({ path: checkoutLock, report: true, checkout: true });
   // A waiting run (`retry`, with a ticket or without one when every ticket was held) with an older
   // run ahead of it does not take the admission port at all: holding it only to find the queue would
   // keep the head of the queue out of it, round after round. Its checkout and resources come first
@@ -602,11 +878,11 @@ export async function acquire(
       if (checkoutClaim) return { refused: "same-checkout", holders: [{ port: admissionPort, heldBy: owner.pid, checkout: owner.checkout }] };
       return { refused: "resource", resource: target.canonical, holders: [{ port: admissionPort, heldBy: owner.pid, checkout: owner.checkout }] };
     }
-    const queued = await queuedAhead(base, slots, scan, ticket);
+    const queued = await queuedAhead(base, slots, scan, ticket, dir);
     if (queued.length > 0) return { refused: "busy", holders: queued };
   }
-  const admission = await lock(admissionPort, pid, checkout);
-  if (!("release" in admission)) return { refused: "busy", holders: [{ ...admission, port: admissionPort }] };
+  const admission = slots > 0 ? await lock(admissionPort, pid, checkout, dir) : null;
+  if (admission && !("release" in admission)) return { refused: "busy", holders: [{ ...admission, port: admissionPort }] };
   let taken: { release: () => void; port: number } | null = null;
   const markers: string[] = [];
   let admitted = false;
@@ -619,7 +895,7 @@ export async function acquire(
       mkdirSync(dirname(resolve(path)), { recursive: true, mode: 0o700 });
       const { canonical, marker } = claimTarget(path, report)!;
       if (markers.includes(marker)) continue;
-      const owner = claimMarker(marker, pid, checkout, pidAlive);
+      const owner = await claimMarker(marker, pid, checkout, ownerAlive, fileTakeover);
       if (owner) {
         if (checkoutClaim) return { refused: "same-checkout", holders: [{ port: admissionPort, heldBy: owner.pid, checkout: owner.checkout }] };
         return { refused: "resource", resource: canonical, holders: [{ port: admissionPort, heldBy: owner.pid, checkout: owner.checkout }] };
@@ -633,19 +909,19 @@ export async function acquire(
     // while hosts change their CHECK_HOST_MAX_RUNS) still queue in one line: a head that does not
     // fit yet holds back a later run that would.
     if (slots > 0) {
-      const queued = await queuedAhead(base, slots, scan, ticket);
+      const queued = await queuedAhead(base, slots, scan, ticket, dir);
       if (queued.length > 0) return { refused: "busy", holders: queued };
     }
     for (let index = 0; index < slots; index++) {
       const port = base + index;
-      const result = await lock(port, pid, checkout);
+      const result = await lock(port, pid, checkout, dir);
       if ("release" in result) { taken = { release: result.release, port }; break; }
     }
     const holders: SlotHolder[] = [];
     for (let index = 0; slots > 0 && index < Math.max(slots, scan); index++) {
       const port = base + index;
       if (port === taken?.port) continue;
-      const holder = await ask(port);
+      const holder = await ask(port, dir);
       if (holder) holders.push({ ...holder, port });
     }
     const same = holders.filter((holder) => holder.checkout === checkout);
@@ -659,7 +935,7 @@ export async function acquire(
     return { release, port: taken?.port ?? null };
   } finally {
     if (!admitted) release();
-    admission.release();
+    admission?.release();
   }
 }
 
@@ -687,7 +963,7 @@ export async function acquireWaiting(
       if (queuedAt === null) { queuedAt = now(); onWait?.(held.holders); }
       // a place taken late (every ticket was held) ranks after every run already waiting
       // the desk is waited for within what is left of this run's own wait, never past it
-      queued ??= await takeTicket({ base: options.base ?? DEFAULT_LOCK_PORT, slots: options.slots, ...(options.scan === undefined ? {} : { scan: options.scan }), at: queuedAt, ...(options.pid === undefined ? {} : { pid: options.pid }), checkout: options.checkout, deskWaitMs: Math.min(DESK_WAIT_MS, Math.max(0, deadline - now())) });
+      queued ??= await takeTicket({ base: options.base ?? DEFAULT_LOCK_PORT, slots: options.slots, ...(options.scan === undefined ? {} : { scan: options.scan }), at: queuedAt, ...(options.pid === undefined ? {} : { pid: options.pid }), checkout: options.checkout, ...(options.dir === undefined ? {} : { dir: options.dir }), deskWaitMs: Math.min(DESK_WAIT_MS, Math.max(0, deadline - now())) });
       if (now() >= deadline) break;
       await sleep(Math.min(pollMs, Math.max(0, deadline - now())));
       held = await acquire(queued ? { ...options, retry: true, ticket: queued.ticket } : { ...options, retry: true });
@@ -698,11 +974,21 @@ export async function acquireWaiting(
   }
 }
 
+/**
+ * What another run wrote, made one line of text that says nothing to the CI log: any job may write in
+ * the slots' shared files, and a line break there would let it start a line of a workflow command in
+ * another job's log. Control characters are written as escapes.
+ */
+const printable = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`);
+
 /** One line per holder for a refusal. */
 export function describeHolders(holders: readonly SlotHolder[]): string {
-  return holders.map((holder) => Number.isNaN(holder.heldBy)
-    ? `port ${holder.port}: something that is no check run`
-    : `port ${holder.port}: pid ${holder.heldBy}${holder.checkout ? ` in ${holder.checkout}` : ""}${holder.queuedAt === undefined ? "" : `, waiting since ${new Date(holder.queuedAt).toISOString()}`}`).join("; ");
+  return holders.map((holder) => {
+    if (Number.isNaN(holder.heldBy)) return holder.queuedAt === undefined ? `port ${holder.port}: something that is no check run` : `port ${holder.port}: a run taking its place in line`;
+    const since = holder.queuedAt === undefined ? null : new Date(holder.queuedAt);
+    const waiting = since === null ? "" : Number.isNaN(since.getTime()) ? ", waiting since a time it cannot say" : `, waiting since ${since.toISOString()}`;
+    return `port ${holder.port}: pid ${holder.heldBy}${holder.checkout ? ` in ${printable(holder.checkout)}` : ""}${waiting}`;
+  }).join("; ");
 }
 
 export async function main(groupSeams: GroupSeams & {
@@ -745,49 +1031,49 @@ export async function main(groupSeams: GroupSeams & {
       console.error(`check: teardown failed; kept ${result.retained} for diagnosis`);
     }
   })();
-  if (needsHerdr || resources.length > 0 || reports.length > 0) {
+  // Every mode claims its checkout, fast included: runs in one checkout share dist/ and the generated types.
+  try {
+    let slots: number;
+    let wait: number;
     try {
-      let slots: number;
-      let wait: number;
-      try {
-        slots = needsHerdr ? maxRuns(process.env) : 0;
-        wait = waitSeconds(process.env);
-      } catch (error) { console.error(`check: ${(error as Error).message}`); process.exit(2); }
-      const waitStarted = Date.now();
-      let waited = false;
-      let base: number;
-      try { base = lockPort(process.env); } catch (error) { console.error(`check: ${(error as Error).message}`); process.exit(2); }
-      const checkout = checkoutIdentity(realpathSync(cwd));
-      const checkoutLock = needsHerdr ? join(realpathSync(cwd), "node_modules", ".cache", "check", "checkout.lock") : undefined;
-      if (checkoutLock) mkdirSync(dirname(checkoutLock), { recursive: true, mode: 0o700 });
-      const held = await acquireWaiting({ slots, checkout, base, resources, reports, ...(checkoutLock ? { checkoutLock } : {}) }, {
-        waitMs: wait * 1000,
-        onWait: (holders) => {
-          waited = true;
-          const queued = holders.some((holder) => holder.queuedAt !== undefined);
-          console.error(`check: ${queued ? `runs that came first are waiting for a slot (${describeHolders(holders)}); waiting in line` : `the ${slots}-run limit is reached (${describeHolders(holders)}); waiting`} up to ${wait}s for a slot`);
-        },
-      });
-      if (waited && !("refused" in held)) console.error(`check: took a slot after ${Math.round((Date.now() - waitStarted) / 1000)}s`);
-      if ("refused" in held) {
-        const message = held.refused === "same-checkout"
-          ? `another herdr-backed \`bun run check\` is running in this checkout, and the two would share dist/ and the generated types (${describeHolders(held.holders)}); wait for it to end or use another worktree`
-          : held.refused === "resource"
-            ? `check resource ${held.resource} is already held (${describeHolders(held.holders)}); use a different CHECK_DIR / CHECK_REPORT or wait for the holder`
-            : held.holders.some((holder) => holder.queuedAt !== undefined)
-              ? wait > 0
-                ? `runs that came first were still waiting for a slot after ${wait}s (${describeHolders(held.holders)}); try again later, or wait longer with CHECK_WAIT_SECONDS`
-                : `runs that came first are waiting for a slot (${describeHolders(held.holders)}); wait your turn with CHECK_WAIT_SECONDS`
-              : `herdr-backed check admission is busy or the ${slots}-run limit is reached (${describeHolders(held.holders)}); wait for one to end, or set CHECK_MAX_RUNS (1 to ${MAX_RUNS_LIMIT})`;
-        console.error(`check: ${message}`);
-        process.exit(1);
-      }
-      // Keep output ownership through cleanup AND the final report write.
-      process.once("exit", held.release);
-    } catch (error) {
-      console.error(`check: could not acquire the herdr-backed check lock: ${(error as Error).message}`);
+      slots = needsHerdr ? maxRuns(process.env) : 0;
+      wait = waitSeconds(process.env);
+    } catch (error) { console.error(`check: ${(error as Error).message}`); process.exit(2); }
+    const waitStarted = Date.now();
+    let waited = false;
+    let base: number;
+    try { base = lockPort(process.env); } catch (error) { console.error(`check: ${(error as Error).message}`); process.exit(2); }
+    const checkout = checkoutIdentity(realpathSync(cwd));
+    const checkoutLock = join(realpathSync(cwd), "node_modules", ".cache", "check", "checkout.lock");
+    mkdirSync(dirname(checkoutLock), { recursive: true, mode: 0o700 });
+    const dir = slotsDir(process.env);
+    const held = await acquireWaiting({ slots, checkout, base, resources, reports, checkoutLock, ...(dir === undefined ? {} : { dir }) }, {
+      waitMs: wait * 1000,
+      onWait: (holders) => {
+        waited = true;
+        const queued = holders.some((holder) => holder.queuedAt !== undefined);
+        console.error(`check: ${queued ? `runs that came first are waiting for a slot (${describeHolders(holders)}); waiting in line` : `the ${slots}-run limit is reached (${describeHolders(holders)}); waiting`} up to ${wait}s for a slot`);
+      },
+    });
+    if (waited && !("refused" in held)) console.error(`check: took a slot after ${Math.round((Date.now() - waitStarted) / 1000)}s`);
+    if ("refused" in held) {
+      const message = held.refused === "same-checkout"
+        ? `another \`bun run check\` is running in this checkout, and the two would share dist/ and the generated types (${describeHolders(held.holders)}); wait for it to end or use another worktree`
+        : held.refused === "resource"
+          ? `check resource ${held.resource} is already held (${describeHolders(held.holders)}); use a different CHECK_DIR / CHECK_REPORT or wait for the holder`
+          : held.holders.some((holder) => holder.queuedAt !== undefined)
+            ? wait > 0
+              ? `runs that came first were still waiting for a slot after ${wait}s (${describeHolders(held.holders)}); try again later, or wait longer with CHECK_WAIT_SECONDS`
+              : `runs that came first are waiting for a slot (${describeHolders(held.holders)}); wait your turn with CHECK_WAIT_SECONDS`
+            : `herdr-backed check admission is busy or the ${slots}-run limit is reached (${describeHolders(held.holders)}); wait for one to end, or set CHECK_MAX_RUNS (1 to ${MAX_RUNS_LIMIT})`;
+      console.error(`check: ${message}`);
       process.exit(1);
     }
+    // Keep output ownership through cleanup AND the final report write.
+    process.once("exit", held.release);
+  } catch (error) {
+    console.error(`check: could not acquire the check lock: ${(error as Error).message}`);
+    process.exit(1);
   }
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
@@ -1392,6 +1678,13 @@ export async function main(groupSeams: GroupSeams & {
       console.log(`${result} ${step.name}${step.durationMs === null ? "" : ` (${(step.durationMs / 1000).toFixed(1)}s)`}`);
     }
   }
+  // why a failed run failed: a step's exit code or signal, which its FAILED line does not show, and
+  // what no step line shows at all (a source or dist that changed mid-run, a report that could not
+  // be saved, ...), which would otherwise end the run with every step ok (#1921); a run that passed
+  // says nothing more
+  const reasons = code === 0 ? [] : report.errors;
+  for (const reason of reasons) console.error(`check: ${reason}`);
+  if (reasons.length > 0) console.error(`check: report ${paths.reportPath}`);
   process.exit(code);
 }
 
