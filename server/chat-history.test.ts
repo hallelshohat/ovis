@@ -17,6 +17,50 @@ const fixture = (text: string) => {
 };
 afterEach(() => { roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })); forgetTranscriptState(); });
 
+for (const source of ["omp-transcript", "claude-transcript"] as const) {
+  test(`${source}: a small newest page includes complete live turns and pages back without gaps`, () => {
+    const entry = ({ role, text }: { role: string; text: string }) => source === "claude-transcript"
+      ? { type: role, message: { role, content: [{ type: "text", text }] } }
+      : message(role, text);
+    const rows = Array.from({ length: 130 }, (_, index) => [
+      entry({ role: "user", text: `question ${index}` }),
+      entry({ role: "assistant", text: `answer ${index}` }),
+    ]).flat();
+    const path = fixture(jsonl(rows));
+    const latest = transcriptPage(source, path);
+    expect(latest.turns).toHaveLength(24);
+    expect(latest.turns[0]?.parts).toEqual([{ kind: "text", text: "question 118" }]);
+    expect(latest.turns.at(-1)?.parts).toEqual([{ kind: "text", text: "answer 129" }]);
+    for (const prompts of [10, 50]) {
+      const sized = transcriptPage(source, path, { prompts });
+      expect(sized.turns).toHaveLength(prompts * 2);
+      expect(sized.turns[0]?.parts).toEqual([{ kind: "text", text: `question ${130 - prompts}` }]);
+    }
+    expect(transcriptPage(source, path).turns).toEqual(latest.turns);
+    const collected = [...latest.turns];
+    let cursor = latest.cursor;
+    while (cursor !== null) {
+      const older = transcriptPage(source, path, { before: cursor });
+      expect(older.cursor).not.toBe(cursor);
+      collected.unshift(...older.turns);
+      cursor = older.cursor;
+    }
+    expect(collected).toHaveLength(260);
+    expect(collected.flatMap(turn => turn.parts).filter(part => part.kind === "text").map(part => part.text))
+      .toEqual(Array.from({ length: 130 }, (_, index) => [`question ${index}`, `answer ${index}`]).flat());
+    appendFileSync(path, jsonl([entry({ role: "assistant", text: "still working" })]));
+    const live = transcriptPage(source, path, { from: latest.cursor! });
+    expect(live.cursor).toBe(latest.cursor);
+    expect(live.turns.at(-1)?.parts.at(-1)).toEqual({ kind: "text", text: "still working" });
+    appendFileSync(path, jsonl([entry({ role: "user", text: "next question" })]));
+    const moved = transcriptPage(source, path, { from: latest.cursor! });
+    expect(moved.cursor).not.toBe(latest.cursor);
+    const between = transcriptPage(source, path, { before: moved.cursor!, since: latest.cursor! });
+    expect(between.turns).toHaveLength(2);
+    expect(between.cursor).toBe(latest.cursor);
+  });
+}
+
 test("Pi variants normalize visible text, tool aliases and nested/string results consistently", () => {
   const rows = [
     message("user", "hidden", { display: false }),
@@ -87,9 +131,10 @@ for (const source of ["omp-transcript", "omo-transcript", "gjc-transcript", "cla
     const latest = transcriptPage(source, path);
     expect(latest.history_id).toBe(cleared.history_id);
     const older = transcriptPage(source, path, { before: latest.cursor! });
-    expect(older.cursor).toBeNull();
-    expect([...older.turns, ...latest.turns]).toHaveLength(80);
-    expect(JSON.stringify([...older.turns, ...latest.turns])).not.toContain("old ");
+    const first = transcriptPage(source, path, { before: older.cursor! });
+    expect(first.cursor).toBeNull();
+    expect([...first.turns, ...older.turns, ...latest.turns]).toHaveLength(80);
+    expect(JSON.stringify([...first.turns, ...older.turns, ...latest.turns])).not.toContain("old ");
     forgetTranscriptState();
     expect(transcriptPage(source, path)).toEqual(latest);
   });

@@ -52,6 +52,8 @@ import { holdForPictures } from "./terminalImages.ts";
  */
 declare const __HERDR_TEST_HOOKS__: boolean;
 
+const COPY_HISTORY_PROMPTS = 50;
+
 /** One piece of typing for the pane: `keys` for a chord or an arrow herdr encodes, else `input` as typed. */
 /** `automatic`: xterm made the input itself (a query's answer), nobody typed it */
 type Typed = { input: string; keys: string[] | null; chord: boolean; stop: boolean; secret: boolean; automatic?: boolean };
@@ -553,7 +555,7 @@ export function useTerminalMount(deps: TerminalMountDeps): void {
       /** selected text as it is copied: an agent's own wrapped rows join back into their lines, as herdr's TUI copies them (#2558) */
       /** the agent's replies as last read for a press in its pane: only they can prove a copied row break was its wrap */
       let said: { pane: string; texts: readonly string[] } | null = null;
-      const readSaid = (pane: string): Promise<readonly string[]> => fetchPaneConversation(pane, machineId).then((answer) => {
+      const readSaid = (pane: string): Promise<readonly string[]> => fetchPaneConversation(pane, machineId, { prompts: COPY_HISTORY_PROMPTS }).then((answer) => {
         // a conversation read off the screen holds the same rows, so it proves nothing
         const texts = answer.source === "scrollback" ? [] : answer.turns.flatMap((turn) => turn.role === "assistant"
           ? turn.parts.flatMap((part) => part.kind === "text" ? [part.text] : []) : []);

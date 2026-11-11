@@ -217,9 +217,12 @@ describe("shared pager projection", () => {
     writeFileSync(path, Array.from({ length: 130 }, (_, i) => user(i) + answer()).join(""));
     const newest = page();
     expect(newest.cursor).not.toBeNull();
+    expect(newest.turns).toHaveLength(24);
     const older = transcriptPage("grok-transcript", path, { before: newest.cursor! });
     const oldest = transcriptPage("grok-transcript", path, { before: older.cursor! });
-    const prompts = [...oldest.turns, ...older.turns, ...newest.turns].filter((t) => t.role === "user");
+    const first = transcriptPage("grok-transcript", path, { before: oldest.cursor! });
+    expect(first.cursor).toBeNull();
+    const prompts = [...first.turns, ...oldest.turns, ...older.turns, ...newest.turns].filter((t) => t.role === "user");
     expect(prompts).toHaveLength(130);
     expect(new Set(prompts.map((t) => JSON.stringify(t.parts))).size).toBe(130);
     appendFileSync(path, rewind(1));

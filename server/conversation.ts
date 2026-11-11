@@ -104,12 +104,10 @@ const PI_PAGE_CACHE_BYTES = 4 * 1024 * 1024;
 
 /** A page never holds more prompts than this (each opens a user + assistant pair). */
 export const MAX_PAGE_PROMPTS = MAX_TURNS / 2;
-
-/**
- * The page size a reader that asks for none gets: every reader before the chat's history setting
- * keeps the page it always had. The chat asks for its own size (`prompts=`, the setting).
- */
+/** Older reads keep their larger batch unless a caller asks for a different size. */
 export const DEFAULT_PAGE_PROMPTS = MAX_PAGE_PROMPTS;
+/** Show recent exchanges first when the caller has no page size of its own. */
+const NEWEST_PAGE_PROMPTS = 12;
 
 /** A single turn longer than a window still gets a page of its own, up to this. */
 const MAX_PAGE_BYTES = 16 * 1024 * 1024;
@@ -123,7 +121,9 @@ const COPILOT_PAGE_BYTES = 4 * MAX_PAGE_BYTES;
 /** The prompts a page keeps for this read: the reader's choice, inside the server's own bounds. */
 function pagePrompts(page: ConversationPage): number {
   const asked = page.prompts;
-  if (typeof asked !== "number" || !Number.isFinite(asked)) return DEFAULT_PAGE_PROMPTS;
+  if (typeof asked !== "number" || !Number.isFinite(asked)) {
+    return page.before === undefined ? NEWEST_PAGE_PROMPTS : DEFAULT_PAGE_PROMPTS;
+  }
   return Math.min(MAX_PAGE_PROMPTS, Math.max(1, Math.floor(asked)));
 }
 
@@ -1163,7 +1163,8 @@ function newestPage(path: string, stream: TranscriptStream, source: StreamSource
   const from = Math.max(stream.floor, stream.length - TRANSCRIPT_WINDOW_BYTES);
   if (stream.promptStarts) {
     const starts = stream.promptStarts.filter((at) => at >= from);
-    const start = starts.length > prompts ? starts[starts.length - prompts] : from === stream.floor ? stream.floor : starts[0];
+    let start = from === stream.floor ? stream.floor : starts[0];
+    if (starts.length > prompts) start = starts[starts.length - prompts];
     return start === undefined ? null : { start, starts };
   }
   let scan = liveScans.get(path);
@@ -1188,7 +1189,8 @@ function newestPage(path: string, stream: TranscriptStream, source: StreamSource
   if (stale !== 0) scan.starts.splice(0, stale === -1 ? scan.starts.length : stale);
   remember(liveScans, path, scan, 32);
   const starts = pending.length > 0 ? [...scan.starts, ...pending] : scan.starts;
-  const start = starts.length > prompts ? starts[starts.length - prompts] : from === stream.floor ? stream.floor : starts[0];
+  let start = from === stream.floor ? stream.floor : starts[0];
+  if (starts.length > prompts) start = starts[starts.length - prompts];
   return start === undefined ? null : { start, starts };
 }
 

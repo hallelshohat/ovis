@@ -940,8 +940,11 @@ it("keeps root prompts carrying parentAgentTaskId and pages at those prompts", (
     expect(latest.turns.filter((turn) => turn.role === "user").map((turn) => turn.parts[0])).toContainEqual({ kind: "text", text: "root 64" });
     expect(latest.cursor).not.toBeNull();
     const older = transcriptPage("copilot-transcript", path, { before: latest.cursor! });
-    expect(older.turns[0]?.parts[0]).toEqual({ kind: "text", text: "root 0" });
-    expect([...latest.turns, ...older.turns].some((turn) => turn.parts.some((part) => part.kind === "text" && part.text.startsWith("child")))).toBe(false);
+    expect(older.turns[0]?.parts[0]).toEqual({ kind: "text", text: "root 3" });
+    const oldest = transcriptPage("copilot-transcript", path, { before: older.cursor! });
+    expect(oldest.cursor).toBeNull();
+    expect(oldest.turns[0]?.parts[0]).toEqual({ kind: "text", text: "root 0" });
+    expect([...latest.turns, ...older.turns, ...oldest.turns].some((turn) => turn.parts.some((part) => part.kind === "text" && part.text.startsWith("child")))).toBe(false);
   } finally { forgetTranscriptState(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1040,7 +1043,10 @@ it("pages bounded native turns and observes append, torn lines, and same-file re
     expect(first.turns.at(-1)?.parts[0]).toEqual({ kind: "text", text: "answer 64", phase: "final_answer" });
     expect(first.cursor).not.toBeNull();
     const older = transcriptPage("copilot-transcript", path, { before: first.cursor! });
-    expect(older.turns[0]?.parts[0]).toEqual({ kind: "text", text: "prompt 0" });
+    expect(older.turns[0]?.parts[0]).toEqual({ kind: "text", text: "prompt 3" });
+    const oldest = transcriptPage("copilot-transcript", path, { before: older.cursor! });
+    expect(oldest.cursor).toBeNull();
+    expect(oldest.turns[0]?.parts[0]).toEqual({ kind: "text", text: "prompt 0" });
     appendFileSync(path, '{"type":"user.message","data":');
     expect(transcriptPage("copilot-transcript", path).turns).toEqual(first.turns);
     appendFileSync(path, '{"content":"completed partial prompt"}}\n' + line("session.resume", { selectedModel: "fixture-model" }) + prompt("after resume") + answer("still here"));

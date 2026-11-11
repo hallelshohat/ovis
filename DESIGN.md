@@ -3159,6 +3159,15 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   place, a replaced history or leaving the pane after the message went out, before its receipt or
   before its turn shows, cancels the follow. Nothing new is drawn: the existing Jump to latest and
   New messages controls keep the Ovis/Codex chat look.
+- A chat opens with two quiet skeleton exchanges in its existing message column, using `Skeleton`
+  and the theme's elevated surface. They appear before its first read or timeline chunk arrives;
+  the composer keeps its position, draft and focus. Reduced motion disables the skeleton pulse.
+  The placeholder covers the list while it initializes, preserving its measured first landing
+  at the newest messages. Native file-backed chats default to twelve recent prompt groups;
+  an explicit page size still wins, including this fork's ten-prompt chat pages. Earlier pages
+  retain their existing size and the reader's anchor when prepended. Cached reopening
+  and independent earlier-history controls follow [T3 Code's thread timeline](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/chat/ThreadTimeline.tsx);
+  the placeholder uses Ovis's own components and styling.
 - An empty chat is greeted from the composer (`.composer-greeting`, below), only where the agent's
   conversation was read and holds no turn. A chat still loading, one whose read failed, an agent
   whose transcript could not be read and a pane with no recognized agent keep their own lines
