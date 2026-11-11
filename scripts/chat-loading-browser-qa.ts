@@ -150,6 +150,9 @@ async function checkChatLoading(): Promise<void> {
         await page.getByText("Working…", { exact: true }).first().waitFor();
         assert.equal(await composer.inputValue(), "Draft during live work");
         if (evidence) await page.screenshot({ path: join(evidence, `working-${viewport.width}.png`) });
+        await page.goto(url + `&expected=Answer%20${1000 + viewport.width}`);
+        await latestVisible(page);
+        measurements.push({ width: viewport.width, case: "working", ...await page.evaluate(() => window.loadingQa.sample), parseMs, responseBytes, wireBytes });
         working = false;
         writeFileSync(path, Array.from({ length: 1000 }, (_, i) => exchange(i)).join(""));
         forgetTranscriptState();
@@ -159,6 +162,9 @@ async function checkChatLoading(): Promise<void> {
         await page.evaluate(() => { window.loadingQa.expected = "Answer 0"; window.loadingQa.release(); });
         await latestVisible(page);
         assert.equal(await page.locator(".chat-loading-placeholder").count(), 0);
+        await page.goto(url + "&expected=Answer%200");
+        await latestVisible(page);
+        measurements.push({ width: viewport.width, case: "short", ...await page.evaluate(() => window.loadingQa.sample), parseMs, responseBytes, wireBytes });
         short = false;
         if (!baseline) {
           const conversationRoute = "**/api/pane/conversation?*";
@@ -216,7 +222,7 @@ function installProbe(pane: string): void {
   let gate = Promise.resolve();
   const fresh = (): LoadingSample => ({ opened: 0, placeholder: null, composer: null, response: null, latest: null, settled: null, blankFrames: 0, firstMessage: null, longTasks: [] });
   const qa = window.loadingQa = {
-    sample: fresh(), held: new URLSearchParams(location.search).has("hold"), reads: 0, expected: "Answer 999",
+    sample: fresh(), held: new URLSearchParams(location.search).has("hold"), reads: 0, expected: new URLSearchParams(location.search).get("expected") ?? "Answer 999",
     release: () => { qa.held = false; release(); },
   };
   if (qa.held) gate = new Promise<void>(resolve => { release = resolve; });
