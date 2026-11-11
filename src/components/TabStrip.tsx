@@ -396,6 +396,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     return pane?.display_agent?.trim() || pane?.agent || null;
   };
   const statusOf = (tab: HerdrTab): KnownStatus => rollupAgentStatus({ panes: panesOf(tab), agentRows });
+  // the strip draws a mark only for a state; the sheet's list keeps a hollow one for a tab at rest, so its names line up
   const statusMark = (status: KnownStatus): ReactNode => settings.statusIndicators === "classic"
     ? <span className="tab-strip-dot" data-status={status} aria-hidden="true" />
     : <span className="tab-strip-dot tab-strip-glyph" data-status={status} aria-hidden="true">{indicatorGlyph(status, settings.statusIndicators)}</span>;
