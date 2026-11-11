@@ -40,7 +40,8 @@ import { usePaneLocked } from "../lib/paneLocks.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { SHEET_QUERY } from "../lib/sheets.ts";
 import { useTabReorder } from "../lib/useTabReorder.ts";
-import { indicatorGlyph, paneStatus, rollupStatus, STATUS_WORD, type KnownStatus } from "../lib/status.ts";
+import { indicatorGlyph, paneStatus, STATUS_WORD, type KnownStatus } from "../lib/status.ts";
+import { rollupAgentStatus, sidebarAgents } from "../lib/sidebarAgents.ts";
 import { useSettings } from "../lib/settings.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -203,6 +204,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     refocus.current = null; closed.current = null;
   }, [owner]);
   const panes = rosterPanes(snapshot.panes.filter((pane) => pane.workspace_id === workspace.workspace_id), selectedPane.pane_id);
+  const agentRows = sidebarAgents(snapshot);
   // The snapshot order is authoritative; number identifies a tab and does not change on a move.
   const tabs = snapshot.tabs.filter((tab) => tab.workspace_id === workspace.workspace_id);
   // a watching device moves no tab (the server refuses it read_only): the order is fixed for it as for the Herdr app's
@@ -459,7 +461,7 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     const pane = opens?.agent ? opens : panesOf(tab).find((candidate) => candidate.agent);
     return pane?.display_agent?.trim() || pane?.agent || null;
   };
-  const statusOf = (tab: HerdrTab): KnownStatus => rollupStatus(panesOf(tab).map((pane) => paneStatus(pane as HerdrPane)));
+  const statusOf = (tab: HerdrTab): KnownStatus => rollupAgentStatus({ panes: panesOf(tab), agentRows });
   // the strip draws a mark only for a state; the sheet's list keeps a hollow one for a tab at rest, so its names line up
   const statusMark = (status: KnownStatus): ReactNode => settings.statusIndicators === "classic"
     ? <span className="tab-strip-dot" data-status={status} aria-hidden="true" />
@@ -647,7 +649,6 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
           if (inRow !== null && !inRow.has(index)) return null;
           const active = tab.tab_id === selectedPane.tab_id;
           const own = panesOf(tab);
-          // Settle each pane's wait before rolling up, so a sibling's RUN or DONE stays visible.
           const status = statusOf(tab);
           const agent = agentOf(tab);
           const pickerOpen = picker?.tab.tab_id === tab.tab_id;
