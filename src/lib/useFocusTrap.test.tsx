@@ -5,7 +5,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { inFocusTrap, overlayStops, tabTarget, useFocusTrap } from "./useFocusTrap.ts";
 
 describe("a dialog's Tab round and a device waiting for approval over it", () => {
-  const keys = ["window", "document", "HTMLElement", "Element", "IS_REACT_ACT_ENVIRONMENT"];
+  const keys = ["window", "document", "HTMLElement", "Element", "NodeFilter", "IS_REACT_ACT_ENVIRONMENT"];
   const saved = new Map<string, PropertyDescriptor | undefined>();
   class HTMLElement {
     isConnected = true;
@@ -15,11 +15,13 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
     inert = false;
     /** not drawn: no box */
     hidden = false;
+    shadowRoot: { activeElement: HTMLElement | null; querySelectorAll: () => HTMLElement[] } | null = null;
     /** the role of the surface it is in, as `closest` is asked for it ("dialog", "menu") */
     role: string | null = null;
     constructor(readonly name: string, readonly inside: HTMLElement[] = []) {}
     focus(): void { if (!this.inert && !this.disabled) page.activeElement = this; }
     hasAttribute(attribute: string): boolean { return attribute === "disabled" && this.disabled; }
+    matches(): boolean { return true; }
     /** how often it was brought into view */
     scrolled = 0;
     scrollIntoView(): void { this.scrolled += 1; }
@@ -70,12 +72,17 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
     Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
     Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: HTMLElement });
     Object.defineProperty(globalThis, "Element", { configurable: true, value: HTMLElement });
+    Object.defineProperty(globalThis, "NodeFilter", { configurable: true, value: { SHOW_ELEMENT: 1 } });
     Object.defineProperty(globalThis, "window", { configurable: true, value: {
       addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events),
     } });
     Object.defineProperty(globalThis, "document", { configurable: true, value: {
       get activeElement() { return page.activeElement; }, get body() { return page.body; },
       querySelectorAll: (selector: string) => selector === ".relay-pairing-prompt" ? page.prompts : [],
+      createTreeWalker: (root: Pick<HTMLElement, "querySelectorAll">) => {
+        const nodes = root.querySelectorAll()[Symbol.iterator]();
+        return { nextNode: () => nodes.next().value ?? null };
+      },
     } });
   });
 
@@ -122,6 +129,29 @@ describe("a dialog's Tab round and a device waiting for approval over it", () =>
     for (let step = 0; step < 6; step += 1) { expect(tab()).toBe(true); walked.push(focused()); }
     // never straight from the dialog onto Approve: a Tab and an Enter typed for the field press nothing
     expect(walked).toEqual(["close", "p1", "p1 Approve", "p1 Decline", "back", "field"]);
+  });
+
+  it("walks diff shadow controls before entering a waiting prompt on its surface", async () => {
+    const first = new HTMLElement("expand before");
+    const second = new HTMLElement("expand after");
+    const host = new HTMLElement("diff");
+    host.tabIndex = -1;
+    const shadow: NonNullable<HTMLElement["shadowRoot"]> = { activeElement: null, querySelectorAll: () => [first, second] };
+    host.shadowRoot = shadow;
+    for (const control of [first, second]) control.focus = () => {
+      page.activeElement = host;
+      shadow.activeElement = control;
+    };
+    const settings = new HTMLElement("settings", [host, new HTMLElement("close")]);
+    await open(settings);
+    page.prompts = [prompt("p1")];
+    first.focus();
+    expect(tab()).toBe(true);
+    expect(shadow.activeElement).toBe(second);
+    expect(tab()).toBe(true);
+    expect(focused()).toBe("close");
+    expect(tab()).toBe(true);
+    expect(focused()).toBe("p1");
   });
 
   it("reaches the prompt backwards from the dialog's first stop, on the prompt itself, and leaves it backwards into the dialog", async () => {

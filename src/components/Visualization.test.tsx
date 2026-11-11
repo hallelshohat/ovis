@@ -108,5 +108,5 @@ test("only a chat answer's Markdown asks for references to be drawn", () => {
   const asking = (readdirSync(src, { recursive: true }) as string[]).filter((file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file))
     .flatMap((file) => readFileSync(join(src, file), "utf8").split("\n").filter((line) => /<Markdown\b[^>]*\bvisualizations\b/.test(line)).map((line) => [file, line.trim()] as const));
   expect(asking.map(([file]) => file)).toEqual([join("components", "ChatView.tsx")]);
-  expect(asking[0]![1]).toStartWith("? <Markdown key={`answer:");
+  expect(asking[0]![1]).toStartWith("? <Markdown key={`text:");
 });
