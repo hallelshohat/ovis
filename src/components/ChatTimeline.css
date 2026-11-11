@@ -40,6 +40,40 @@
   padding-bottom: calc(var(--space-5) + var(--composer-over, 0px));
 }
 
+.chat-transcript.chat-loading-transcript {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding-top: calc(var(--space-4) + var(--header-over, 0px));
+}
+
+.chat-loading-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding-block: var(--space-4);
+}
+
+.chat-loading-exchange,
+.chat-loading-answer,
+.chat-loading-user {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.chat-loading-user {
+  align-self: flex-end;
+  width: 65%;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.chat-loading-answer {
+  padding-block: var(--space-3);
+}
+
 .chat-new-messages.chat-virtual-jump {
   position: absolute;
 }

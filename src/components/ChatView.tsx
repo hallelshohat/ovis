@@ -16,6 +16,7 @@ import { Markdown, ReservedImage } from "./Markdown.tsx";
 import { ImageLightbox } from "./ImageLightbox.tsx";
 import { PromptCard } from "./PromptCard.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
+import { Skeleton } from "./Skeleton.tsx";
 import { loadChatTimeline, loadedChatTimeline, useChatTimeline } from "./chatTimelineLoader.ts";
 import { ChatMinimap } from "./ChatMinimap.tsx";
 import { minimapTurns } from "../lib/chatMinimap.ts";
@@ -99,6 +100,15 @@ import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 
 /** Slow reads in a row the chat waits through quietly before it alarms: about 50 s at the local 15 s deadline. */
 const SLOW_READS_BEFORE_ALARM = 3;
+
+function ChatLoadingPlaceholder(): React.JSX.Element {
+  return <div className="chat-loading-placeholder" aria-hidden="true">
+    {[0, 1].map((exchange) => <div className="chat-loading-exchange" key={exchange}>
+      <div className="chat-loading-user"><Skeleton width="long" /><Skeleton width="medium" /></div>
+      <div className="chat-loading-answer"><Skeleton width="long" /><Skeleton width="long" /><Skeleton width="short" /></div>
+    </div>)}
+  </div>;
+}
 
 /**
  * A read that failed, as one line (DESIGN.md, Messages say only what the person needs now): the
@@ -1108,6 +1118,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const scroller = useRef<HTMLDivElement>(null);
   const timeline = useRef<LegendListRef>(null);
   const ChatTimeline = useChatTimeline();
+  const timelineReady = lastAnswer.current !== null && ChatTimeline !== null;
   const stickToBottom = useRef(true);
   // Explicit paging stays away even inside the ordinary near-bottom tolerance.
   const pagingAway = useRef(false);
@@ -1574,7 +1585,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const content = new MutationObserver(() => measureEndRef.current());
     content.observe(node, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["style"] });
     return () => { observer.disconnect(); content.disconnect(); };
-  }, [state.source, ChatTimeline]);
+  }, [state.source, timelineReady]);
   // One of the app's faces arrived (font-display: swap; a unicode-range chunk on the first Korean
   // answer): the conversation rewraps with no width, size or family string changed, so the
   // observer above takes it for one that only grew taller. A reader at the end stays at the end.
@@ -1590,7 +1601,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   useEffect(() => {
     const node = scroller.current;
     return node === null ? undefined : dismissKeyboardOn(node);
-  }, [state.source, ChatTimeline]);
+  }, [state.source, timelineReady]);
 
   useEffect(() => {
     if (!visible) return;
@@ -1990,11 +2001,11 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       && (agentStatus !== "done" || conversationFinishPresented({ source: state.conversationSource, turns: state.turns }))
       && readPresentation === presentationKey && (state.source === "conversation" ? ChatTimeline !== null : agent === null) ? presentationKey : undefined}>
     <div className="chat-frame-body">
-    {state.source === "conversation" ? ChatTimeline === null
-      // its chunk is still loading: no turn is read until it arrives, so this is the loading state
+    {state.source === "conversation" ? !timelineReady
+      // Mount the list with its first answer so initialScrollAtEnd measures actual messages.
       ? <div className="chat-view chat-view-virtual" role="log" aria-live="polite" aria-label={logLabel}>
-        <div className="chat-transcript chat-transcript-virtual">
-          <div className="chat-virtual-header">{header}</div>
+        <div className="chat-transcript chat-transcript-virtual chat-loading-transcript">
+          {(!loaded || waiting) && <ChatLoadingPlaceholder />}
           <div className="chat-virtual-footer">{footer}</div>
         </div>
       </div>

@@ -80,6 +80,8 @@ const PI_PAGE_CACHE_BYTES = 4 * 1024 * 1024;
 
 /** A page never holds more prompts than this (each opens a user + assistant pair). */
 const MAX_PAGE_PROMPTS = MAX_TURNS / 2;
+/** Show recent exchanges first; earlier pages keep their larger batch for reading back. */
+const NEWEST_PAGE_PROMPTS = 12;
 
 /** A single turn longer than a window still gets a page of its own, up to this. */
 const MAX_PAGE_BYTES = 4 * TRANSCRIPT_WINDOW_BYTES;
@@ -388,7 +390,8 @@ function newestPage(path: string, stream: TranscriptStream, source: StreamSource
   const from = Math.max(stream.floor, stream.length - TRANSCRIPT_WINDOW_BYTES);
   if (stream.promptStarts) {
     const starts = stream.promptStarts.filter((at) => at >= from);
-    const start = starts.length > MAX_PAGE_PROMPTS ? starts[starts.length - MAX_PAGE_PROMPTS] : from === stream.floor ? stream.floor : starts[0];
+    let start = from === stream.floor ? stream.floor : starts[0];
+    if (starts.length > NEWEST_PAGE_PROMPTS) start = starts[starts.length - NEWEST_PAGE_PROMPTS];
     return start === undefined ? null : { start, starts };
   }
   let scan = liveScans.get(path);
@@ -413,7 +416,8 @@ function newestPage(path: string, stream: TranscriptStream, source: StreamSource
   if (stale !== 0) scan.starts.splice(0, stale === -1 ? scan.starts.length : stale);
   remember(liveScans, path, scan, 32);
   const starts = pending.length > 0 ? [...scan.starts, ...pending] : scan.starts;
-  const start = starts.length > MAX_PAGE_PROMPTS ? starts[starts.length - MAX_PAGE_PROMPTS] : from === stream.floor ? stream.floor : starts[0];
+  let start = from === stream.floor ? stream.floor : starts[0];
+  if (starts.length > NEWEST_PAGE_PROMPTS) start = starts[starts.length - NEWEST_PAGE_PROMPTS];
   return start === undefined ? null : { start, starts };
 }
 
