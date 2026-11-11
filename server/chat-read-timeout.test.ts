@@ -95,7 +95,7 @@ it("keeps chat history readable while valid sequential herdr calls outlast HTTP 
     expect(newest.status).toBe(200);
     expect(newest.body.turns.at(-1).parts).toContainEqual({ kind: "text", text: answer(119) });
     expect(history.status).toBe(200);
-    expect(history.body.turns.at(-1).parts).toContainEqual({ kind: "text", text: answer(69) });
+    expect(history.body.turns.at(-1).parts).toContainEqual({ kind: "text", text: answer(107) });
     expect(stalled.status).toBe(502);
     expect(stalled.body.error.code).toBe("timeout");
   } finally {
