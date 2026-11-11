@@ -3004,8 +3004,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - A chat opens with two quiet skeleton exchanges in its existing message column, using `Skeleton`
   and the theme's elevated surface. They appear before its first read or timeline chunk arrives;
   the composer keeps its position, draft and focus. Reduced motion disables the skeleton pulse.
-  The virtual list mounts with its first answer so it starts at the newest messages without first
-  laying out an empty list. Native file-backed chats default to twelve recent prompt groups;
+  The placeholder covers the list while it initializes, preserving its measured first landing
+  at the newest messages. Native file-backed chats default to twelve recent prompt groups;
   an explicit page size still wins, including this fork's ten-prompt chat pages. Earlier pages
   retain their existing size and the reader's anchor when prepended. Cached reopening
   and independent earlier-history controls follow [T3 Code's thread timeline](https://github.com/pingdotgg/t3code/blob/main/apps/web/src/components/chat/ThreadTimeline.tsx);

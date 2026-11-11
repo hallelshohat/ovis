@@ -6,7 +6,7 @@ import type { ChatTimeline as ChatTimelineComponent } from "./ChatTimeline.tsx";
 // starts as soon as this module is evaluated, so it loads beside the app's first requests;
 // ChatView reads a conversation into its state only once it resolves (`loadChatTimeline`), so a
 // timeline is never asked for before it exists. ChatView keeps its placeholder until the first
-// answer arrives, so the list starts at the end of real messages with ChatView's refs bound.
+// answer arrives, while the list initializes with ChatView's refs bound.
 type Timeline = typeof ChatTimelineComponent;
 
 let loaded: Timeline | null = null;

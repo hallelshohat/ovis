@@ -1792,7 +1792,6 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const scroller = useRef<HTMLDivElement>(null);
   const timeline = useRef<LegendListRef>(null);
   const ChatTimeline = useChatTimeline();
-  const timelineReady = lastAnswer.current !== null && ChatTimeline !== null;
   const stickToBottom = useRef(true);
   // the timeline's hold on a following reader's own click layout (ChatTimeline manualLayout)
   const manualLayout = useRef(false);
@@ -2448,7 +2447,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const content = new MutationObserver(() => measureEndRef.current());
     content.observe(node, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["style"] });
     return () => { observer.disconnect(); content.disconnect(); };
-  }, [state.source, timelineReady]);
+  }, [state.source, ChatTimeline]);
   // One of the app's faces arrived (font-display: swap; a unicode-range chunk on the first Korean
   // answer): the conversation rewraps with no width, size or family string changed, so the
   // observer above takes it for one that only grew taller. A reader at the end stays at the end.
@@ -2464,7 +2463,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   useEffect(() => {
     const node = scroller.current;
     return node === null ? undefined : dismissKeyboardOn(node);
-  }, [state.source, timelineReady]);
+  }, [state.source, ChatTimeline]);
 
   useEffect(() => {
     if (!visible) return;
@@ -3067,6 +3066,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   }, [sentWaiting, state.turns, turnsRead, waitKey]);
   const waitWords = useAnnouncedText(!loaded && error === null ? t("Loading conversation…") : waiting ? t("Waiting for the PC…") : null);
   const retryRead = useCallback(() => { setFailures(0); conversationRefresh.refresh(); }, [conversationRefresh]);
+  const loading = lastAnswer.current === null && (!loaded || waiting);
   const footer = <>
       <p className={waitWords === null ? "visually-hidden" : "chat-inline-state"} role="status">{waitWords}</p>
       {sentWaiting.length > 0 && <SentWaitingList sends={sentWaiting} />}
@@ -3105,11 +3105,10 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       && (agentStatus !== "done" || conversationFinishPresented({ source: state.conversationSource, turns: state.turns }))
       && readPresentation === presentationKey && (state.source === "conversation" ? ChatTimeline !== null : agent === null) ? presentationKey : undefined}>
     <div className="chat-frame-body">
-    {state.source === "conversation" ? !timelineReady
-      // Mount the list with its first answer so initialScrollAtEnd measures actual messages.
+    {state.source === "conversation" ? ChatTimeline === null
       ? <div className="chat-view chat-view-virtual" role="log" aria-live="polite" aria-label={logLabel}>
-        <div className="chat-transcript chat-transcript-virtual chat-loading-transcript">
-          {(!loaded || waiting) && <ChatLoadingPlaceholder />}
+        <div className="chat-transcript chat-transcript-virtual">
+          <div className="chat-virtual-header">{header}</div>
           <div className="chat-virtual-footer">{footer}</div>
         </div>
       </div>
@@ -3134,6 +3133,12 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       <div className="chat-transcript" data-conversation-source={state.conversationSource}>
         <ChatFallback paneId={paneId} agent={agent} visible={visible} messages={state.messages} scrollback={state.scrollback} outcomes={outcomes} restored={restored} actions={outcomeActions} skills={skillMatcher} />
         {footer}
+      </div>
+    </div>}
+    {state.source === "conversation" && loading && <div className="chat-view chat-view-virtual chat-loading-view" aria-hidden="true">
+      <div className="chat-transcript chat-transcript-virtual chat-loading-transcript">
+        <ChatLoadingPlaceholder />
+        <div className="chat-virtual-footer" />
       </div>
     </div>}
     {state.source === "conversation" && <ChatMinimap turns={minimap} rowKeys={rowKeys} scroller={scroller} onJump={jumpToTurn} onWheel={minimapWheel} />}

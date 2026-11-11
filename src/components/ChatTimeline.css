@@ -42,6 +42,12 @@
   padding-bottom: calc(var(--chat-edge-end) + var(--composer-over, 0px));
 }
 
+.chat-loading-view {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .chat-transcript.chat-loading-transcript {
   display: flex;
   flex-direction: column;

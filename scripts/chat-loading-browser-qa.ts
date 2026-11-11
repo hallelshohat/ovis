@@ -17,6 +17,7 @@ interface LoadingSample {
   response: number | null;
   latest: number | null;
   settled: number | null;
+  endGap: number | null;
   blankFrames: number;
   firstMessage: string | null;
   longTasks: number[];
@@ -146,11 +147,12 @@ async function checkChatLoading(): Promise<void> {
         // A native append is visible while the agent is still working; the draft stays usable.
         working = true;
         appendFileSync(path, exchange(1000 + viewport.width));
+        appendFileSync(path, JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "active-read", name: "Read", arguments: { path: "pending.ts" } }] } }) + "\n");
         await page.goto(url + "&hold=1");
         await composer.fill("Draft during live work");
         await page.evaluate((expected) => { window.loadingQa.expected = expected; window.loadingQa.release(); }, `Answer ${1000 + viewport.width}`);
         await latestVisible(page);
-        await page.getByText("Working…", { exact: true }).first().waitFor();
+        await page.getByText("Working…", { exact: true }).filter({ visible: true }).first().waitFor();
         assert.equal(await composer.inputValue(), "Draft during live work");
         if (evidence) await page.screenshot({ path: join(evidence, `working-${viewport.width}.png`) });
         await page.goto(url + `&expected=Answer%20${1000 + viewport.width}`);
@@ -223,7 +225,7 @@ function installProbe(pane: string): void {
   if (typeof native !== "function") throw new Error("Missing fixture fetch");
   let release = () => {};
   let gate = Promise.resolve();
-  const fresh = (): LoadingSample => ({ opened: 0, placeholder: null, composer: null, response: null, latest: null, settled: null, blankFrames: 0, firstMessage: null, longTasks: [] });
+  const fresh = (): LoadingSample => ({ opened: 0, placeholder: null, composer: null, response: null, latest: null, settled: null, endGap: null, blankFrames: 0, firstMessage: null, longTasks: [] });
   const qa = window.loadingQa = {
     sample: fresh(), held: new URLSearchParams(location.search).has("hold"), reads: 0, expected: new URLSearchParams(location.search).get("expected") ?? "Answer 999",
     release: () => { qa.held = false; release(); },
@@ -241,7 +243,7 @@ function installProbe(pane: string): void {
   new PerformanceObserver(list => {
     for (const entry of list.getEntries()) qa.sample.longTasks.push(entry.duration);
   }).observe({ type: "longtask", buffered: true });
-  let stable = 0;
+  let stable = 0, lastLayout = "";
   const frame = () => {
     const view = document.querySelector<HTMLElement>(".chat-view");
     if (view) {
@@ -259,11 +261,18 @@ function installProbe(pane: string): void {
       });
       if (rows.length > 0) sample.firstMessage ??= rows.map(row => row.textContent).join("\n");
       if (sample.latest === null && rows.length === 0 && placeholder === null) sample.blankFrames++;
-      if (rows.some(row => row.textContent?.includes(qa.expected))) {
+      const newest = rows.find(row => row.textContent?.includes(qa.expected));
+      if (newest) {
         sample.latest ??= now;
-        if (view.scrollHeight - view.scrollTop - view.clientHeight <= 1) {
-          if (++stable >= 2) sample.settled ??= now;
-        } else stable = 0;
+        const bottom = newest.getBoundingClientRect().bottom;
+        const layout = `${view.scrollTop}:${view.scrollHeight}:${view.clientHeight}:${bottom}`;
+        stable = layout === lastLayout ? stable + 1 : 0;
+        lastLayout = layout;
+        // Empty footer space may remain below the last message; measure its visible, stable tail.
+        if (stable >= 2 && bottom <= box.bottom + 1) {
+          sample.settled ??= now;
+          sample.endGap ??= view.scrollHeight - view.scrollTop - view.clientHeight;
+        }
       }
     }
     requestAnimationFrame(frame);
