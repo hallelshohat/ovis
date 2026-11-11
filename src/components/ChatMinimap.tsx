@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, ty
 
 import { minimapCurrent, minimapFits, minimapSlots, minimapSlotTarget, minimapStep, minimapTop, minimapTurnSlot, MINIMAP_MIN_TURNS, type MinimapTurn } from "../lib/chatMinimap.ts";
 import { useT } from "../lib/i18n.ts";
+import { requestShownFrame } from "../lib/shownFrame.ts";
 import "./ChatMinimap.css";
 
 export interface ChatMinimapProps {
@@ -35,9 +36,9 @@ export function ChatMinimap({ turns, rowKeys, scroller, onJump, onWheel }: ChatM
     if (node === null) return;
     const positions = new Map(rowKeys.map((key, index) => [key, index]));
     const turnRows = turns.map((turn) => turn.row);
-    let frame = 0;
+    let cancel: (() => void) | null = null;
     const measure = (): void => {
-      frame = 0;
+      cancel = null;
       const view = node.getBoundingClientRect();
       let first = Infinity, last = -1;
       for (const row of node.querySelectorAll<HTMLElement>("[data-chat-row]")) {
@@ -55,13 +56,13 @@ export function ChatMinimap({ turns, rowKeys, scroller, onJump, onWheel }: ChatM
       const nextRail = Math.max(0, Math.min((turns.length - 1) * SPACING_PX, view.height - MARGIN_REM * rem));
       setRailPx((previous) => previous === nextRail ? previous : nextRail);
     };
-    const schedule = (): void => { if (frame === 0) frame = requestAnimationFrame(measure); };
+    const schedule = (): void => { cancel ??= requestShownFrame(measure); };
     schedule();
     node.addEventListener("scroll", schedule, { passive: true });
     const observer = new ResizeObserver(schedule);
     observer.observe(node);
     return () => {
-      cancelAnimationFrame(frame);
+      cancel?.();
       node.removeEventListener("scroll", schedule);
       observer.disconnect();
     };
@@ -71,6 +72,8 @@ export function ChatMinimap({ turns, rowKeys, scroller, onJump, onWheel }: ChatM
   if (turns.length < MINIMAP_MIN_TURNS || !fits || railPx <= 0) return null;
   const count = turns.length;
   const slots = minimapSlots(count, railPx);
+  // a rail too short to keep MINIMAP_MIN_TURNS ticks apart draws nothing, as too few turns do
+  if (slots < MINIMAP_MIN_TURNS) return null;
   const currentSlot = current === null ? null : minimapTurnSlot(current, slots, count);
   const stop = Math.min(focusIndex ?? currentSlot ?? slots - 1, slots - 1);
   const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {

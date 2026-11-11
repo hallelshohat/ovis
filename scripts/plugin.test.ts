@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { platform, tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { platform, tmpdir, uptime } from "node:os";
 import { join } from "node:path";
 
+import { COMMAND_ALIASES } from "./plugin-link.ts";
 import { herdrStateDir } from "./plugin-state.ts";
+import { quietPort } from "./quiet-port.ts";
+import { readProcessBirth } from "../server/process-owner.ts";
+import { updateStateDir } from "../server/update-state.ts";
+import { exportPublicKey, generateKeyPair } from "../shared/relay-e2ee.ts";
+import { decodeOffer, encodeOffer } from "../shared/relay-offer.ts";
 
 /**
  * The plugin's settings files, read by hand the way a headless PC runs `status` or `pair`:
@@ -19,15 +25,25 @@ async function status(): Promise<{ out: string; err: string; exitCode: number }>
   return run("status");
 }
 
-async function run(command: string, extra: Record<string, string | undefined> = {}): Promise<{ out: string; err: string; exitCode: number }> {
+async function run(command: string, extra: Record<string, string | undefined> = {}, more: { args?: string[]; stdin?: string } = {}): Promise<{ out: string; err: string; exitCode: number }> {
+  const child = launch(command, extra, more);
+  const [out, err, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { out, err, exitCode };
+}
+
+/** The environment a command runs in: this test's own home and state, and `extra`. */
+function launchEnv(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   const bin = join(scratch, "bin");
   const env: Record<string, string | undefined> = { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}`, HOME: scratch, HERDR_PLUGIN_STATE_DIR: join(scratch, "state") };
   for (const key of ["HERDR_PLUGIN_CONFIG_DIR", "PORT", "HOST", "OVIS_TOKEN", "OVIS_STATE_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME"]) delete env[key];
   Object.assign(env, extra);
   for (const [key, value] of Object.entries(extra)) if (value === undefined) delete env[key];
-  const child = Bun.spawn(["bun", "scripts/plugin.ts", command], { cwd: ROOT, env, stdout: "pipe", stderr: "pipe" });
-  const [out, err, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { out, err, exitCode };
+  return env;
+}
+
+function launch(command: string, extra: Record<string, string | undefined> = {}, more: { args?: string[]; stdin?: string } = {}) {
+  // `stdin`: what is piped in, which is not a terminal
+  return Bun.spawn(["bun", "scripts/plugin.ts", command, ...more.args ?? []], { cwd: ROOT, env: launchEnv(extra), stdout: "pipe", stderr: "pipe", ...more.stdin === undefined ? {} : { stdin: new Blob([more.stdin]) } });
 }
 
 beforeEach(() => {
@@ -74,6 +90,40 @@ describe("plugin settings files", () => {
   });
 });
 
+/** Ovis for Windows reads this line to tell a server older than the app from one that updated itself. */
+describe("the version status names", () => {
+  function checkout(version: string): string {
+    const root = join(scratch, "checkout");
+    mkdirSync(root);
+    writeFileSync(join(root, "package.json"), JSON.stringify({ version }));
+    Bun.spawnSync(["git", "init", "-q", root]);
+    Bun.spawnSync(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: root });
+    return root;
+  }
+
+  it("is the checkout's while no update is installed", async () => {
+    const root = checkout("0.4.1");
+    const result = await run("status", { HERDR_PLUGIN_ROOT: root, OVIS_STATE_DIR: join(scratch, "app-state"), PORT: "1" });
+    expect(result.exitCode, result.err).toBe(0);
+    expect(result.out).toContain("version: 0.4.1\n");
+  });
+
+  it("is the release Settings \u2192 Updates installed, which herdr's plugin list does not name", async () => {
+    const root = checkout("0.4.1");
+    const state = join(scratch, "app-state");
+    const updates = updateStateDir(root, 1, state);
+    const release = join(updates, "release-test");
+    mkdirSync(join(release, "scripts"), { recursive: true });
+    writeFileSync(join(release, "scripts", "plugin.ts"), "");
+    writeFileSync(join(release, "package.json"), JSON.stringify({ version: "0.4.9" }));
+    const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root }).stdout.toString().trim();
+    writeFileSync(join(updates, "current.json"), JSON.stringify({ source_revision: revision, directory: release }));
+    const result = await run("status", { HERDR_PLUGIN_ROOT: root, OVIS_STATE_DIR: state, PORT: "1" });
+    expect(result.exitCode, result.err).toBe(0);
+    expect(result.out).toContain("version: 0.4.9\n");
+  });
+});
+
 /** What the app's bridge health answers (server/index.ts): it holds the port whether herdr answers or not. */
 const BRIDGE_HEALTH = { ok: true, auth: { required: false, authenticated: true }, bridge_protocol: 1 };
 /** What the app's full health answers while herdr does (every release since v0.1.0 has sent these). */
@@ -85,10 +135,7 @@ describe("the herdr socket", () => {
     const root = join(scratch, "root");
     mkdirSync(join(root, "server"), { recursive: true });
     writeFileSync(join(root, "server", "managed.ts"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(join(scratch, "seen"))}, process.env.HERDR_SOCKET ?? "unset");\n`);
-    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
-    const port = probe.port;
-    await probe.stop(true);
-    await run("start", { HERDR_PLUGIN_ROOT: root, HERDR_SOCKET_PATH: "/herdr/own.sock", PORT: String(port) });
+    await run("start", { HERDR_PLUGIN_ROOT: root, HERDR_SOCKET_PATH: "/herdr/own.sock", PORT: String(quietPort()) });
     return readFileSync(join(scratch, "seen"), "utf8");
   };
 
@@ -108,10 +155,7 @@ describe("server.log", () => {
     const root = join(scratch, "root");
     mkdirSync(join(root, "server"), { recursive: true });
     writeFileSync(join(root, "server", "managed.ts"), `${body}\nprocess.exit(1);\n`);
-    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
-    const port = probe.port;
-    await probe.stop(true);
-    return run("start", { HERDR_PLUGIN_ROOT: root, PORT: String(port) });
+    return run("start", { HERDR_PLUGIN_ROOT: root, PORT: String(quietPort()) });
   };
   const state = (name: string) => join(scratch, "state", name);
 
@@ -154,6 +198,314 @@ describe("server.log", () => {
   it("shows the last 15 lines", async () => {
     const started = await failedStart(`console.log(Array.from({ length: 40 }, (_, i) => "line " + i).join("\\n"));`);
     expect(shown(started.err)).toEqual(Array.from({ length: 15 }, (_, i) => `line ${i + 25}`));
+  });
+});
+
+describe("starts at the same moment", () => {
+  it("open one server between them, whose record stop finds", async () => {
+    // each stand-in server reports its pid here, then binds only once the test says go: both starts
+    // decide while the first one's server has not taken the port yet
+    const control = join(scratch, "control.sock");
+    const servers: { pid: number; socket: { write(data: string): number } }[] = [];
+    const listeners: (() => void)[] = [];
+    let open = false;
+    const listener = Bun.listen<undefined>({
+      unix: control,
+      socket: {
+        data(socket, chunk) {
+          servers.push({ pid: Number(String(chunk).trim()), socket });
+          if (open) socket.write("go\n");
+          for (const notify of listeners) notify();
+        },
+      },
+    });
+    const serversUp = (count: number) => new Promise<void>((resolve) => {
+      const check = () => { if (servers.length >= count) resolve(); };
+      listeners.push(check);
+      check();
+    });
+    const root = join(scratch, "root");
+    mkdirSync(join(root, "server"), { recursive: true });
+    writeFileSync(join(root, "server", "managed.ts"), `
+      const go = Promise.withResolvers<void>();
+      const socket = await Bun.connect({ unix: ${JSON.stringify(control)}, socket: { data() { go.resolve(); } } });
+      socket.write(process.pid + "\\n");
+      await go.promise;
+      try {
+        Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT), fetch: () => Response.json(${JSON.stringify({ ...APP_HEALTH, bridge_protocol: 1 })}) });
+      } catch {
+        console.log("the port is taken");
+        process.exit(1);
+      }
+    `);
+    const port = String(quietPort());
+    async function within<T>(promise: Promise<T>, what: string): Promise<T> {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), 15_000); })]);
+      } finally { clearTimeout(timer); }
+    }
+    try {
+      const first = launch("start", { HERDR_PLUGIN_ROOT: root, PORT: port });
+      await within(serversUp(1), "the first start's server");
+      const second = launch("start", { HERDR_PLUGIN_ROOT: root, PORT: port });
+      const reader = second.stdout.getReader();
+      const decoder = new TextDecoder();
+      let secondOut = "";
+      /** reads the second start's output until it says `text`, or to its end */
+      const readSecond = async (text?: string) => {
+        while (text === undefined || !secondOut.includes(text)) {
+          const { value, done } = await reader.read();
+          if (done) return;
+          secondOut += decoder.decode(value, { stream: true });
+        }
+      };
+      // the second start either waits for the first or (the bug) opens a server of its own
+      const waits = readSecond("another start or stop of Ovis is running");
+      await within(Promise.race([waits, serversUp(2)]), "the second start to wait or spawn");
+      open = true;
+      for (const server of servers) server.socket.write("go\n");
+      const [firstOut, firstCode] = await within(Promise.all([new Response(first.stdout).text(), first.exited]), "the first start");
+      const [secondCode] = await within(Promise.all([second.exited, waits.then(() => readSecond())]), "the second start");
+      expect(servers.map((server) => server.pid), "regression (fails on main): the second start opened a second server").toHaveLength(1);
+      const pid = servers[0]!.pid;
+      expect(firstCode, firstOut).toBe(0);
+      expect(secondCode, secondOut).toBe(0);
+      expect(secondOut).toContain(`Ovis already running at http://127.0.0.1:${port}`);
+      expect(readFileSync(join(scratch, "state", "server.pid"), "utf8")).toBe(`${pid}\n`);
+      const stopped = await run("stop", { HERDR_PLUGIN_ROOT: root, PORT: port });
+      expect(stopped.exitCode, stopped.err).toBe(0);
+      expect(stopped.out).toContain(`stopped Ovis (pid ${pid})`);
+      // gone, or exited and not yet reaped by whatever adopted it: stop counts a zombie as gone, and
+      // signal 0 still reaches one; without /proc (macOS) signal 0 is all there is
+      if (existsSync("/proc/self/stat")) {
+        const stat = (() => { try { return readFileSync(`/proc/${pid}/stat`, "utf8"); } catch { return null; } })();
+        expect(stat === null ? "gone" : stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]).toMatch(/^(gone|Z)$/);
+      } else expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      for (const { pid } of servers) try { process.kill(-pid, "SIGKILL"); } catch { /* stopped */ }
+      listener.stop(true);
+    }
+  }, 60_000);
+
+  /** a recorded server (a sleep) on a free port, and a root whose stand-in server marks that it was spawned */
+  const recordedSleeper = (birth: (pid: number) => unknown) => {
+    const server = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    mkdirSync(join(scratch, "state"), { recursive: true });
+    writeFileSync(join(scratch, "state", "server.pid"), `${server.pid}\n`);
+    writeFileSync(join(scratch, "state", "server.owner"), JSON.stringify({ pid: server.pid, birth: birth(server.pid!) }));
+    const root = join(scratch, "root");
+    mkdirSync(join(root, "server"), { recursive: true });
+    writeFileSync(join(root, "server", "managed.ts"), `require("node:fs").writeFileSync(${JSON.stringify(join(scratch, "spawned"))}, ""); process.exit(1);\n`);
+    return { server, root };
+  };
+  const freePortNumber = async () => String(quietPort());
+
+  it("leave a server an earlier start left running alone when it does not answer and its port is free", async () => {
+    const { server, root } = recordedSleeper((pid) => { const reading = readProcessBirth(pid); return reading.state === "identified" ? reading.birth : null; });
+    try {
+      const started = await run("start", { HERDR_PLUGIN_ROOT: root, PORT: await freePortNumber() });
+      expect(existsSync(join(scratch, "spawned")), "regression (fails on main): a second server was spawned over the running one's record").toBe(false);
+      expect(started.exitCode).toBe(1);
+      expect(started.err).toContain(`Ovis (pid ${server.pid}) is still running but does not answer`);
+      expect(readFileSync(join(scratch, "state", "server.pid"), "utf8")).toBe(`${server.pid}\n`);
+    } finally { process.kill(-server.pid!, "SIGKILL"); }
+  });
+
+  it.skipIf(platform() === "win32" || process.getuid?.() === 0)("say at once that a state dir they cannot write stops them, instead of waiting on it as on another start", async () => {
+    const dir = join(scratch, "state");
+    mkdirSync(dir);
+    chmodSync(dir, 0o500);
+    try {
+      const started = Date.now();
+      const stopped = await run("stop");
+      expect(stopped.exitCode).toBe(1);
+      expect(stopped.err).toContain(`could not stop Ovis: ${join(dir, "lifecycle.lock.guard")} could not be opened`);
+      expect(stopped.out, "regression: it waited as if another start held the lock").not.toContain("waiting for it to finish");
+      expect(Date.now() - started).toBeLessThan(10_000);
+    } finally { chmodSync(dir, 0o700); }
+  });
+
+  // a recorded server that exited while its parent (a plugin host, say) has not reaped it yet
+  it.skipIf(platform() !== "linux" || !Bun.which("setsid"))("start a server when the recorded one has exited but is not reaped yet", async () => {
+    const parent = spawn("sh", ["-c", `setsid sh -c 'echo $$; exec sleep 0.2' & exec sleep 30`], { stdio: ["ignore", "pipe", "ignore"] });
+    try {
+      const pid = Number(await new Promise<string>((resolve) => parent.stdout!.once("data", (chunk) => resolve(String(chunk).trim()))));
+      const reading = readProcessBirth(pid);
+      expect(reading.state).toBe("identified");
+      const state = () => readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]!.split(" ")[0];
+      const deadline = Date.now() + 5_000;
+      while (state() !== "Z" && Date.now() < deadline) await Bun.sleep(20);
+      expect(state()).toBe("Z");
+      mkdirSync(join(scratch, "state"), { recursive: true });
+      writeFileSync(join(scratch, "state", "server.pid"), `${pid}\n`);
+      writeFileSync(join(scratch, "state", "server.owner"), JSON.stringify({ pid, birth: reading.state === "identified" ? reading.birth : null }));
+      const root = join(scratch, "root");
+      mkdirSync(join(root, "server"), { recursive: true });
+      writeFileSync(join(root, "server", "managed.ts"), `require("node:fs").writeFileSync(${JSON.stringify(join(scratch, "spawned"))}, ""); process.exit(1);\n`);
+      const started = await run("start", { HERDR_PLUGIN_ROOT: root, PORT: await freePortNumber() });
+      expect(started.err, "regression: an exited, unreaped server was taken for a running one").not.toContain("is still running");
+      expect(existsSync(join(scratch, "spawned"))).toBe(true);
+    } finally { parent.kill("SIGKILL"); }
+  }, 30_000);
+
+  it("take turns in the dir herdr hands them, while the record is still under the old id's", async () => {
+    // a server started under the old id runs; herdr hands the updated plugin the new id's dir. A
+    // start and a stop that read the record in different dirs must still share one lock
+    const plugins = join(scratch, "plugins");
+    const legacy = join(plugins, "devswha.herdr-web-ui");
+    const current = join(plugins, "devswha.ovis");
+    mkdirSync(legacy, { recursive: true });
+    const server = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    try {
+      writeFileSync(join(legacy, "server.pid"), `${server.pid}\n`);
+      const stopped = await run("stop", { HERDR_PLUGIN_STATE_DIR: current, PORT: "1" });
+      expect(stopped.exitCode, stopped.err).toBe(0);
+      expect(existsSync(join(current, "lifecycle.lock.guard"))).toBe(true);
+      expect(existsSync(join(legacy, "lifecycle.lock.guard")), "regression: the lock followed the record into the old id's dir").toBe(false);
+    } finally {
+      try { process.kill(-server.pid!, "SIGKILL"); } catch { /* stopped */ }
+    }
+  });
+
+  it("keep a server whose birth matches though the clock stepped forward past the record", async () => {
+    // the wall clock jumped (NTP on a PC without a clock of its own, a resumed VM): the record now
+    // looks older than this boot, though the very process it names runs
+    const { server, root } = recordedSleeper((pid) => { const reading = readProcessBirth(pid); return reading.state === "identified" ? reading.birth : null; });
+    const beforeBoot = (Date.now() - uptime() * 1000) / 1000 - 3600;
+    utimesSync(join(scratch, "state", "server.owner"), beforeBoot, beforeBoot);
+    try {
+      const started = await run("start", { HERDR_PLUGIN_ROOT: root, PORT: await freePortNumber() });
+      expect(existsSync(join(scratch, "spawned")), "regression: a live server with its own birth was taken for one from before this boot").toBe(false);
+      expect(started.err).toContain(`Ovis (pid ${server.pid}) is still running but does not answer`);
+      const stopped = await run("stop", { HERDR_PLUGIN_ROOT: root, PORT: "1" });
+      expect(stopped.out).toContain(`stopped Ovis (pid ${server.pid})`);
+      expect(() => process.kill(server.pid!, 0)).toThrow();
+    } finally { try { process.kill(-server.pid!, "SIGKILL"); } catch { /* stopped */ } }
+  }, 30_000);
+
+  it("leave a server alone whose birth could not be read when it was started, while it still runs", async () => {
+    const { server, root } = recordedSleeper(() => undefined);
+    writeFileSync(join(scratch, "state", "server.owner"), JSON.stringify({ pid: server.pid, birth_unknown: true }));
+    try {
+      const started = await run("start", { HERDR_PLUGIN_ROOT: root, PORT: await freePortNumber() });
+      expect(existsSync(join(scratch, "spawned")), "regression: a server whose birth could not be read was taken for gone").toBe(false);
+      expect(started.err).toContain(`Ovis (pid ${server.pid}) is still running but does not answer`);
+    } finally { process.kill(-server.pid!, "SIGKILL"); }
+  });
+
+  it("start a server when the PC restarted after a record whose birth could not be read", async () => {
+    const { server, root } = recordedSleeper(() => undefined);
+    const owner = join(scratch, "state", "server.owner");
+    writeFileSync(owner, JSON.stringify({ pid: server.pid, birth_unknown: true }));
+    // written an hour before this boot: whatever holds its pid now is another process
+    const beforeBoot = (Date.now() - uptime() * 1000) / 1000 - 3600;
+    utimesSync(owner, beforeBoot, beforeBoot);
+    try {
+      await run("start", { HERDR_PLUGIN_ROOT: root, PORT: await freePortNumber() });
+      expect(existsSync(join(scratch, "spawned"))).toBe(true);
+    } finally { process.kill(-server.pid!, "SIGKILL"); }
+  });
+
+  /** Another process holding the lifecycle lock (or, with `guardOnly`, only its native guard, as one stopped mid-acquisition would) until released. */
+  const holdLock = async (guardOnly = false) => {
+    const lock = join(scratch, "state", "lifecycle.lock");
+    mkdirSync(join(scratch, "state"), { recursive: true });
+    const module = JSON.stringify(join(ROOT, "server", "owner-guard.ts"));
+    const say = `require("node:fs").writeSync(1, "HOLDING\\n")`;
+    const script = guardOnly
+      ? `const { withOwnerGuard } = await import(${module}); withOwnerGuard(${JSON.stringify(lock)}, () => { ${say}; require("node:fs").readSync(0, Buffer.alloc(1), 0, 1, null); });`
+      : `const { acquireOwnerDirectory } = await import(${module}); const lease = acquireOwnerDirectory(${JSON.stringify(lock)}, { running: "x", starting: "x" }); ${say}; require("node:fs").readSync(0, Buffer.alloc(1), 0, 1, null); lease.release();`;
+    const holder = Bun.spawn([process.execPath, "-e", script], { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+    await readUntil(holder.stdout.getReader(), "HOLDING", "the lock holder");
+    return {
+      release: async () => { holder.stdin.write("\n"); holder.stdin.end(); await holder.exited; },
+      kill: () => holder.kill("SIGKILL"),
+    };
+  };
+  /** Reads a process's output until it says `text`, within 15 s; what it said so far. */
+  const readUntil = async (reader: ReadableStreamDefaultReader<Uint8Array>, text: string, what: string) => {
+    const decoder = new TextDecoder();
+    let said = "";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} did not say "${text}" within 15s; it said: ${said}`)), 15_000); });
+    try {
+      while (!said.includes(text)) {
+        const { value, done } = await Promise.race([reader.read(), late]);
+        if (done) throw new Error(`${what} ended without saying "${text}"; it said: ${said}`);
+        said += decoder.decode(value, { stream: true });
+      }
+      return said;
+    } finally { clearTimeout(timer); }
+  };
+
+  it("do not block on the lock's guard while another process holds it, so they can say why they wait", async () => {
+    const holder = await holdLock(true);
+    try {
+      const stop = launch("stop", { PORT: "1" });
+      await readUntil(stop.stdout.getReader(), "waiting for it to finish", "regression: stop, blocked on the guard,");
+      await holder.release();
+      expect(await stop.exited).toBe(0);
+    } finally { holder.kill(); }
+  }, 30_000);
+
+  it("follow the port a start they waited for moved to, and find its server there", async () => {
+    const portA = await freePortNumber();
+    const keepPort = (port: number | string) => {
+      mkdirSync(join(scratch, ".config", "ovis"), { recursive: true });
+      writeFileSync(join(scratch, ".config", "ovis", "plugin-port"), `${port}\n`);
+    };
+    keepPort(portA);
+    const holder = await holdLock();
+    const ours = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json(APP_HEALTH) });
+    const { server, root } = recordedSleeper((pid) => { const reading = readProcessBirth(pid); return reading.state === "identified" ? reading.birth : null; });
+    // the start waits behind the other, which then moves to another port, records its server and comes up there
+    rmSync(join(scratch, "state", "server.pid"));
+    try {
+      const start = launch("start", { HERDR_PLUGIN_ROOT: root });
+      const reader = start.stdout.getReader();
+      let out = await readUntil(reader, "waiting for it to finish", "the waiting start");
+      keepPort(ours.port!);
+      writeFileSync(join(scratch, "state", "server.pid"), `${server.pid}\n`);
+      await holder.release();
+      const code = await start.exited;
+      for (;;) { const { value, done } = await reader.read(); if (done) break; out += new TextDecoder().decode(value); }
+      expect(out, "regression: the start kept the port it read before its turn").toContain(`already running at http://127.0.0.1:${ours.port}`);
+      expect(code).toBe(0);
+      expect(existsSync(join(scratch, "spawned"))).toBe(false);
+    } finally {
+      holder.kill();
+      process.kill(-server.pid!, "SIGKILL");
+      await ours.stop(true);
+    }
+  }, 30_000);
+
+  it("stop the server they spawned when its record cannot be written, so none runs unrecorded", async () => {
+    mkdirSync(join(scratch, "state", "server.owner"), { recursive: true }); // a path that cannot take the record
+    const root = join(scratch, "root");
+    mkdirSync(join(root, "server"), { recursive: true });
+    writeFileSync(join(root, "server", "managed.ts"), "setInterval(() => {}, 1 << 30);\n");
+    let pid = 0;
+    try {
+      const started = await run("start", { HERDR_PLUGIN_ROOT: root, PORT: await freePortNumber() });
+      const recorded = existsSync(join(scratch, "state", "server.pid")) ? Number(readFileSync(join(scratch, "state", "server.pid"), "utf8").trim()) : 0;
+      pid = Number(started.err.match(/could not record the server it started \(pid (\d+)\)/)?.[1] ?? recorded);
+      expect(pid, started.err).toBeGreaterThan(0);
+      expect(() => process.kill(pid, 0), "regression: the unrecorded server kept running").toThrow();
+      expect(started.exitCode).toBe(1);
+      expect(started.err).toContain("it was stopped");
+      expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
+    } finally { if (pid > 0) try { process.kill(-pid, "SIGKILL"); } catch { /* stopped */ } }
+  }, 30_000);
+
+  it("start a server when the recorded pid now runs another process", async () => {
+    // the birth kept for the record is not the one running under its pid: the pid was handed on
+    const { server, root } = recordedSleeper(() => ({ platform: process.platform, value: process.platform === "linux" ? `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}:1` : "Thu Jan 1 00:00:00 1970" }));
+    try {
+      const started = await run("start", { HERDR_PLUGIN_ROOT: root, PORT: await freePortNumber() });
+      expect(existsSync(join(scratch, "spawned"))).toBe(true);
+      expect(started.err).toContain("the server stopped (exit 1)");
+    } finally { process.kill(-server.pid!, "SIGKILL"); }
   });
 });
 
@@ -312,6 +664,24 @@ describe("stop", () => {
     }
   });
 
+  it("does not signal a process that took the recorded server's pid", async () => {
+    // the server recorded here had another birth: the process under its pid now is someone else's
+    const other = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    try {
+      mkdirSync(join(scratch, "state"));
+      writeFileSync(join(scratch, "state", "server.pid"), `${other.pid}\n`);
+      const earlier = { platform: process.platform, value: process.platform === "linux" ? `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}:1` : "Thu Jan 1 00:00:00 1970" };
+      writeFileSync(join(scratch, "state", "server.owner"), JSON.stringify({ pid: other.pid, birth: earlier }));
+      const stopped = await run("stop", { PORT: "1" });
+      expect(stopped.exitCode, stopped.err).toBe(0);
+      expect(() => process.kill(other.pid!, 0), "regression: stop signalled a process that is not the server").not.toThrow();
+      expect(stopped.out).toContain(`Ovis is not running (pid ${other.pid} now belongs to another process)`);
+      expect(existsSync(join(scratch, "state", "server.pid"))).toBe(false);
+    } finally {
+      try { process.kill(-other.pid!, "SIGKILL"); } catch { /* stopped */ }
+    }
+  });
+
   it("returns only once the server's process group is gone", async () => {
     // a server that takes a second to exit, as the supervisor does while its bridge shuts down
     const server = spawn("sh", ["-c", "trap 'sleep 1; exit 0' TERM; while :; do sleep 0.1; done"], { detached: true, stdio: "ignore" });
@@ -387,5 +757,276 @@ describe("the state dir when run by hand", () => {
     expect(herdrStateDir({}, "darwin", "/h")).toBe(join("/h", ".local", "state", "herdr"));
     expect(herdrStateDir({ LOCALAPPDATA: "C:/L" }, "win32", "/h")).toBe(join("C:/L", "herdr"));
     expect(herdrStateDir({ USERPROFILE: "C:/U" }, "win32", "/h")).toBe(join("C:/U", "AppData", "Local", "herdr"));
+  });
+});
+
+describe("add and login", () => {
+  /** An Ovis on a port of its own whose PC is already in an account: `link` says so and ends. */
+  function linkedPc() {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/health") return Response.json(APP_HEALTH);
+      if (path === "/api/account/status") return Response.json({ account: "acct_1", unlinked: [], removals: [], adds: [], blocked: [] });
+      return new Response(null, { status: 404 });
+    } });
+    writeFileSync(join(configDir, ".env"), `PORT=${server.port}\n`);
+    return { server, env: { HOST: "127.0.0.1", HERDR_PLUGIN_ROOT: ROOT, HERDR_PLUGIN_CONFIG_DIR: configDir, OVIS_STATE_DIR: join(scratch, "app-state"), OVIS_TOKEN: "" } };
+  }
+
+  it("are names of link", async () => {
+    expect(COMMAND_ALIASES).toEqual({ add: "link", login: "link" });
+    const { server, env } = linkedPc();
+    try {
+      for (const name of ["link", "add", "login"]) {
+        const result = await run(name, env);
+        expect([name, result.out, result.exitCode], result.err).toEqual([name, "This PC is already in an Ovis account (acct_1).\n", 0]);
+      }
+    } finally { server.stop(true); }
+  });
+
+  it("run the release the app updated to as link, the one name a release from before them knows", async () => {
+    const { server, env } = linkedPc();
+    try {
+      const release = join(updateStateDir(ROOT, server.port!, join(scratch, "app-state")), "release-test");
+      mkdirSync(join(release, "scripts"), { recursive: true });
+      writeFileSync(join(release, "scripts", "plugin.ts"), 'console.log("active release", process.argv.slice(2).join(" "));');
+      const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: ROOT, windowsHide: true }).stdout.toString().trim();
+      writeFileSync(join(release, "..", "current.json"), JSON.stringify({ source_revision: revision, directory: release }));
+      for (const name of ["add", "login"]) {
+        const result = await run(name, env);
+        expect([result.out, result.exitCode], result.err).toEqual(["active release link\n", 0]);
+      }
+    } finally { server.stop(true); }
+  });
+
+  it("take the code back when the output went away: a write that fails stops the run as its signal would", async () => {
+    const key = generateKeyPair();
+    const calls: string[] = [];
+    let codes = 0;
+    let cancelled: (() => void) | null = null;
+    const taken = new Promise<void>((resolve) => { cancelled = resolve; });
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/health") return Response.json(APP_HEALTH);
+      calls.push(`${request.method} ${path}`);
+      if (path === "/api/relay") return Response.json({ phase: "online", blocked: null });
+      // a code that runs out in a second, so the next one is written soon
+      const soon = new Date(Date.now() + 1_000).toISOString();
+      if (path === "/api/relay/code") return Response.json({ code: `ABCD-EFGH-J${++codes}`, expires_at: soon, server_id: "0123456789abcdef0123456789abcdef" });
+      if (path === "/api/relay/offer") return Response.json({ url: encodeOffer({ v: 1, server_id: "0123456789abcdef0123456789abcdef", server_public_key: exportPublicKey(key.publicKey), relay: "wss://relay.ovis.sh", code: "123456" }, "https://app.ovis.sh"), expires_at: soon });
+      if (path === "/api/devices/pair/cancel") { cancelled?.(); return Response.json({ ok: true, cancelled: true }); }
+      return new Response(null, { status: 404 });
+    } });
+    writeFileSync(join(configDir, ".env"), `PORT=${server.port}\n`);
+    // its reader takes the first code's lines and ends: the write of the next code fails
+    const child = Bun.spawn(["sh", "-c", "bun scripts/plugin.ts link --code | head -n 2"], {
+      cwd: ROOT, stdout: "pipe", stderr: "pipe",
+      env: launchEnv({ HOST: "127.0.0.1", HERDR_PLUGIN_ROOT: ROOT, HERDR_PLUGIN_CONFIG_DIR: configDir, OVIS_STATE_DIR: join(scratch, "app-state"), OVIS_TOKEN: "" }),
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let result: "taken back" | "left valid";
+    try {
+      // a run whose write failed unheard is gone at once, with nothing taken back: its exit is the other end of the wait
+      result = await Promise.race([
+        taken.then(() => "taken back" as const),
+        child.exited.then(() => "left valid" as const),
+        new Promise<"left valid">((resolve) => { timer = setTimeout(() => resolve("left valid"), 15_000); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      child.kill();
+      await child.exited;
+      await server.stop(true);
+    }
+    expect([result, calls.filter((call) => call === "POST /api/relay/offer").length], await new Response(child.stderr).text()).toEqual(["taken back", 2]);
+  }, 30_000);
+
+  it("are in the usage an unknown command gets, with what they do", async () => {
+    const result = await run("constructor", { HERDR_PLUGIN_CONFIG_DIR: configDir });
+    expect(result.exitCode).toBe(2);
+    expect(result.err).toBe([
+      "usage: bun scripts/plugin.ts <start|stop|status|pair|link|add|login|phone|phone-setup>",
+      "add (also login, link): sign this PC in, then scan its QR code with a device of your Ovis account to add it (--approve: approve that device here instead; --print: write the QR code where there is no terminal).",
+      "link --code: show a code and a QR code to pair one device instead.",
+      "",
+    ].join("\n"));
+  });
+});
+
+describe("pair --approve", () => {
+  /** An Ovis on a port of its own with two requests waiting, which records what is decided about them. */
+  function waitingPc() {
+    const decisions: unknown[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/health") return Response.json(APP_HEALTH);
+      if (path === "/api/relay/pairings") return Response.json({ pairings: [{ id: "p1", label: "Phone one", digits: "111222" }, { id: "p2", label: "Phone two", digits: "333444" }] });
+      if (path === "/api/relay/pairing") { decisions.push(await request.json()); return Response.json({ ok: true }); }
+      return new Response(null, { status: 404 });
+    } });
+    return { server, decisions };
+  }
+
+  it("answers nothing with lines piped in, whatever they carry: it is not a terminal, so it says so and fails, and no request is declined", async () => {
+    const { server, decisions } = waitingPc();
+    try {
+      // both requests' digits, as `printf '222\n444\n' | ovis pair --approve` hands them over (or an ssh without -t)
+      const result = await run("pair", { PORT: String(server.port) }, { args: ["--approve"], stdin: "222\n444\n" });
+      expect(result.exitCode, result.err).toBe(1);
+      expect(result.out).toBe("This is not run in a terminal, so no request can be answered here. Nothing was declined: the requests keep waiting. Run this in a terminal to answer them (over ssh, run ssh -t).\n");
+      // the requests still wait, the person's own phone among them
+      expect(decisions).toEqual([]);
+    } finally { await server.stop(true); }
+  });
+
+  // The real terminal, and the system's own tcflush behind `discardTyped`: a fake keyboard cannot show that the
+  // input queue named there is the one that holds what was typed. `script` runs the command on a pty of its own
+  it.skipIf(platform() === "win32" || Bun.which("script") === null)("discards what was typed at a real terminal before the question showed: digits begun ahead of it are no part of the Enter pressed at it", async () => {
+    const decisions: unknown[] = [];
+    let asked = (): void => undefined;
+    // held until the digits typed ahead are in the terminal
+    const typedAhead = new Promise<void>((resolve) => { asked = resolve; });
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 60, async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/health") return Response.json(APP_HEALTH);
+      if (path === "/api/relay/pairings") { await typedAhead; return Response.json({ pairings: [{ id: "p1", label: "Phone one", digits: "111222" }] }); }
+      if (path === "/api/relay/pairing") { decisions.push(await request.json()); return Response.json({ ok: true }); }
+      return new Response(null, { status: 404 });
+    } });
+    const bin = join(scratch, "bin");
+    const env: Record<string, string | undefined> = { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}`, HOME: scratch, HERDR_PLUGIN_STATE_DIR: join(scratch, "state"), PORT: String(server.port) };
+    for (const key of ["HERDR_PLUGIN_CONFIG_DIR", "HOST", "OVIS_TOKEN", "OVIS_STATE_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME"]) delete env[key];
+    // util-linux takes the command as one string, BSD (macOS) as arguments after the file it records to. Behind cat:
+    // Bun hands a child a socket for stdin, which macOS's script refuses (tcgetattr), and cat gives it a pipe
+    const command = platform() === "darwin" ? "script -q /dev/null bun scripts/plugin.ts pair --approve" : "script -qfec 'bun scripts/plugin.ts pair --approve' /dev/null";
+    const child = Bun.spawn(["sh", "-c", `cat | ${command}`], { cwd: ROOT, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    let screen = "";
+    const reading = (async () => { for await (const chunk of child.stdout) screen += Buffer.from(chunk).toString(); })();
+    const shows = async (text: string): Promise<void> => {
+      const deadline = Date.now() + 20_000;
+      while (!screen.includes(text)) {
+        if (Date.now() > deadline) throw new Error(`the terminal never showed ${JSON.stringify(text)}: ${JSON.stringify(screen)}`);
+        await Bun.sleep(25);
+      }
+    };
+    try {
+      // the request's own last three digits, typed and not sent before anything is asked: the terminal echoes them
+      child.stdin.write("222");
+      child.stdin.flush();
+      await shows("222");
+      asked();
+      await shows("press Enter to decline: ");
+      // fixed wait: a line counts only a second and a half after its question showed, by the command's own clock
+      await Bun.sleep(1_700);
+      child.stdin.write("\n");
+      child.stdin.flush();
+      // kept, the digits would head the line this Enter sends and approve the request; discarded, the line is empty
+      await shows("Declined.");
+      expect(decisions).toEqual([{ id: "p1", decision: "decline" }]);
+      expect(screen).not.toContain("That line answered nothing");
+      child.stdin.end();
+      expect(await child.exited).toBe(0);
+    } finally {
+      // the end of the input ends cat, and with it the terminal and the command on it
+      try { child.stdin.end(); } catch { /* ended above */ }
+      child.kill();
+      await reading.catch(() => undefined);
+      await server.stop(true);
+    }
+  }, 40_000);
+
+  it("says so when no device waits", async () => {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      return path === "/api/health" ? Response.json(APP_HEALTH) : path === "/api/relay/pairings" ? Response.json({ pairings: [] }) : new Response(null, { status: 404 });
+    } });
+    try {
+      const result = await run("pair", { PORT: String(server.port) }, { args: ["--approve"], stdin: "" });
+      expect([result.out, result.exitCode], result.err).toEqual(["No device is waiting to pair.\n", 0]);
+    } finally { await server.stop(true); }
+  });
+});
+
+describe("pair relay offer", () => {
+  async function pairWithRelay(phase: "online" | "off" | "missing" | "malformed" | "bad-offer") {
+    const key = generateKeyPair();
+    let offerRequests = 0;
+    let validOfferUrl = "";
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/api/health") return Response.json(APP_HEALTH);
+        if (path === "/api/devices/pair/start") return Response.json({ code: "123456", expires_at: "2030-01-01T00:00:00.000Z" });
+        if (path === "/api/access") return Response.json({ tailscale: { serving_url: null } });
+        if (path === "/api/relay") {
+          if (phase === "missing") return new Response("not found", { status: 404 });
+          if (phase === "malformed") return new Response("{", { headers: { "content-type": "application/json" } });
+          return Response.json({ phase: phase === "bad-offer" ? "online" : phase });
+        }
+        if (path === "/api/relay/offer") {
+          offerRequests++;
+          expect(request.method).toBe("POST");
+          expect(request.headers.get("x-herdr-update")).toBe("1");
+          expect(request.headers.get("origin")).toBe(`http://127.0.0.1:${server.port}`);
+          if (phase === "bad-offer") return Response.json({ url: "https://app.ovis.sh/#offer=not-valid" });
+          // Construct via the shared encoder so this fixture exercises the production URL contract.
+          validOfferUrl = encodeOffer({
+            v: 1, server_id: "0123456789abcdef0123456789abcdef",
+            server_public_key: exportPublicKey(key.publicKey), relay: "wss://relay.ovis.sh", code: "123456",
+          }, "https://app.ovis.sh");
+          return Response.json({ url: validOfferUrl, expires_at: "2030-01-01T00:00:00.000Z" });
+        }
+        return new Response(null, { status: 404 });
+      },
+    });
+    try {
+      const result = await run("pair", { PORT: String(server.port) });
+      return { ...result, offerRequests };
+    } finally {
+      await server.stop(true);
+    }
+  }
+
+  it("prints the relay offer URL and QR only while online", async () => {
+    const result = await pairWithRelay("online");
+    expect(result.exitCode, result.err).toBe(0);
+    expect(result.out).toContain("Ovis relay");
+    const printedUrl = result.out.split("\n").find((line) => line.includes("#offer="));
+    expect(printedUrl).toBeString();
+    const offer = decodeOffer(printedUrl!);
+    expect(offer?.code).toBe("123456");
+    const printedCode = /Pairing code: (\d{3}) (\d{3})/.exec(result.out);
+    expect(printedCode?.[1] + printedCode?.[2]).toBe(offer?.code);
+    expect(result.out.slice(result.out.indexOf(printedUrl!) + printedUrl!.length)).toContain("█");
+    expect(result.offerRequests).toBe(1);
+  });
+
+  it("prints one settings hint while relay is off and never requests an offer", async () => {
+    const result = await pairWithRelay("off");
+    expect(result.exitCode, result.err).toBe(0);
+    expect(result.out).not.toContain("#offer=");
+    expect(result.out.match(/To turn on Ovis relay:/g)).toHaveLength(1);
+    expect(result.offerRequests).toBe(0);
+  });
+
+  it("prints nothing extra when the relay API is missing", async () => {
+    const result = await pairWithRelay("missing");
+    expect(result.exitCode, result.err).toBe(0);
+    expect(result.out).not.toContain("Ovis relay");
+    expect(result.out).not.toContain("To turn on Ovis relay:");
+    expect(result.offerRequests).toBe(0);
+  });
+
+  it("reports malformed relay responses without crashing or printing a QR", async () => {
+    const status = await pairWithRelay("malformed");
+    expect(status.exitCode).toBe(0);
+    expect(status.err).toContain("Could not read Ovis relay pairing:");
+    expect(status.out).not.toContain("#offer=");
+    const offer = await pairWithRelay("bad-offer");
+    expect(offer.exitCode).toBe(0);
+    expect(offer.err).toContain("Could not read Ovis relay pairing:");
+    expect(offer.out).not.toContain("#offer=");
   });
 });

@@ -7,6 +7,9 @@ import { errors as browserErrors, type Browser, type Page } from "playwright-cor
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { chromePath } from "./chrome-path.ts";
+// machine events stay on SSE here: the page watches its status events on /api/machines/events
+// (the socket transport has its own checks), also when this script runs on its own
+process.env["OVIS_MACHINE_EVENTS_WS"] = "0";
 
 /**
  * The alert sound: real herdr status changes make the open tab chime, once a tap let the page
@@ -155,7 +158,7 @@ export async function checkAlertSound(browser: Browser, origin: string): Promise
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await openSettingsPage(page, "Alerts");
-    const sound = page.getByRole("switch", { name: "Sound", exact: true });
+    const sound = page.getByRole("switch", { name: "Play sounds", exact: true });
     await sound.click();
     assert.equal(await sound.getAttribute("aria-checked"), "false");
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ovis:settings") ?? "{}").alertSound), false);

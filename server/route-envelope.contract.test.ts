@@ -15,11 +15,11 @@ const JSON_ROUTES = [
   "/api/workspace/directories", "/api/workspace/create", "/api/tab/create",
   "/api/worktree/remove", "/api/worktree/create", "/api/worktree/open",
   "/api/workspace/rename", "/api/workspace/move", "/api/workspace/close",
-  "/api/tab/rename", "/api/tab/close", "/api/tab/move", "/api/plugin/action",
+  "/api/tab/rename", "/api/tab/close", "/api/tab/move", "/api/tab/move-to-workspace", "/api/plugin/action",
   "/api/pane/rename", "/api/agent/rename", "/api/pane/find", "/api/pane/scroll",
   "/api/pane/input", "/api/pane/keys", "/api/pane/close", "/api/layout/ratio",
-  "/api/pane/split", "/api/pane/zoom", "/api/pane/swap", "/api/pane/resize",
-  "/api/pane/clear", "/api/pane/focus", "/api/pane/image",
+  "/api/pane/split", "/api/pane/zoom", "/api/pane/swap", "/api/pane/move", "/api/pane/resize",
+  "/api/pane/clear", "/api/pane/focus", "/api/pane/image", "/api/pane/pull-requests/merge",
 ] as const;
 
 /** a GET here is a route of its own, not the wrong method for the POST */

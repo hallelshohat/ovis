@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { posix } from "node:path";
 import { fail, files, lineOf, read, stripComments } from "../scripts/source-scan.ts";
 
 // Server rules from AGENTS.md and server/AGENTS.md that used to be prose only. Each failure says
@@ -162,6 +163,8 @@ describe("herdr socket", () => {
   };
   const NET_CONNECT_ALLOWED: Record<string, string> = {
     "server/ssh-askpass.ts": "the SSH askpass helper's own private socket, not herdr's",
+    "server/herdr-core/adapter.ts": "a liveness probe of the core adapter's own socket before startup: sends no request",
+    "server/runtime-move-lock.ts": "the herdr-core move's own lock socket, not herdr's: asks which Ovis server holds it",
   };
 
   it("opens herdr's socket only in server/herdr/client.ts", () => {
@@ -214,8 +217,93 @@ describe("herdr socket", () => {
 
   it("subscribes to status only in server/collector.ts", () => {
     const subscribers = matches(serverCode(), /\bsubscribeEvents\b/).filter((match) => match.file !== "server/herdr/client.ts" && match.file !== "server/collector.ts");
-    const raw = matches(files("{server,src,shared,scripts}/**/*.{ts,tsx,mjs,js}").filter((file) => !file.endsWith(".test.ts")), /["']events\.subscribe["']/).filter((match) => match.file !== "server/herdr/client.ts");
+    // server/herdr-core/adapter.ts is the other end: it answers herdr's events.subscribe (the
+    // collector's own, reaching it through HERDR_SOCKET) from hc's event stream of the same name;
+    // hc's generated types, their generator and the hc connection only name that hc method as a type
+    // server/herdr-core/pin-label.ts reads hc's own `labels` events for pins, never a pane's status;
+    // server/herdr-core/machine-scope.ts only narrows hc's stream to one machine's events for that adapter
+    const HC_STREAM_TYPES = ["server/herdr-core/adapter.ts", "server/herdr-core/hc-api.generated.ts", "scripts/hc-types.ts", "server/herdr-core/connection.ts", "server/herdr-core/pin-label.ts", "server/herdr-core/machine-scope.ts"];
+    const raw = matches(files("{server,src,shared,scripts}/**/*.{ts,tsx,mjs,js}").filter((file) => !file.endsWith(".test.ts")), /["']events\.subscribe["']/).filter((match) => match.file !== "server/herdr/client.ts" && !HC_STREAM_TYPES.includes(match.file));
     fail([...subscribers, ...raw].map((match) => match.at),
       "server/collector.ts is the only status subscription (startStatusCollector), and `events.subscribe` is sent only by subscribeEvents in server/herdr/client.ts: take pane status from the collector's callbacks (onStatus, onPaneEnded, onBaseline) in server/index.ts instead of subscribing again.");
+  });
+});
+
+describe("runtime gates", () => {
+  /**
+   * A gate on the runtime's name: a comparison with `"herdr-core"` or a `case` on it, any read of the
+   * served runtime's name (`capabilities().runtime`), or a comparison of the chosen one (`runtime()`).
+   * `"herdr"` alone names other things too (a turn's source, a query parameter), so it counts only
+   * beside one of those reads.
+   */
+  const NAMED = /[!=]== ?"herdr-core"|\bcase "herdr-core"\s*:|\bcapabilities\(\)\.runtime\b|\bruntime\(\)\s*[!=]==/;
+
+  // which runtime is served or named, not what it can do
+  const RUNTIME_NAMED: Record<string, string> = {
+    "server/runtime-move.ts": "the move goes from herdr to herdr-core",
+    "server/runtime-move-run.ts": "the move goes from herdr to herdr-core",
+    "server/runtime-move-service.ts": "the move goes from herdr to herdr-core",
+    "server/index.ts": "a saved choice of herdr-core falls back to herdr when no hc is found",
+    "server/machines.ts": "a remote PC's own Ovis is taken by the runtime its identity names",
+    "server/conversation.ts": "the name of hc's program in an attach client's argv",
+    "server/agents-routes.ts": "herdr itself starts two agent kinds without a manifest",
+    "server/herdr-update.ts": "`herdr update` updates herdr, no other runtime",
+  };
+
+  it("asks the runtime for an ability, never for its name", () => {
+    const named = matches([...serverCode(), ...files("shared/**/*.ts")].filter((file) => !file.startsWith("server/herdr-core/") && file !== "server/runtime/capabilities.ts"), NAMED);
+    fail(named.filter((use) => !(use.file in RUNTIME_NAMED)).map((use) => use.at),
+      "Do not branch on the runtime's name: read the ability the code needs from capabilities() (server/runtime/capabilities.ts), adding a field to RuntimeCapabilities and to each runtime's record when none fits.");
+    const users = new Set(named.map((use) => use.file));
+    fail(Object.keys(RUNTIME_NAMED).filter((file) => !users.has(file)),
+      "These files no longer compare the runtime's name: remove them from RUNTIME_NAMED in server/conventions.test.ts.");
+  });
+
+  it("knows a gate on the runtime's name from another use of the word", () => {
+    for (const gate of [
+      'if (identity.runtime !== "herdr-core") return;',
+      'if (capabilities().runtime === "herdr") kinds.add("omp");',
+      'const other = capabilities().runtime !== "herdr";',
+      'if (runtime() !== "herdr") return null;',
+      'if (runtime() === "herdr-core") start();',
+      'switch (served) { case "herdr": return 1; case "herdr-core": return 2; }',
+      'switch (capabilities().runtime) { case "herdr": return 1; default: return 2; }',
+    ]) expect(NAMED.test(gate)).toBe(true);
+    for (const other of [
+      // the runtime told, not asked: /api/health's answer
+      "return jsonResponse({ ok: true, runtime: runtime() });",
+      // another herdr: a query parameter, a turn's source, a program started
+      'const discover = url.searchParams.get("discover") === "herdr";',
+      'if (source === "herdr" && tracked) return;',
+      'switch (signal.source) { case "herdr": return turns.chat; default: return turns.herdr; }',
+      'const command = process.env["OVIS_HERDR_BIN"] || "herdr";',
+      // an ability read, which is what a gate should do
+      'if (capabilities().attach === "pty-cli") watch();',
+    ]) expect(NAMED.test(other)).toBe(false);
+  });
+});
+
+describe("remote PC bundle boundary", () => {
+  // scripts/build-remote-bundle.ts ships server/, shared/ and integrations/ but not src/ or relay/: code
+  // there that imports either loads from a checkout, where every check runs, and not on a remote PC (#2220)
+  const SRC_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']((?:\.\.\/)+(?:src|relay)\/[^"']*)["']/;
+  // server/relay/ is in the bundle: only a path that resolves to the checkout's own src/ or relay/ counts
+  const leavesBundle = (file: string, spec: string) => /^(?:src|relay)\//.test(posix.normalize(posix.join(posix.dirname(file), spec)));
+
+  it("never imports src/ or relay/ from code the remote bundle carries", () => {
+    const shipped = [...serverCode(), ...files("{shared,integrations}/**/*.{ts,mjs,js}").filter((file) => !file.endsWith(".test.ts"))];
+    fail(matches(shipped, SRC_IMPORT).filter((found) => leavesBundle(found.file, SRC_IMPORT.exec(found.code.slice(found.index))![1]!)).map((found) => found.at),
+      "The remote PC bundle (scripts/build-remote-bundle.ts) carries server/, shared/ and integrations/, not src/ or relay/: move what this code needs into shared/, as shared/markdown.ts was.");
+  });
+
+  it("knows an import of src/ from a mention", () => {
+    expect(SRC_IMPORT.test("import { parseInline } from \"../src/lib/markdown.ts\";")).toBe(true);
+    expect(SRC_IMPORT.test("const m = await import('../../src/lib/x.ts')")).toBe(true);
+    expect(SRC_IMPORT.test("import \"../src/styles.css\";")).toBe(true);
+    expect(SRC_IMPORT.test("import { PAIR_CLOSE } from \"../../relay/pair-room.ts\";")).toBe(true);
+    expect(SRC_IMPORT.test("import { a } from \"../shared/markdown.ts\";")).toBe(false);
+    expect(SRC_IMPORT.test("import { a } from \"./src-files.ts\";")).toBe(false);
+    expect(leavesBundle("server/relay/pair-code.ts", "../../relay/pair-room.ts")).toBe(true);
+    expect(leavesBundle("server/account/mailbox.ts", "../relay/identity.ts")).toBe(false);
   });
 });

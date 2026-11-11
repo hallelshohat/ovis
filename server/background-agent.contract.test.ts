@@ -227,9 +227,9 @@ it("reads the selected pane's running subagent, bounded, and names no path", asy
   });
   expect(Number.isFinite(Date.parse(body.server_time))).toBe(true);
   expect(JSON.stringify(body)).not.toContain(root);
-  // the list says which rows open: the subagent, not the session's background command
+  // the list says how each row opens: the subagent by its transcript, the background command by its output
   const activity: OmoActivity = await (await fetch(`${base()}/api/pane/omo-tasks?pane_id=${encodeURIComponent(first)}`, { headers: owner })).json();
-  expect(activity.tasks.map((task) => [task.id, task.status, task.detail_kind]).sort()).toEqual([["a1", "running", "claude-subagent"], ["bsuite", "running", null]]);
+  expect(activity.tasks.map((task) => [task.id, task.status, task.detail_kind]).sort()).toEqual([["a1", "running", "claude-subagent"], ["bsuite", "running", "output"]]);
   // a read types nothing and moves no focus
   expect((await paneRead({ paneId: first, source: "visible", format: "text" })).text).toBe(screen);
   expect((await sessionSnapshot()).focused_pane_id).toBe(focus);

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest } from "bun:test";
+import { sheetStep } from "./historyKeys.ts";
 
 let originalWindow: PropertyDescriptor | undefined;
 
@@ -13,11 +14,13 @@ function fakeWindow() {
   const traverse = (by: number): void => {
     const next = Math.max(0, Math.min(entries.length - 1, index + by));
     if (next === index) return;
+    // one event for every listener, as a browser dispatches it
+    const dispatch = (): void => { const event = { state: entries[index]!.state }; for (const listener of listeners) listener(event); };
     const land = (): void => {
       index = Math.min(next, entries.length - 1);
-      for (const listener of listeners) listener({ state: entries[index]!.state });
+      dispatch();
     };
-    if (!deferred) { index = next; queueMicrotask(() => { for (const listener of listeners) listener({ state: entries[index]!.state }); }); return; }
+    if (!deferred) { index = next; queueMicrotask(dispatch); return; }
     pending = true;
     setTimeout(() => { pending = false; land(); }, 1);
   };
@@ -75,6 +78,18 @@ describe("a phone's sheet in the history", () => {
     expect(fake.at()).toBe(1);
     leave2(); await settled();
     expect(fake.at()).toBe(0); expect(closed).toBe(1);
+  });
+
+  it("marks the entry it opens over with its id, so a navigation that takes its entry can tell that entry", async () => {
+    const start = fake.at();
+    const leave = hooks.enter(() => undefined);
+    const under = (fake.entries[start]!.state as Record<string, unknown>)["ovis:sheet-under"];
+    const own = fake.entries[start + 1]!.state as Record<string, unknown>;
+    expect(typeof under).toBe("string");
+    expect(own["ovis:sheet"]).toBe(under);
+    expect(own["ovis:sheet-under"]).toBe(under);
+    leave(); await settled();
+    expect(fake.at()).toBe(start);
   });
 
   it("gives its entry to a navigation an item makes, so Back goes to the pane before and Forward returns", async () => {
@@ -144,6 +159,55 @@ describe("a phone's sheet in the history", () => {
     // beyond the retired entry: nothing, so Forward stays put on it as an ordinary entry
     h.forward(); await settled();
     expect(fake.at()).toBe(start + 1); expect(fake.marks()[start + 1]).toBe(false);
+  });
+
+  it("leaves a retired entry copied from a web page's as one more of the page's, so closing the page goes past it (#3058)", async () => {
+    const start = fake.at();
+    const under = h.state;
+    h.replaceState({ "ovis:web-panel": { url: "http://localhost:3000/a" }, "ovis:web-panel-below": 1 }, "");
+    hooks.enter(() => {});
+    h.back(); await settled();
+    h.forward(); await settled();
+    expect(fake.at()).toBe(start + 1);
+    expect(h.state).toMatchObject({ "ovis:web-panel": { url: "http://localhost:3000/a" }, "ovis:web-panel-below": 2 });
+    // an entry that copied no page's stays as it was
+    h.replaceState(null, "");
+    h.back(); await settled();
+    h.replaceState(under, "");
+    hooks.enter(() => {});
+    h.back(); await settled();
+    h.forward(); await settled();
+    expect(h.state).not.toHaveProperty("ovis:web-panel-below");
+    // a docked file that took a stacked page's entry over holds the count without the page's marks
+    h.replaceState({ "ovis:file-preview": { path: "/r/README.md", machineId: "local", paneId: "p" }, "ovis:web-panel-below": 2 }, "");
+    hooks.enter(() => {});
+    h.back(); await settled();
+    h.forward(); await settled();
+    expect(h.state).toMatchObject({ "ovis:web-panel-below": 3 });
+  });
+
+  it("counts a sheet's copy of a plain file's or a diff's entry, kept over it, as one more under it, and not one Forward lands on (#3101)", async () => {
+    const under = h.state;
+    const href = fake.window.location.href;
+    for (const own of [
+      { "ovis:file-preview": { path: "/r/README.md", machineId: "local", paneId: "p" } },
+      { "ovis:repo-diff": { machineId: "local", paneId: "p", directory: "/r", scope: "workspace", base: null, head: null, comparison: null, path: "a.ts", oldPath: null } },
+    ]) {
+      // an item that changes the address on the sheet's entry keeps it over the file's or diff's own entry
+      h.replaceState(own, "");
+      const leave = hooks.enter(() => {});
+      h.replaceState(h.state, "", `${href}&new=1`);
+      leave(); await settled();
+      expect(h.state).toEqual({ ...own, "ovis:sheet-under": expect.any(String), "ovis:web-panel-below": 1 });
+      h.back(); await settled();
+      // Forward onto the entry of a sheet Back closed: the entry under it may be another's by now
+      hooks.enter(() => {});
+      h.back(); await settled();
+      h.forward(); await settled();
+      expect(h.state).not.toHaveProperty("ovis:web-panel-below");
+      h.back(); await settled();
+    }
+    h.replaceState(under, "", href);
   });
 
   it("keeps a sheet that opens while the step off a closed sheet's entry is on its way", async () => {
@@ -233,5 +297,105 @@ describe("a phone's sheet in the history", () => {
     hooks.enter(() => {});
     h.back(); await settled();
     expect(seen).toEqual([true, false]);
+  });
+
+  it("answers whether a popstate is that step, before it handles the event and after (#2000)", async () => {
+    const answers: boolean[] = [];
+    fake.window.addEventListener("popstate", (event) => { answers.push(sheetStep.lands(event as unknown as Event)); });
+    const leave = hooks.enter(() => {});
+    fake.defer(true);
+    leave();
+    // the step back is asked for; until it lands, a popstate not yet handled here is that step
+    jest.advanceTimersByTime(0);
+    expect(fake.pending()).toBe(true);
+    expect(sheetStep.lands({} as Event)).toBe(true);
+    await settled();
+    fake.defer(false);
+    hooks.enter(() => {});
+    h.back(); await settled();
+    expect(answers).toEqual([true, false]);
+  });
+
+  // last: Settings' module stays on this browser from here, after this module, as in the app
+  it("keeps Settings opened before a closed palette's step lands, over a peek that stays up too (#2000)", async () => {
+    const settingsPath = "./settingsHistory.ts?with-sheets";
+    const settings: typeof import("./settingsHistory.ts") = await import(settingsPath);
+    const moves: Array<boolean> = [];
+    settings.onSettingsHistory((_entry, own) => moves.push(own));
+    let peekClosed = 0;
+    const leavePeek = hooks.enter(() => { peekClosed += 1; }, true);
+    const leavePalette = hooks.enter(() => {});
+    fake.defer(true);
+    leavePalette();
+    jest.advanceTimersByTime(0);
+    expect(fake.pending()).toBe(true);
+    // Settings opens before the palette's step back lands
+    settings.recordSettings(settings.settingsLevels(true, null, false));
+    await settled();
+    fake.defer(false);
+    expect(moves).toEqual([]);
+    expect(settings.settingsEntry(h.state)).toEqual({ page: null, keyBar: false, depth: 1 });
+    expect(peekClosed).toBe(0);
+    // and Settings closed by its X leaves the peek up, on its entry
+    settings.recordSettings([]);
+    await settled();
+    expect(settings.settingsEntry(h.state)).toBeNull();
+    expect(peekClosed).toBe(0);
+    leavePeek(); await settled();
+
+    // a sheet closed above Settings (a lightbox in a preview opened over it) steps onto the preview's
+    // entry: not the entry the palette opened over, so Settings is not made again there
+    const leaveRoute = hooks.enter(() => {});
+    settings.recordSettings(settings.settingsLevels(true, null, false));
+    leaveRoute(); await settled();
+    h.pushState({ ...settings.outsideSettings(h.state), "ovis:file-preview": { path: "README.md" } }, "");
+    const leaveLightbox = hooks.enter(() => {});
+    leaveLightbox(); await settled();
+    expect((h.state as Record<string, unknown>)["ovis:file-preview"]).toBeDefined();
+    expect(settings.settingsEntry(h.state)).toBeNull();
+  });
+
+  // after the one above: Settings' module is on this browser
+  it("closes Settings when it closes while a sheet opened inside it is still stepping off its entry", async () => {
+    const settingsPath = "./settingsHistory.ts?with-sheets";
+    const settings: typeof import("./settingsHistory.ts") = await import(settingsPath);
+    // Phone & devices on a phone: the list, then the page; Pair a device opens Connect a phone's sheet over it
+    settings.recordSettings(settings.settingsLevels(true, "devices", false));
+    await settled();
+    const base = fake.at() - 2;
+    const leaveConnect = hooks.enter(() => {});
+    const reopened: boolean[] = [];
+    const stopListening = settings.onSettingsHistory((entry, own) => { if (entry !== null && !own) reopened.push(true); });
+    // the phone pairs: the sheet closes by itself, and its step back is queued for after this task.
+    // Escape closes Settings before that step runs
+    leaveConnect();
+    settings.recordSettings([]);
+    await settled();
+    await settled();
+    expect(settings.settingsEntry(h.state)).toBeNull();
+    expect(fake.at()).toBe(base);
+    expect(reopened).toEqual([]);
+    stopListening();
+  });
+
+  it("closes Settings too when the closed sheet's entry had its address changed before its step back", async () => {
+    const settingsPath = "./settingsHistory.ts?with-sheets";
+    const settings: typeof import("./settingsHistory.ts") = await import(settingsPath);
+    settings.recordSettings(settings.settingsLevels(true, "devices", false));
+    await settled();
+    const base = fake.at() - 2;
+    const leaveConnect = hooks.enter(() => {});
+    const reopened: boolean[] = [];
+    const stopListening = settings.onSettingsHistory((entry, own) => { if (entry !== null && !own) reopened.push(true); });
+    // the app writes another address on the sheet's entry (a renamed workspace) as the sheet closes
+    h.replaceState(h.state, "", "/?pane=renamed");
+    leaveConnect();
+    settings.recordSettings([]);
+    await settled();
+    await settled();
+    expect(settings.settingsEntry(h.state)).toBeNull();
+    expect(fake.at()).toBe(base);
+    expect(reopened).toEqual([]);
+    stopListening();
   });
 });

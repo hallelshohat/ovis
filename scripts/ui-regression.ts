@@ -10,14 +10,18 @@ import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import type { SessionSnapshot, WorkspaceCreated, WorktreeOpened } from "../shared/protocol.ts";
 import type { Machine } from "../shared/machines.ts";
+import type { PluginActionsResponse } from "../shared/plugins.ts";
+import { offeredPluginActions } from "../src/lib/paletteSearch.ts";
 import { MAX_ATTACHMENT_BYTES } from "../shared/attachments.ts";
 import { alertsOffMarked, alertsState, runMoreItem } from "./header-more.ts";
 import { routeDrained } from "./drained-route.ts";
 import { contextMenuKey } from "./context-menu-key.ts";
 import { checkTerminalFileInput } from "./terminal-file-input-regression.ts";
+import { checkTerminalAttach } from "./terminal-attach-regression.ts";
 import { checkTerminalInput } from "./terminal-input-regression.ts";
 import { checkSafariIme } from "./terminal-safari-ime-regression.ts";
 import { checkIpadIme } from "./terminal-ipad-ime-regression.ts";
+import { checkLinuxIme } from "./terminal-linux-ime-regression.ts";
 import { checkHeldDraftPaneSwitch } from "./terminal-draft-regression.ts";
 import { checkCommandBackspace } from "./terminal-command-backspace-regression.ts";
 import { checkCtrlEnter } from "./terminal-ctrl-enter-regression.ts";
@@ -25,15 +29,16 @@ import { checkCommandArrows } from "./terminal-command-arrows-regression.ts";
 import { checkFolderFilter, checkNewFolder } from "./folder-filter-regression.ts";
 import { checkPaletteKeys } from "./palette-keys-regression.ts";
 import { checkFollowHerdrFocus } from "./follow-focus-regression.ts";
-import { UsageService } from "../server/usage.ts";
-import { openSettingsPage } from "./settings-page.ts";
+import { checkRelayPanel } from "./relay-panel-regression.ts";
+import { systemUsageContext, UsageService } from "../server/usage.ts";
+import { openSettingsFolds, openSettingsPage } from "./settings-page.ts";
 import { assertCspClean, watchCsp } from "./csp-violations.ts";
 import type { CspWatch } from "./csp-violations.ts";
 import { browserEvidencePage, browserEvidenceTracing, startBrowserEvidence } from "./browser-evidence.ts";
 import type { BrowserEvidenceSession } from "./browser-evidence.ts";
 import { chromePath } from "./chrome-path.ts";
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-browser-")));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-ui-")));
 const workspaces: string[] = [];
 const worktreeWorkspaces: string[] = [];
 // the repository the worktree step makes, for the cleanup to find what the step made
@@ -61,6 +66,37 @@ async function watchBrowserEvidence(context: BrowserContext, page: Page, scenari
   return evidence;
 }
 /** WebKit's IME commit: an Enter keydown after compositionend, isComposing false, key code 229 */
+/**
+ * A hook for a check that changes the roster on a page already loaded: a route cannot reach the
+ * machine events the page already receives (its /api/machines/events stream or its terminal
+ * socket), so `window.__rewriteMachinesFrame`, while set, rewrites each event's data before the
+ * app reads it (the background-tasks and plan checks below). Runs in the page as an init script.
+ */
+function rewriteMachinesFrames(): void {
+  const rewrite = () => (window as unknown as { __rewriteMachinesFrame?: (data: string) => string }).__rewriteMachinesFrame;
+  const Native = window.EventSource;
+  window.EventSource = class extends Native {
+    override get onmessage() { return super.onmessage; }
+    override set onmessage(handler) {
+      super.onmessage = typeof handler !== "function" ? handler : (event: MessageEvent) => {
+        const change = rewrite();
+        handler.call(this, change ? new MessageEvent("message", { data: change(event.data) }) : event);
+      };
+    }
+  };
+  // a socket frame is rewritten where its data is read, so the app's listeners stay its own
+  const data = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data")!.get!;
+  Object.defineProperty(MessageEvent.prototype, "data", { configurable: true, get(this: MessageEvent) {
+    const raw: unknown = data.call(this);
+    const change = rewrite();
+    if (!change || !(this.target instanceof WebSocket) || typeof raw !== "string" || !raw.includes("\"machine-event\"")) return raw;
+    let frame: { type?: string; event?: unknown };
+    try { frame = JSON.parse(raw); } catch { return raw; }
+    if (frame.type !== "machine-event") return raw;
+    return JSON.stringify({ ...frame, event: JSON.parse(change(JSON.stringify(frame.event))) });
+  } });
+}
+
 const IME_ENTER = { key: "Enter", code: "Enter", keyCode: 229, which: 229, bubbles: true, cancelable: true };
 /** how long a send that should not happen gets to show up */
 const NO_SEND_WAIT_MS = 400;
@@ -84,7 +120,7 @@ try {
   }
   const [paneA, paneB] = panes as [string, string];
   // no provider is asked with the test machine's own sign-ins
-  server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "push"), usage: new UsageService(undefined, []) });
+  server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "push"), usage: new UsageService({ ...systemUsageContext(), home: root, env: {} }, []), tailnetPcs: { readStatus: async () => null }, sshCandidates: { sshDir: join(root, "no-ssh"), readStatus: async () => null } });
   const origin = `http://127.0.0.1:${server.port}`;
   browser = await chromium.launch({
     executablePath: chromePath(),
@@ -94,24 +130,11 @@ try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.addInitScript((ids) => {
     // only the first load: a reload must keep what Settings stored, such as the language
-    if (!localStorage.getItem("ovis:settings")) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+    // The pending-input cases exercise automatic queue delivery, which is opt-in.
+    if (!localStorage.getItem("ovis:settings")) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", autoSendQueued: true }));
     for (const id of ids) localStorage.setItem(`ovis:view:${id}`, "chat");
   }, panes);
-  // A hook for a check that changes the roster on a page already loaded: a route cannot reach the
-  // /api/machines/events stream the page has open, so `window.__rewriteMachinesFrame`, while set,
-  // rewrites each frame's data before the app reads it (the plan check below).
-  await context.addInitScript(() => {
-    const Native = window.EventSource;
-    window.EventSource = class extends Native {
-      override get onmessage() { return super.onmessage; }
-      override set onmessage(handler) {
-        super.onmessage = typeof handler !== "function" ? handler : (event: MessageEvent) => {
-          const rewrite = (window as unknown as { __rewriteMachinesFrame?: (data: string) => string }).__rewriteMachinesFrame;
-          handler.call(this, rewrite ? new MessageEvent("message", { data: rewrite(event.data) }) : event);
-        };
-      }
-    };
-  });
+  await context.addInitScript(rewriteMachinesFrames);
 
   const page = await context.newPage();
   const pageEvidence = evidenceDirectory ? await watchBrowserEvidence(context, page, "main-app") : undefined;
@@ -123,16 +146,25 @@ try {
   csp.push(await watchCsp(page));
   let holdSubmitResult = false;
   let releaseSubmitResult: (() => void) | null = null;
-  // a connection's first frame held back: what the page does between a reconnect and its snapshot
+  // a connection's first frames held back: what the page does between a reconnect and the frame that
+  // says what the bridge supports (features), and then its snapshot
   let holdSnapshot = false;
+  let releaseFeatures: (() => void) | null = null;
   let releaseSnapshot: (() => void) | null = null;
   const routed: Array<{ close: () => Promise<void> }> = [];
+  /** the IDs the bridge's resumed held receipts named, in arrival order */
+  const heldReceipts: string[] = [];
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
     routed.push(socket);
     const upstream = socket.connectToServer();
     upstream.onMessage((raw) => {
       const message = JSON.parse(String(raw));
-      if (holdSnapshot && message.type === "snapshot") {
+      if (message.type === "pending-messages" && Array.isArray(message.held)) heldReceipts.push(...message.held);
+      if (holdSnapshot && message.type === "features") {
+        const release = () => { socket.send(raw); releaseFeatures = null; };
+        releaseFeatures = release;
+        releases.push(release);
+      } else if (holdSnapshot && message.type === "snapshot") {
         holdSnapshot = false;
         const release = () => { socket.send(raw); releaseSnapshot = null; };
         releaseSnapshot = release;
@@ -165,7 +197,8 @@ try {
       if (message.type === "input-ready") inputStates.set(message.pane_id, { ready: message.ready !== false, at: Date.now(), socket });
     });
     socket.on("framesent", ({ payload }) => {
-      const message = JSON.parse(String(payload));
+      // `id` is the per-connection receipt number ("input-receipt"), not what was sent
+      const { id: _receipt, ...message } = JSON.parse(String(payload));
       // composer messages go out as "submit" on servers that list it (#15), keystrokes as "input"
       if (message.type === "input" || message.type === "submit") inputs.push(message);
       if (message.type === "pending-action") pendingActions.push(message);
@@ -293,7 +326,12 @@ try {
   // browser's hover update after the scroll must not take the keyboard selection, and a real
   // pointer move still does.
   await page.setViewportSize({ width: 1280, height: 400 });
+  // each opening reads the PC's plugin actions: their rows land in one render after the answer, so the list is
+  // counted once they are in (a herdr session with plugins otherwise grows it under the arrow)
+  const pluginsAnswer = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/plugins/actions"));
   await openPalette();
+  const pluginsOffered = offeredPluginActions(((await (await pluginsAnswer).json()) as PluginActionsResponse).plugins, true, "").length;
+  if (pluginsOffered > 0) await palette.locator(".palette-plugin-action").first().waitFor();
   const restingOptionCount = await palette.getByRole("option").count();
   const firstOption = (await palette.locator("#palette-item-0").boundingBox())!;
   await page.mouse.move(firstOption.x + firstOption.width / 2, firstOption.y + firstOption.height / 2);
@@ -381,34 +419,32 @@ try {
   const finishKey = `ovis:finish:local:${encodeURIComponent(completionSnapshot!.finish_epoch!)}:${encodeURIComponent(paneA)}`;
   assert.equal(await page.locator(".pane-frame.is-current [data-pane-content]").count(), 0, "an unavailable conversation is not presented content");
   assert.equal(await page.evaluate((key) => localStorage.getItem(key), finishKey), null, "an unavailable chat does not acknowledge its finish");
-  await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+  await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
   await page.locator(".pane-frame.is-current .terminal-stack[data-pane-content]").waitFor();
   await agentRow(paneA).locator('.badge[data-status="idle"]').waitFor();
   assert.equal(await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "null")?.id, finishKey), completion.finish_id,
     "presenting terminal output acknowledges exactly the bridge's completed turn");
-  await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+  await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
   console.log("PASS delayed machines poll preserves newer status; unavailable chat keeps DONE until terminal content is presented");
 
-  // Agents is global to the sidebar, so collapsing a PC's Spaces does not hide
-  // its reported agents or prevent explicit pane selection from that list.
+  // Agents is global to the sidebar: explicit pane selection from that list keeps its machine and pane target.
+  // The test session's only PC is the Host, drawn without its header: no caret folds it, and New workspace
+  // stays available in the compact header. A PC's fold over Agents, with two PCs, is in sidebar-spacing-demo-regression.ts.
   await herdrRpc("pane.report_agent", { pane_id: paneB, source: "manual", agent: "codex", state: "idle" });
+  const resting = page.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+  if (await resting.getAttribute("aria-expanded") === "false") await resting.click();
+  await page.locator('.agents-sidebar .agent-resting-label .agent-background-toggle[aria-expanded="true"]').waitFor();
   await agentRow(paneB).waitFor();
-  const machineToggle = page.locator(".machine-group .machine-toggle");
-  // the PC's fold is the caret beside its +
-  assert.equal(await page.locator(".machine-group .machine-toggle + .machine-new").count(), 1);
-  await machineToggle.click();
-  await workspaceGroup(workspaces[0]!).waitFor({ state: "detached" });
-  assert.equal(await agentRow(paneA).isVisible(), true, "PC folding leaves Agents visible");
+  assert.equal(await page.locator(".machine-group .machine-header").count(), 0, "the lone Host is drawn without its header");
+  assert.equal(await page.getByRole("button", { name: "New workspace", exact: true }).count(), 1, "its + offers New workspace");
   await agentRow(paneB).locator(".agent-select").click();
   await agentRow(paneB).locator('.agent-select[aria-current="true"]').waitFor();
   assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem("ovis:selection") ?? "null")),
     { machine_id: "local", pane_id: paneB }, "Agent selection retains its machine and pane target");
-  assert.equal(await machineToggle.getAttribute("aria-expanded"), "false", "Agent selection preserves the user's PC fold");
   painted.delete(paneA);
   await agentRow(paneA).locator(".agent-select").click();
   await agentRow(paneA).locator('.agent-select[aria-current="true"]').waitFor();
   await until(() => painted.has(paneA), "returning from Agents paints the current pane");
-  await machineToggle.click();
   await workspaceHeader(workspaces[0]!).locator('.workspace-select[aria-current="true"]').waitFor();
 
   // Reuse the real API roster as an offline cache in an isolated context. Its
@@ -432,6 +468,9 @@ try {
     const offlinePage = await offlineContext.newPage();
     offlineEvidence = evidenceDirectory ? await watchBrowserEvidence(offlineContext, offlinePage, "offline-cached-roster") : undefined;
     await offlinePage.goto(`${origin}/?pane=${encodeURIComponent(paneA)}`);
+    const offlineResting = offlinePage.locator(".agents-sidebar .agent-resting-label .agent-background-toggle");
+    if (await offlineResting.getAttribute("aria-expanded") === "false") await offlineResting.click();
+    await offlinePage.locator('.agents-sidebar .agent-resting-label .agent-background-toggle[aria-expanded="true"]').waitFor();
     const offlineAgent = offlinePage.locator(`.agents-sidebar .agent-item[data-machine="local"][data-pane="${paneB}"] .agent-select`);
     await offlineAgent.waitFor();
     assert.equal(await offlineAgent.isDisabled(), true, "a cached offline agent cannot select its pane");
@@ -477,7 +516,35 @@ try {
     }
     await route.fulfill({ response, json: body });
   });
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  // this page keeps the stream it has, and the PC pushes its roster over it every five seconds: a
+  // pushed roster drops the poll in flight and replaces what a poll brought, and the next poll is
+  // 30 s away. So each pushed roster gets the rewrite the poll above gets, with the peer the page
+  // takes in the task that asks for the poll: no roster comes in between with the peer before.
+  // (A pushed roster also seeds the page's alert bookkeeping, which a polled one does not: until
+  // the reload further down, this pane counts there as working since this check.)
+  const readBackground = async (peer: typeof backgroundPeer): Promise<void> => {
+    backgroundPeer = peer;
+    await page.evaluate(([paneId, peer]) => {
+      (window as unknown as { __rewriteMachinesFrame?: (data: string) => string }).__rewriteMachinesFrame = (data) => {
+        let payload: { type?: string; machines?: { snapshot?: SessionSnapshot | null }[] };
+        try { payload = JSON.parse(data); } catch { return data; }
+        if (payload.type !== "machines") return data;
+        for (const machine of payload.machines ?? []) {
+          const pane = machine.snapshot?.panes.find((pane) => pane.pane_id === paneId);
+          if (!pane || !machine.snapshot) continue;
+          Object.assign(pane, { agent_status: "done", background_tasks: 1, background_wait: true });
+          if (peer) {
+            machine.snapshot.panes.push({ ...pane, pane_id: `${paneId}-background-peer`, agent_status: peer, background_wait: undefined });
+            const tab = machine.snapshot.tabs.find((tab) => tab.tab_id === pane.tab_id);
+            if (tab) tab.agent_status = peer === "blocked" ? "blocked" : "done";
+          }
+        }
+        return JSON.stringify(payload);
+      };
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, [paneA, peer] as const);
+  };
+  await readBackground(null);
   const waitingBadge = agentRow(paneA).locator(".badge[data-status=waiting]");
   await waitingBadge.waitFor();
   assert.equal((await waitingBadge.textContent())?.trim(), "BG");
@@ -489,13 +556,11 @@ try {
   assert.deepEqual(await ring.evaluate((dot) => { const style = getComputedStyle(dot); return { hollow: style.backgroundColor === "rgba(0, 0, 0, 0)", bordered: parseFloat(style.borderTopWidth) > 0, animation: style.animationName }; }), { hollow: true, bordered: true, animation: "none" }, "the ring is hollow, bordered and still");
   await page.locator('.composer-status[data-status="waiting"] strong.visually-hidden', { hasText: "BG" }).waitFor();
   for (const peer of ["working", "done", "blocked", "idle"] as const) {
-    backgroundPeer = peer;
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await readBackground(peer);
     const expected = peer === "idle" ? "waiting" : peer;
     await page.locator(`.tab-strip-tab[aria-selected="true"] .tab-strip-dot[data-status="${expected}"]`).waitFor();
   }
-  backgroundPeer = null;
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await readBackground(null);
   if (process.env.UI_EVIDENCE_DIR) {
     const viewport = page.viewportSize()!;
     const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -518,7 +583,11 @@ try {
     await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, themeBefore);
   }
   await unrouteBackground();
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  // the PC's own roster again, pushed or polled: the rewrite goes in the task that asks for the poll
+  await page.evaluate(() => {
+    delete (window as unknown as { __rewriteMachinesFrame?: unknown }).__rewriteMachinesFrame;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
   await waitingBadge.waitFor({ state: "detached" });
   console.log("PASS a pane whose turn ended on its background work reads BG in the sidebar and the composer, and its status again once it does not");
   // A pane's plan: the composer's chip (the one the background tasks have) says how far it got and
@@ -597,7 +666,7 @@ try {
   // Use a real browser paste: keydown must not send Ctrl+V (0x16) to the agent,
   // where it can trigger image paste against the server's unrelated clipboard.
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
-  await page.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+  await page.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
   await pendingReady(paneA);
   const fileInputSocket = inputStates.get(paneA)?.socket;
   assert.ok(fileInputSocket, "the current pane has an input-ready attachment");
@@ -707,7 +776,7 @@ try {
     await page.locator(`.pane-select[title^="${paneA} —"]`).click();
     await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
   }
-  await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+  await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
   await composer.waitFor();
   // the empty message box has no text to select: the pane shortcut switches panes from it too
   await composer.focus();
@@ -716,11 +785,18 @@ try {
   await page.locator(`.pane-select[title^="${paneA} —"]`).click();
   await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
   await composer.fill("draft");
-  await page.keyboard.press("ControlOrMeta+Shift+ArrowDown");
-  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: the shortcut may not switch pane while a draft is typed
-  assert.ok((await selectedTitle())?.startsWith(`${paneA} —`), "a draft keeps Mod+Shift+arrows for selecting text");
+  // the caret at the end of a draft: up selects the text first, and the pane stays
+  await page.keyboard.press("ControlOrMeta+Shift+ArrowUp");
+  await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: the shortcut may not switch pane while the draft has text that way
+  assert.ok((await selectedTitle())?.startsWith(`${paneA} —`), "a draft keeps Mod+Shift+arrows while they select text");
+  assert.deepEqual(await composer.evaluate((node: HTMLTextAreaElement) => [node.selectionStart, node.selectionEnd]), [0, 5], "up selected the draft");
+  // nothing is left to select that way: the next press switches panes, so a draft never stops the shortcut
+  await page.keyboard.press("ControlOrMeta+Shift+ArrowUp");
+  await until(async () => !(await selectedTitle())?.startsWith(`${paneA} —`), "a draft selected to its start lets the pane shortcut go");
+  await page.locator(`.pane-select[title^="${paneA} —"]`).click();
+  await until(async () => (await selectedTitle())?.startsWith(`${paneA} —`) === true, "back on the first pane");
   await composer.fill("");
-  console.log("PASS pane shortcut from the empty message box; a draft keeps text selection");
+  console.log("PASS pane shortcut from the empty message box; a draft keeps text selection until none is left that way");
   console.log("PASS terminal clipboard paste sends text once and preserves Ctrl+C");
 
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
@@ -730,12 +806,21 @@ try {
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   console.log("PASS settings shortcut and theme");
 
-  // Add PC lives in Settings → Remote PCs, not in the sidebar; opening it closes Settings behind it
+  // Add PC lives in Settings → Devices and PCs → Add a connection → SSH, not in the sidebar: a typed address opens it
+  // filled in, and opening it closes Settings behind it
   assert.equal(await page.locator(".sidebar").getByRole("button", { name: "Add PC", exact: true }).count(), 0, "the sidebar has no Add PC button");
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
-  await openSettingsPage(page, "Remote PCs");
-  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Add PC", exact: true }).click();
+  await openSettingsPage(page, "Devices and PCs");
+  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Add a connection", exact: true }).click();
+  const connectSheet = page.getByRole("dialog", { name: "Add a connection", exact: true });
+  await connectSheet.locator('.connect-tabs [data-tab="ssh"]').click();
+  const sshAdd = connectSheet.locator(".connect-ssh-form").getByRole("button", { name: "Add", exact: true });
+  assert.equal(await sshAdd.isDisabled(), true, "Add waits for an SSH address");
+  await connectSheet.getByLabel("Or type an SSH address", { exact: true }).fill("qa@pc.invalid");
+  await sshAdd.click();
   await page.getByRole("dialog", { name: "Add PC", exact: true }).waitFor();
+  assert.equal(await page.getByRole("dialog", { name: "Add PC", exact: true }).getByLabel("SSH alias or user@address", { exact: true }).inputValue(), "qa@pc.invalid", "Add PC opens with the typed address");
+  assert.equal(await connectSheet.count(), 0, "Add PC closes the Add a connection sheet");
   assert.equal(await page.getByRole("dialog", { name: "Settings" }).count(), 0, "Add PC closes Settings");
   await page.getByRole("button", { name: "Close PC setup", exact: true }).click();
   await page.getByRole("dialog", { name: "Add PC", exact: true }).waitFor({ state: "hidden" });
@@ -913,7 +998,7 @@ try {
   const reportPending = (state: string) => herdrRpc("pane.report_agent", { pane_id: pendingPane, source: "manual", agent: "claude", state });
   await reportPending("working");
   await page.locator(`.pane-select[title^="${pendingPane} —"]`).click();
-  await page.getByRole("group", { name: "Pane view", exact: true }).getByRole("button", { name: "Chat", exact: true }).click();
+  await page.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
   await page.locator('.composer-status[data-status="working"]').waitFor();
   await until(async () => await page.locator(".composer-agent-label").innerText() === "Claude", "foreground agent identity reached the composer");
   await pendingReady(pendingPane);
@@ -964,7 +1049,7 @@ try {
   const socketsBeforeReconnect = sockets.length;
   holdSnapshot = true;
   await routed.at(-1)!.close();
-  await until(() => releaseSnapshot !== null, "the reconnect's snapshot was held back");
+  await until(() => releaseFeatures !== null && releaseSnapshot !== null, "the reconnect's features and snapshot were held back");
   // the server can send its snapshot before the page has even sent its attach: the pane is
   // ready only once the new connection says so, not by the closed one's last word
   await until(() => sockets.length > socketsBeforeReconnect, "the page opened its new connection");
@@ -972,24 +1057,32 @@ try {
   assert.equal(await page.locator('.pending-message[data-state="uncertain"]').count(), 2, "the lost connection's rows are no longer its own");
   await composer.fill("sent before the snapshot");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  assert.equal(inputs.length, sentBeforeSnapshot, "the message waits for the snapshot that says what the bridge supports");
-  releaseSnapshot!();
+  assert.equal(inputs.length, sentBeforeSnapshot, "the message waits for the frame that says what the bridge supports");
+  // that frame needs no herdr: once it is in, the message goes, with the snapshot (which waits on herdr) still held
+  releaseFeatures!();
   await until(async () => await page.locator('.pending-message[data-state="queued"]').count() === 1, "the message sent before the snapshot is a live pending row");
+  assert.notEqual(releaseSnapshot, null, "the snapshot was still held back when the message went");
+  releaseSnapshot!();
   assert.equal(inputs.at(-1)?.delivery, "queue");
   assert.equal(await page.locator(".composer-note").count(), 0);
   await page.getByRole("button", { name: "Discard", exact: true }).click();
   await until(async () => await pendingRows.count() === 2, "the live row was discarded on the bridge");
   assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`);
+  const heldBeforeReload = heldReceipts.length;
   await page.reload(); await page.locator(".conn-live").waitFor();
   await until(async () => await pendingRows.count() === 2, "saved pending copies restored");
   assert.deepEqual(await pendingRows.locator(".pending-message-bubble").allTextContents(), queuedTexts.slice(1));
-  assert.equal(await page.locator('.pending-message[data-state="uncertain"]').count(), 2, "reload removes connection proof");
-  assert.equal(await page.locator(".pending-message-send").count(), 0, "unknown delivery cannot be resent");
+  // the bridge holds both untyped and tells this browser so: they come back held, for an explicit Send now only
+  await until(async () => await page.locator('.pending-message[data-state="held"]').count() === 2, "reload brings the proven copies back held");
+  assert.equal(await page.locator('.pending-message[data-state="uncertain"]').count(), 0, "a proven copy is not left uncertain");
+  assert.equal(await page.locator(".pending-message-send").count(), 2, "a proven held copy offers Send now");
+  assert.equal(new Set(heldReceipts.slice(heldBeforeReload)).size, 2, "each copy is held on the bridge's receipt for its own ID, not on a saved state");
   await reportPending("idle"); await page.locator('.composer-status:not([data-status="working"])').waitFor();
   await page.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: readiness may not replay saved pending input
-  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "reload and readiness never replay saved pending input");
-  for (let left = 2; left > 0; left--) { await page.getByRole("button", { name: "Discard saved copy", exact: true }).first().click(); await until(async () => await pendingRows.count() === left - 1, "discard saved copy"); }
-  console.log("PASS Send queues server-owned input, explicit Send now delivers once, and reload/readiness never replay uncertain copies");
+  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "reload and readiness never send a held copy without Send now");
+  for (let left = 2; left > 0; left--) { await pendingRows.first().getByRole("button", { name: "Discard", exact: true }).click(); await until(async () => await pendingRows.count() === left - 1, "discard held copy"); }
+  assert.equal(pendingBytes(), `\u001b[200~${queuedTexts[0]}\u001b[201~\r\u001b`, "discarding a held copy types nothing");
+  console.log("PASS Send queues server-owned input, explicit Send now delivers once, and a reload brings proven copies back held without sending them");
 
   // Older releases saved editable held rows. Seed that documented storage format so the
   // recovery, editing and layout checks continue to cover existing users' retained text.
@@ -1069,7 +1162,7 @@ try {
   await until(async () => await page.locator(".composer-queue-text").count() === 3, "queue restored");
   assert.equal(await page.locator(".composer-queue-text").nth(1).inputValue(), "# edited second message");
   // the queue belongs to the chat lens: the terminal lens hides it and keeps it for the return
-  const lens = page.getByRole("group", { name: "Pane view", exact: true });
+  const lens = page.locator(".view-switch");
   await lens.getByRole("button", { name: "Terminal", exact: true }).click();
   await until(async () => await page.locator(".composer-queue").count() === 0, "queue hidden in the terminal lens");
   await lens.getByRole("button", { name: "Chat", exact: true }).click();
@@ -1469,7 +1562,7 @@ try {
     await createGate;
     await route.continue();
   });
-  await page.getByRole("button", { name: /^New workspace on / }).click();
+  await page.getByRole("button", { name: "New workspace", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: /^New workspace/ });
   // opening Browse on home leaves Directory as typed, `~`, not the absolute path it lists
   await dialog.getByLabel(/^Directory/).fill("~");
@@ -1487,7 +1580,7 @@ try {
   await until(async () => (await dialog.getByLabel(/^Directory/).inputValue()).endsWith("/a"), "Directory follows Browse into a");
   // New folder inside a: the workspace starts in the folder it made
   await checkNewFolder(page, dialog, () => createRequests, "made-here");
-  await dialog.getByLabel(/^Name/).fill("ovis-test-browser-created");
+  await dialog.getByLabel("Optional workspace label", { exact: true }).fill("ovis-test-browser-created");
   await dialog.getByRole("button", { name: "Start", exact: true }).click();
   await until(() => createRequests === 1, "creation started");
   assert.equal(createCwd, join(root, "a", "made-here"), "Start uses the folder Browse is showing");
@@ -1531,16 +1624,16 @@ try {
   worktreeWorkspaces.push(initialWorktree.workspace_id);
   const initialRow = page.locator(`.worktree-children .workspace-group[data-workspace="${initialWorktree.workspace_id}"]`);
   await until(async () => await initialRow.locator(".workspace-name").textContent() === "Existing checkout", "a named worktree's row is titled by its workspace name");
-  assert.equal(await initialRow.locator(".worktree-workspace-label").textContent(), "browser/initial", "the list API discovers an existing worktree's exact branch, said after the name");
+  assert.equal(await initialRow.locator(".workspace-branch-tail").textContent(), "browser/initial", "the list API discovers an existing worktree's branch, said dim at the row's end (a prefix that is no kind of change stays)");
   assert.equal(await repoRow.locator(".workspace-name").textContent(), "ovis-test-repo", "the parent keeps its workspace name");
-  // A list read from before creation must not erase the branch supplied by the create response.
+  // An inventory read from before creation must not erase the branch supplied by the create response (#2661: one read per PC).
   let releaseWorktreeList!: () => void;
   const heldWorktreeList = new Promise<void>((resolve) => { releaseWorktreeList = resolve; });
   releases.push(releaseWorktreeList);
   let worktreeListCaptured = false;
   let staleWorktreeListFinished = false;
   let freshWorktreeListFinished = false;
-  await page.route("**/api/worktree/list?*", async (route) => {
+  await page.route("**/api/worktree/inventory?*", async (route) => {
     const response = await route.fetch();
     if (!worktreeListCaptured) {
       worktreeListCaptured = true;
@@ -1599,7 +1692,7 @@ try {
   assert.equal(await repoRow.locator(".workspace-select").getAttribute("draggable"), "true", "the parent workspace row supports dragging");
   assert.equal(await childHeader.locator(".workspace-select").getAttribute("draggable"), "true", "the branch workspace row supports dragging");
   await until(async () => await childHeader.locator(".workspace-name").textContent() === "Sidebar redesign", "a newly created child is titled by the name it was given");
-  assert.equal(await childHeader.locator(".worktree-workspace-label").textContent(), "browser/sidebar", "its exact branch, slash included, follows the name");
+  assert.equal(await childHeader.locator(".workspace-branch-tail").textContent(), "browser/sidebar", "its branch follows the name at the row's end");
   assert.equal(await repoRow.locator(".workspace-toggle").getAttribute("aria-expanded"), "true", "creation expands a previously folded parent");
   assert.equal(await page.locator(`.workspace-group[data-workspace="${repoWorkspace.workspace.workspace_id}"] + .worktree-children > .workspace-list > .workspace-group`).count(), 2,
     "existing and newly created branches share their repository workspace");
@@ -1607,9 +1700,9 @@ try {
   assert.equal(staleWorktreeListFinished, false, "the create response displays the branch before the pending list finishes");
   releaseWorktreeList();
   await until(() => staleWorktreeListFinished && freshWorktreeListFinished, "the stale inventory is followed by a fresh one");
-  assert.equal(await childHeader.locator(".worktree-workspace-label").textContent(), "browser/sidebar", "a pre-create inventory cannot erase the new branch");
+  assert.equal(await childHeader.locator(".workspace-branch-tail").textContent(), "browser/sidebar", "a pre-create inventory cannot erase the new branch");
   assert.equal(await childHeader.locator(".workspace-name").textContent(), "Sidebar redesign", "nor the name it was given");
-  await page.unroute("**/api/worktree/list?*");
+  await page.unroute("**/api/worktree/inventory?*");
   await childHeader.locator(".workspace-select").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename workspace", exact: true }).click();
   const worktreeRename = childHeader.getByRole("textbox", { name: "Workspace name", exact: true });
@@ -1618,7 +1711,7 @@ try {
   await worktreeRename.press("Enter");
   await until(async () => await childHeader.locator(".workspace-name").textContent() === "Sidebar renamed", "the child workspace is renamed in its row title");
   assert.equal(await childHeader.locator(".workspace-select").getAttribute("draggable"), "true", "row dragging returns after editing finishes");
-  assert.equal(await childHeader.locator(".worktree-workspace-label").textContent(), "browser/sidebar", "renaming a workspace preserves its actual git branch");
+  assert.equal(await childHeader.locator(".workspace-branch-tail").textContent(), "browser/sidebar", "renaming a workspace preserves its actual git branch");
   if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "worktree-branches-sidebar.png") });
   // a workspace row's menu also opens from a right-click on the row
   await repoRow.locator(".workspace-select").click({ button: "right" });
@@ -1741,7 +1834,7 @@ try {
   await tabDialog.waitFor();
   assert.equal(await tabDialog.locator(".new-session-folder").textContent(), join(root, "a", "made-here"), "the folder is the workspace's, shown");
   assert.equal(await tabDialog.getByRole("button", { name: "Browse", exact: true }).count(), 0, "the folder is not asked for");
-  const tabNameField = tabDialog.getByLabel(/^Name/);
+  const tabNameField = tabDialog.getByLabel("Tab name (optional)", { exact: true });
   await tabNameField.fill("second");
   // The command palette takes the keyboard above a dialog. Escape closes only the palette,
   // preserving the dialog's draft so the same creation can continue.
@@ -1769,7 +1862,9 @@ try {
   await strip.waitFor();
   assert.deepEqual(await strip.getByRole("tab").allTextContents(), ["Tab 1", "second"]);
   assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "second");
-  assert.equal(await strip.locator(".tab-strip-close, .tab-strip-panes").count(), 0, "tab close buttons and chevrons are removed");
+  assert.equal(await strip.locator(".tab-strip-panes").count(), 0, "tab chevrons are removed");
+  // the header's row is a browser's tab strip: the open tab carries its close, a tab at rest only while hovered
+  assert.equal(await strip.locator(".tab-strip-close:visible").count(), 1, "only the open tab shows its close at rest");
   assert.equal(await strip.locator(".tab-strip-menu:visible").count(), 0, "desktop tabs show no menu button at rest");
   // the selected tab's actions button waits hidden in its place: the pointer over the strip or the
   // tab's keyboard focus brings it into view, and no other tab draws one
@@ -1845,8 +1940,8 @@ try {
   await page.unroute("**/api/agents");
   await page.evaluate(() => localStorage.removeItem("ovis:new-session-agent"));
   console.log("PASS reopening after a failed agent start owns focus before paint, enables its fields and closes with Escape");
-  // the PC's + is New workspace again, not a tab in the workspace the last dialog was for
-  await page.getByRole("button", { name: /^New workspace on / }).click();
+  // the lone Host's New workspace action is New workspace again, not a tab in the workspace the last dialog was for
+  await page.getByRole("button", { name: "New workspace", exact: true }).click();
   await page.getByRole("dialog", { name: /^New workspace/ }).waitFor();
   await page.keyboard.press("Escape");
   await page.getByRole("dialog", { name: /^New workspace/ }).waitFor({ state: "hidden" });
@@ -1908,7 +2003,7 @@ try {
   await tabMenu.waitFor();
   assert.equal(await strip.getByRole("tab", { selected: true }).textContent(), "first", "opening another tab's context menu does not select it");
   // The tab menu keeps native tab scope; pane operations belong to the pane or header.
-  assert.deepEqual(await tabMenu.getByRole("menuitem").allTextContents(), ["Move tab left", "New tab with agent…", "Rename tab", "Close tab"], "the last tab offers only a move to the left");
+  assert.deepEqual(await tabMenu.getByRole("menuitem").allTextContents(), ["Move tab left", "Move to workspace…", "New tab with agent…", "Rename tab", "Close tab"], "the last tab offers only a move to the left, and a one-pane tab a move to another workspace");
   await tabMenu.getByRole("menuitem", { name: "Rename tab", exact: true }).click();
   await tabName.fill("build");
   await page.keyboard.press("Enter");
@@ -1917,7 +2012,8 @@ try {
   await herdrRpc("pane.focus", { pane_id: createdTab.pane_id });
   const neighbour = await herdrRpc<{ tab: { tab_id: string } }>("tab.create", { workspace_id: created.workspace_id, label: "neighbour", focus: false });
   await until(async () => (await tabsInHerdr()).length === 3, "build has two neighbours");
-  const tabPhone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  // a touch screen wider than a phone keeps the row (a phone's header title lists the tabs: mobile-tabs-regression.ts)
+  const tabPhone = await browser.newContext({ viewport: { width: 700, height: 900 }, isMobile: true, hasTouch: true });
   const tabPhonePage = await tabPhone.newPage();
   const tabPhoneEvidence = evidenceDirectory ? await watchBrowserEvidence(tabPhone, tabPhonePage, "touch-tab-menu") : undefined;
   csp.push(await watchCsp(tabPhonePage));
@@ -1928,12 +2024,13 @@ try {
   assert.equal(await phoneStrip.locator(".tab-strip-close, .tab-strip-panes").count(), 0, "no close button or chevron is rendered");
   assert.equal(await phoneStrip.locator(".tab-strip-menu:visible").count(), 1, "only the open tab has the touch menu button");
   await phoneStrip.getByRole("button", { name: "Actions for build", exact: true }).tap();
-  const tabSheet = tabPhonePage.getByRole("dialog", { name: "build", exact: true });
+  // wider than a phone's sheets, the touch menu is a popover at its button
+  const tabSheet = tabPhonePage.getByRole("menu", { name: "build", exact: true });
   await tabSheet.waitFor();
-  const touchTabItems = await tabSheet.locator(".row-sheet-item").allTextContents();
-  assert.deepEqual(touchTabItems.slice(-5), ["Move tab left", "Move tab right", "New tab with agent…", "Rename tab", "Close tab"], "a tab between siblings offers both adjacent moves on touch");
+  const touchTabItems = await tabSheet.getByRole("menuitem").allTextContents();
+  assert.deepEqual(touchTabItems.slice(-6), ["Move tab left", "Move tab right", "Move to workspace…", "New tab with agent…", "Rename tab", "Close tab"], "a tab between siblings offers both adjacent moves on touch");
   assert.ok(touchTabItems.includes("Rename pane") && touchTabItems.includes("Close pane"), "the touch menu carries the open pane's actions");
-  await tabSheet.getByRole("button", { name: "Cancel", exact: true }).tap();
+  await tabPhonePage.keyboard.press("Escape");
   await tabSheet.waitFor({ state: "detached" });
   if (tabPhoneEvidence) await tabPhoneEvidence.finish();
   await tabPhone.close();
@@ -2152,7 +2249,7 @@ try {
     await page.mouse.move(box.x + box.width * 0.8, box.y + box.height / 2);
     await page.waitForFunction(() => {
       const guide = document.querySelector(".split-drop");
-      return guide?.classList.contains("is-visible") === true && guide.getAttribute("data-side") === "right";
+      return guide?.classList.contains("is-visible") === true && guide.getAttribute("data-edge") === "right";
     });
     await page.mouse.up();
     await until(async () => await page.locator(".pane-slot").count() === 2, "two halves after the drop");
@@ -2189,7 +2286,7 @@ try {
   await mobilePage.locator(".conn-live").waitFor();
   const tapHighlight = await mobilePage.locator(".view-switch button").first().evaluate((node) => getComputedStyle(node).getPropertyValue("-webkit-tap-highlight-color"));
   assert.equal(tapHighlight, "rgba(0, 0, 0, 0)", "native tap overlays do not obscure selection");
-  await mobilePage.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+  await mobilePage.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).fill("mobile draft");
   await mobilePage.locator(".chat-terminal-fallback").waitFor();
   assert.equal(await mobilePage.locator(".chat-terminal-fallback").getAttribute("open"), null, "missing native history is labeled, not presented as broken chat");
@@ -2209,6 +2306,18 @@ try {
   await planPhone.addInitScript(() => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", defaultView: "chat" })));
   const phone = await planPhone.newPage();
   phone.on("pageerror", (error) => errors.push(error.message));
+  // the phone's machine events come over its terminal socket, which a route cannot reach: its
+  // frames carry the plan too, or the next pushed roster takes the chip away
+  await planPhone.addInitScript(rewriteMachinesFrames);
+  await planPhone.addInitScript(([pane, plan]) => {
+    (window as unknown as { __rewriteMachinesFrame?: (data: string) => string }).__rewriteMachinesFrame = (data) => {
+      let payload: { type?: string; machines?: { snapshot?: { panes: { pane_id: string }[] } }[] };
+      try { payload = JSON.parse(data); } catch { return data; }
+      if (payload.type !== "machines") return data;
+      for (const machine of payload.machines ?? []) for (const p of machine.snapshot?.panes ?? []) if (p.pane_id === pane) Object.assign(p, { plan });
+      return JSON.stringify(payload);
+    };
+  }, [paneA, { done: 1, total: 4, current: "Writing the parser" }] as const);
   const unroutePhonePlanned = await planned(phone, { events: true });
   await phone.goto(`${origin}/?pane=${encodeURIComponent(paneA)}`);
   await phone.locator(".conn-live").waitFor();
@@ -2240,10 +2349,10 @@ try {
   await mobilePage.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await mobilePage.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: a picked pane may not take the keyboard
   assert.equal(await typing(mobilePage), false, "a pane picked on a phone does not take the keyboard");
-  await mobilePage.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+  await mobilePage.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
   await mobilePage.waitForTimeout(NO_SEND_WAIT_MS); // fixed wait: switching the lens may not take the keyboard
   assert.equal(await typing(mobilePage), false, "nor does switching its lens");
-  await mobilePage.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+  await mobilePage.locator(".view-switch").getByRole("button", { name: "Chat", exact: true }).click();
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).tap();
   await until(() => typing(mobilePage), "a tap on the message box takes the keyboard");
   await mobilePage.getByRole("textbox", { name: "Message", exact: true }).blur();
@@ -2272,8 +2381,11 @@ try {
   await until(async () => await mobileComposer.getAttribute("placeholder") === "run the tests", "a phone shows the suggestion as the placeholder");
   assert.equal(await mobilePage.locator(".voice-mic").count(), 0, "a phone's chat has no mic until Settings asks for it");
   assert.equal(await mobilePage.getByTitle("Use the suggestion", { exact: true }).count(), 0, "a phone shows no suggestion chip by default");
-  await mobilePage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}&settings=chat&section=composer`);
-  await mobilePage.getByRole("switch", { name: "Suggestion chip", exact: true }).setChecked(true);
+  // the chip is one of Chat → Composer buttons, a chip each, pressed when on
+  await mobilePage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}&settings=chat`);
+  const suggestion = mobilePage.getByRole("button", { name: "Suggestion", exact: true });
+  await suggestion.click();
+  await until(async () => await suggestion.getAttribute("aria-pressed") === "true", "the Suggestion chip is pressed");
   await mobilePage.getByRole("button", { name: "Close settings", exact: true }).click();
   await mobileComposer.fill("");
   await mobilePage.getByTitle("Use the suggestion", { exact: true }).click();
@@ -2287,6 +2399,7 @@ try {
   await checkTerminalInput(browser, origin, paneA, paneB);
   await checkSafariIme(browser, origin, paneA, paneB);
   await checkIpadIme(browser, origin, paneA, paneB);
+  await checkLinuxIme(browser, origin, paneA);
   await checkHeldDraftPaneSwitch(browser, origin, paneA, paneB);
 
   // the terminal lens on a touch screen starts in direct typing without raising the keyboard;
@@ -2303,7 +2416,7 @@ try {
   }));
   await touchPage.goto(`${origin}/?pane=${encodeURIComponent(paneB)}`);
   await touchPage.locator(".conn-live").waitFor();
-  await touchPage.getByTitle("Live terminal (⌘⇧J)", { exact: true }).click();
+  await touchPage.locator(".view-switch").getByRole("button", { name: "Terminal", exact: true }).click();
   await touchPage.locator("[data-direct-typing]").waitFor();
   assert.equal(await touchPage.locator(".terminal-input").count(), 0, "a phone starts in direct typing");
   assert.equal(await touchPage.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false), false,
@@ -2364,6 +2477,7 @@ try {
   if (touchEvidence) await touchEvidence.finish();
   await touch.close();
   console.log("PASS touch terminal input line sends whole lines, Enter alone, and yields to direct typing");
+  await checkTerminalAttach(browser, origin, paneB);
 
   // A closed pane and an obsolete saved pane both yield to a live pane. Local access
   // is automatic, so it must not offer a sign-out action that cannot lock the app.
@@ -2372,7 +2486,12 @@ try {
   // closed from the row's menu, which a desktop opens with the context-menu key or a right-click
   // (it draws no row ⋯); the workspace's pane goes with it, so a confirm asks first
   const selectedRow = page.locator(".pane-item.is-selected .pane-select");
-  assert.equal(await page.locator(".pane-item.is-selected .row-menu-toggle").isVisible(), false, "a desktop draws no row ⋯");
+  // a desktop draws the row's ⋯ under the pointer and the keyboard alone: away from both, the row is its selector
+  await page.mouse.move(640, 400);
+  assert.equal(await page.locator(".pane-item.is-selected .row-menu-toggle").isVisible(), false, "a desktop draws no row ⋯ at rest");
+  await selectedRow.hover();
+  assert.equal(await page.locator(".pane-item.is-selected .row-menu-toggle").isVisible(), true, "the row's ⋯ shows under the pointer");
+  await page.mouse.move(640, 400);
   await selectedRow.focus();
   await contextMenuKey(page);
   const rowMenu = page.getByRole("menu");
@@ -2434,7 +2553,7 @@ try {
   if (pageEvidence) await pageEvidence.finish();
   await page.close();
 
-  const secured = createServer({ port: 0, hostname: "127.0.0.1", token: "browser-test-token", stateDir: join(root, "secured"), tailscaleOwner: null });
+  const secured = createServer({ port: 0, hostname: "127.0.0.1", token: "browser-test-token", stateDir: join(root, "secured"), tailscaleOwner: null, tailnetPcs: { readStatus: async () => null }, sshCandidates: { sshDir: join(root, "no-ssh"), readStatus: async () => null } });
   releases.push(() => secured.stop());
   const securedOrigin = `http://127.0.0.1:${secured.port}`;
   const securedContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -2446,18 +2565,23 @@ try {
   csp.push(await watchCsp(securedPage));
   await securedContext.request.post(`${securedOrigin}/api/auth`, { data: { token: "browser-test-token" } });
   await securedPage.goto(`${securedOrigin}/?pane=${encodeURIComponent(securedWorkspace.root_pane.pane_id)}`);
-  await securedPage.getByRole("button", { name: "Command palette", exact: true }).waitFor();
+  // with the sidebar out, the logo row's + for a new workspace stands where the palette's glass was (the shortcut opens it)
+  const securedHeaderButton = securedPage.locator(".header-side").getByRole("button", { name: "New workspace", exact: true });
+  await securedHeaderButton.waitFor();
+  assert.equal(await securedPage.getByRole("button", { name: "Command palette", exact: true }).isVisible(), false, "the + takes the glass's place in the logo row");
   assert.equal(await securedPage.getByRole("button", { name: "Sign out", exact: true }).count(), 0, "sign out is not in the header");
   await securedPage.keyboard.press("ControlOrMeta+Shift+K");
   await securedPage.getByRole("dialog", { name: "Command palette", exact: true }).waitFor();
   assert.equal(await securedPage.getByRole("option", { name: "Sign out", exact: true }).count(), 0, "the palette cannot bypass confirmation");
   // Simulate a late terminal focus change: Escape must still dismiss the modal.
-  await securedPage.getByRole("button", { name: "Command palette", exact: true }).focus();
+  await securedHeaderButton.focus();
   await securedPage.keyboard.press("Escape");
   await securedPage.getByRole("dialog", { name: "Command palette", exact: true }).waitFor({ state: "hidden" });
   await securedPage.keyboard.press("ControlOrMeta+Shift+Comma");
-  await openSettingsPage(securedPage, "Phone & devices");
-  const settingsSignOut = securedPage.getByRole("dialog", { name: "Settings", exact: true }).getByRole("button", { name: "Sign out", exact: true });
+  await openSettingsPage(securedPage, "Devices and PCs");
+  // sign out of this PC waits in More settings, under what is connected
+  await openSettingsFolds(securedPage);
+  const settingsSignOut = securedPage.getByRole("dialog", { name: "Settings", exact: true }).getByRole("button", { name: "Sign out of this PC", exact: true });
   const signOutConfirm = securedPage.getByRole("alertdialog", { name: "Sign out of this browser?", exact: true });
   await settingsSignOut.click();
   await signOutConfirm.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -2483,7 +2607,7 @@ try {
   await securedPage.reload();
   await securedPage.locator(".app-header.is-zoned").waitFor();
   await securedPage.keyboard.press("ControlOrMeta+Shift+Comma");
-  await openSettingsPage(securedPage, "Phone & devices");
+  await openSettingsPage(securedPage, "Devices and PCs");
   await settingsSignOut.click();
   await signOutConfirm.getByRole("button", { name: "Sign out", exact: true }).click();
   await securedPage.getByTestId("token-gate").waitFor();
@@ -2492,6 +2616,8 @@ try {
   await securedContext.close();
   assertCspClean(csp, "the token gate loads with no CSP violation");
   console.log("PASS Settings sign out: cancel preserves access, failure permits retry, token and paired-device sign out return to the access gate");
+
+  await checkRelayPanel(browser);
 } catch (error) {
   for (const evidence of evidenceSessions) {
     if (evidence.isOpen()) await evidence.captureFailure(error);

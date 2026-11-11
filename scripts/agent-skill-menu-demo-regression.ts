@@ -96,6 +96,8 @@ try {
     try {
       await context.addInitScript((patched) => {
         if (localStorage.getItem("ovis:settings") === null) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme: patched.scheme }));
+        // Enter sends, chosen on this phone (ENTER_SENDS_STORAGE_KEY in src/lib/settings.ts)
+        if (patched.enterSends && localStorage.getItem("ovis:enter-sends") === null) localStorage.setItem("ovis:enter-sends", "true");
         const sentSubmits: string[] = [];
         Object.assign(window, { skillCase: patched, sentSubmits });
         // every socket the page opens, the demo's stand-in included, records the text of each submit frame it sends
@@ -115,13 +117,13 @@ try {
             } as unknown as typeof WebSocket;
           },
         });
-      }, { agent: skillCase.agent, commands: skillCase.commands, turnText: skillCase.turnText, scheme });
+      }, { agent: skillCase.agent, commands: skillCase.commands, turnText: skillCase.turnText, scheme, enterSends: skillCase.enterSendsAt?.includes(width) ?? false });
       const page = await context.newPage();
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(url);
       await page.locator(".conn-live").waitFor({ state: "attached" });
-      if (await page.locator(".terminal-stack.is-chat").count() === 0) await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+      if (await page.locator(".terminal-stack.is-chat").count() === 0) await page.getByTitle(/^Chat transcript \(.+\)$/).click();
       await page.locator(".terminal-stack.is-chat").waitFor();
       await page.locator(".chat-turn-user").first().waitFor();
       await appFaces(page);

@@ -1,16 +1,18 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 
-import { formatWorkDuration, splitTurn, todoGroups, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart } from "./workBlocks.ts";
-import type { ConversationPart } from "../../shared/protocol.ts";
+import { commandExitCode, elapsedSince, screenToolOutput, foldedRequestsMatch, formatWorkDuration, runNames, splitTurn, todoGroups, turnSegments, visibleWorkParts, workBlockStartsOpen, workFailed, workStartsOpen, claudeLiveOutput, codexLiveOutput, isCommandTool, workSummary, type ToolPart } from "./workBlocks.ts";
+import type { ConversationPart, ConversationTurn } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
 const text = (value: string): Extract<ConversationPart, { kind: "text" }> => ({ kind: "text", text: value });
 const thinking = (value: string): Extract<ConversationPart, { kind: "thinking" }> => ({ kind: "thinking", text: value });
 
 describe("splitTurn", () => {
-  it("folds every action and the narration between them into the work; the trailing prose is the answer", () => {
-    const split = splitTurn([thinking("hm"), tool("read"), text("looking…"), tool("edit"), text("done"), text("really")]);
-    expect(split.work).toEqual([thinking("hm"), tool("read"), text("looking…"), tool("edit")]);
+  it("folds actions and explicit narration into work while every assistant response stays in the answer", () => {
+    const narration = { ...text("looking…"), phase: "commentary" as const };
+    const split = splitTurn([thinking("hm"), tool("read"), narration, tool("edit"), text("done"), text("really")]);
+    expect(split.work).toEqual([thinking("hm"), tool("read"), narration, tool("edit")]);
     expect(split.answer).toEqual([text("done"), text("really")]);
   });
 
@@ -18,8 +20,8 @@ describe("splitTurn", () => {
     expect(splitTurn([text("  \n"), text("hi")])).toEqual({ work: [], answer: [text("hi")] });
   });
 
-  it("is all work when the turn ends on an action (still running)", () => {
-    expect(splitTurn([text("on it"), tool("bash")])).toEqual({ work: [text("on it"), tool("bash")], answer: [] });
+  it("keeps an unphased response visible when a tool follows it", () => {
+    expect(splitTurn([text("The substantive answer"), tool("bash")])).toEqual({ work: [tool("bash")], answer: [text("The substantive answer")] });
   });
 
   it("keeps Codex commentary inside work even after the last tool or with no tools", () => {
@@ -31,6 +33,276 @@ describe("splitTurn", () => {
   it("honors an explicit final answer even if a later record contains an action", () => {
     const final = { ...text("Done"), phase: "final_answer" as const };
     expect(splitTurn([tool("exec_command"), final, tool("cleanup")])).toEqual({ work: [tool("exec_command"), tool("cleanup")], answer: [final] });
+  });
+
+  it("keeps a multi-step answer and later closing sentence outside the work block", () => {
+    const answer = text("The report contains three sections.\n\n1. Summary.\n2. Details.\n3. Next steps.");
+    const check = { ...tool("bash"), summary: "bun test report" };
+    const closing = text("The report is ready.");
+    const parts = [answer, check, closing];
+    expect(splitTurn(parts)).toEqual({ work: [check], answer: [answer, closing] });
+    expect(workStartsOpen(true, parts)).toBe(true);
+    expect(workStartsOpen(false, parts)).toBe(false);
+  });
+});
+
+describe("turnSegments", () => {
+  it("keeps words written before a tool above it, and each run of work where it happened", () => {
+    const parts = [thinking("hm"), text("I'll check."), tool("eval"), tool("eval"), text("  \n"), text("Found it."), tool("edit"), text("Done.")];
+    expect(turnSegments(parts)).toEqual([
+      { kind: "work", start: 0, parts: [thinking("hm")] },
+      { kind: "answer", start: 1, parts: [text("I'll check.")] },
+      { kind: "work", start: 2, parts: [tool("eval"), tool("eval")] },
+      { kind: "answer", start: 5, parts: [text("Found it.")] },
+      { kind: "work", start: 6, parts: [tool("edit")] },
+      { kind: "answer", start: 7, parts: [text("Done.")] },
+    ]);
+  });
+
+  it("names each run by its first part, so a run that splits keeps the later run's name", () => {
+    const before = turnSegments([tool("A"), text(""), tool("B"), text("between"), tool("C")]);
+    const after = turnSegments([tool("A"), text("arrived"), tool("B"), text("between"), tool("C")]);
+    const runs = (segments: typeof before) => segments.flatMap((segment) => segment.kind === "work" ? [segment.start] : []);
+    expect(runs(before)).toEqual([0, 4]);
+    expect(runs(after)).toEqual([0, 2, 4]);
+  });
+
+  it("keeps commentary visible between action runs while preserving grouped prose", () => {
+    const narration = { ...text("looking\u2026"), phase: "commentary" as const };
+    expect(turnSegments([tool("read"), narration, tool("edit"), text("done")])).toEqual([
+      { kind: "work", start: 0, parts: [tool("read")] },
+      { kind: "answer", start: 1, parts: [narration] },
+      { kind: "work", start: 2, parts: [tool("edit")] },
+      { kind: "answer", start: 3, parts: [text("done")] },
+    ]);
+    expect(turnSegments([])).toEqual([]);
+  });
+});
+
+describe("foldedRequestsMatch", () => {
+  const failed = (value: string): Extract<ConversationPart, { kind: "text" }> => ({ kind: "text", text: `Error: ${value}`, failed: true });
+  const turn: ConversationTurn = { role: "assistant", ts: "2026-11-06T01:00:00Z", parts: [
+    text("Retrying the request."), failed("401 unauthorized"), failed("Connection error."), tool("bash"), failed("Overloaded"), text("Done: the token was renewed."),
+  ] };
+
+  it("names the folded row of failed requests a search's match is in, by its first part", () => {
+    expect(foldedRequestsMatch(turn, "unauthorized")).toBe(1);
+    expect(foldedRequestsMatch(turn, "connection error")).toBe(1);
+    // the error's own prefix, which the row leaves out of each line, is still in that row
+    expect(foldedRequestsMatch(turn, "Error: 401")).toBe(1);
+    expect(foldedRequestsMatch(turn, "overloaded")).toBe(4);
+  });
+
+  it("names none for a match drawn outside the rows, or none at all", () => {
+    expect(foldedRequestsMatch(turn, "token was renewed")).toBeNull();
+    expect(foldedRequestsMatch(turn, "Retrying")).toBeNull();
+    expect(foldedRequestsMatch(turn, "nowhere")).toBeNull();
+    // the first match decides, as the search's snippet does: here it is in the answer before the rows
+    expect(foldedRequestsMatch({ ...turn, parts: [text("An unauthorized call."), failed("401 unauthorized")] }, "unauthorized")).toBeNull();
+    // a user's words are never a failed request
+    expect(foldedRequestsMatch({ role: "user", ts: null, parts: [failed("401 unauthorized")] }, "unauthorized")).toBeNull();
+  });
+});
+
+describe("commandExitCode", () => {
+  const run = (over: Partial<ToolPart>): ToolPart => ({ ...tool("Bash"), ...over });
+  it("reads the code each agent records for a finished command", () => {
+    // Claude flags a failed Bash call and starts its result with the code
+    expect(commandExitCode(run({ state: "error", error: true, output: "Exit code 128\nfatal: not a git repository" }))).toBe(128);
+    expect(commandExitCode(run({ state: "ok", output: "clean" }))).toBe(0);
+    // Codex writes it into the output, flag or no flag
+    expect(commandExitCode({ ...tool("exec_command"), output: "Process exited with code 2\nboom" })).toBe(2);
+    expect(commandExitCode({ ...tool("exec_command"), output: "Chunk ID: 1\nExit code: 0\nOutput:\nok" })).toBe(0);
+  });
+
+  it("says nothing it does not know", () => {
+    // a failure with no code (a hook refused it, a timeout) is a failure, not an exit status
+    expect(commandExitCode(run({ state: "error", error: true, output: "Hook PreToolUse denied this call" }))).toBeNull();
+    expect(commandExitCode(run({ state: "pending" }))).toBeNull();
+    expect(commandExitCode({ ...tool("Read"), state: "ok", output: "Exit code 1" })).toBeNull();
+    expect(commandExitCode({ ...tool("exec_command"), output: "" })).toBeNull();
+  });
+});
+
+describe("elapsedSince", () => {
+  it("counts from the turn's start, and says nothing for a time it cannot read", () => {
+    expect(elapsedSince("2026-10-26T17:00:00Z", Date.parse("2026-10-26T17:00:12Z"))).toBe("12s");
+    expect(elapsedSince(null, Date.now())).toBeNull();
+    expect(elapsedSince("garbage", Date.now())).toBeNull();
+  });
+});
+
+describe("screenToolOutput", () => {
+  const fixture = (name: string) => readFileSync(new URL(`./fixtures-live-output/${name}`, import.meta.url), "utf8");
+  const slowJob = 'cd /tmp && for i in 1 2 3 4 5 6; do echo "progress line $i of a slow job that prints steadily"; sleep 2; done; sleep 90; echo finished';
+
+  it("finds nothing of the agent's own screen when the command has printed nothing there", () => {
+    // the OVS-13 screenshot: thinking counters, narration, the echo, key hints, the spinner and a tip
+    expect(screenToolOutput(fixture("claude-thinking-two-commands-120.txt"), "cd /Users/hallel/.herdr/worktrees/main/hallelshohat-rd-11022-separate-external-ent-19; until [ -s .peer/plan/round-1-peer.md ]; do sleep 5; done; cat .peer/plan/round-1-peer.md")).toBe("");
+    // Claude 2.1.312 folds the output into "(21s · 7 lines)" on the echo's last row
+    expect(screenToolOutput(fixture("claude-2.1.312-running-120.txt"), slowJob)).toBe("");
+    // Codex 0.165 waits on a background terminal and shows only the command
+    expect(screenToolOutput(fixture("codex-0.165.0-running-120.txt"), slowJob)).toBe("");
+  });
+
+  it("keeps only the lines under the running command's own echo", () => {
+    const screen = [
+      "  Thinking for 6s, running 1 shell command · 10s…",
+      "  ⎿  $ cd /work && for i in 1 2 3; do echo \"step $i\"; sleep 2;",
+      "     done",
+      "     step 1",
+      "       step 2 indented",
+      "     (10s)",
+      "     (ctrl+b to run in background)",
+      "",
+      "· SirMixALotting… (3m 52s · ↓ 20.4k tokens)",
+    ].join("\n");
+    expect(screenToolOutput(screen, 'cd /work && for i in 1 2 3; do echo "step $i"; sleep 2; done')).toBe("step 1\n  step 2 indented");
+  });
+
+  it("reads an older Claude Code's Bash block and a Codex Running block", () => {
+    const claude = ["⏺ Re-running the PR update.", "", "⏺ Bash(bun test --watch)", "  ⎿  3 pass", "     1 fail", "     Running…", "", "✻ Cogitating… (12s · ↓ 1.2k tokens)", "", "─".repeat(120), "❯ ", "─".repeat(120)].join("\n");
+    expect(screenToolOutput(claude, "bun test --watch")).toBe("3 pass\n1 fail");
+    const codex = "  >_ OpenAI Codex (v0.164.0)\n\n• Running python3 emit-log.py\n  └ line 1\n    line 2\n    … +4 lines\n\n• Working (2s • esc to interrupt)\n\n› ";
+    expect(screenToolOutput(codex, "python3 emit-log.py")).toBe("line 1\nline 2");
+  });
+
+  it("never takes another command's echo that only starts the same", () => {
+    const screen = "• Running cd /work/long-project && echo SECOND\n  └ SECOND output\n\n› ";
+    expect(screenToolOutput(screen, "cd /work/long-project && echo FIRST")).toBe("");
+    expect(screenToolOutput(screen, "cd /work/long-project && echo SECOND")).toBe("SECOND output");
+    // an echo the agent cut with "…" may be any command that starts the same: it is never taken
+    for (const cut of ["• Running cd /work/long-project && echo …\n  └ SECOND output\n\n› ", "• Running cd /work/long-project && echo SEC…\n  └ SECOND output\n\n› ", "⏺ Bash(cd /work/long-project && echo …)\n  ⎿  SECOND output\n\n"]) {
+      expect(screenToolOutput(cut, "cd /work/long-project && echo FIRST")).toBe("");
+      expect(screenToolOutput(cut, "cd /work/long-project && echo SECOND")).toBe("");
+    }
+  });
+
+  it("tells commands apart by the spaces inside them", () => {
+    const screen = '• Running echo "A B"\n  └ A B\n\n› ';
+    expect(screenToolOutput(screen, 'echo "AB"')).toBe("");
+    expect(screenToolOutput(screen, 'echo "A B"')).toBe("A B");
+    // a wrap at the screen's edge is a space, a line break of the command or a word cut in two
+    const wrapped = "  ⎿  $ printf '%s' alpha\n     beta-gamma\n     delta\n     out\n     (3s)";
+    expect(screenToolOutput(wrapped, "printf '%s' alpha beta-gammadelta")).toBe("out");
+    expect(screenToolOutput(wrapped, "printf '%s' alpha\nbeta-gamma delta")).toBe("out");
+    expect(screenToolOutput(wrapped, "printf '%s' alphabeta-gamma delta")).toBe("out");
+    expect(screenToolOutput(wrapped, "printf '%s' alpha beta gamma delta")).toBe("");
+  });
+
+  it("is empty when the running command is not on the screen", () => {
+    expect(screenToolOutput(fixture("claude-thinking-two-commands-120.txt"), "bun run build")).toBe("");
+    expect(screenToolOutput("⏺ Bash(bun test)\n  ⎿  3 pass", "")).toBe("");
+  });
+});
+
+describe("codexLiveOutput", () => {
+  const parts = JSON.parse(readFileSync(new URL("./fixtures-live-output/codex-0.165.0-running-parts.json", import.meta.url), "utf8")) as ToolPart[];
+
+  it("joins the chunks every earlier poll of the running command's session answered", () => {
+    // the last poll still waits: no output record yet
+    const running: ToolPart = { ...parts.at(-1)!, output: "", state: "pending" };
+    const lines = [1, 2, 3, 4, 5].map((n) => `progress line ${n} of a slow job that prints steadily`).join("\n");
+    expect(codexLiveOutput([...parts.slice(0, -1), running], running)).toBe(lines);
+  });
+
+  it("keeps the chunks when the agent's words sit between the command and its next poll", () => {
+    const running: ToolPart = { ...parts.at(-1)!, output: "", state: "pending" };
+    const words: ConversationPart = { kind: "text", text: "Still waiting on the slow job.", phase: "commentary" };
+    const turn = [...parts.slice(0, -1), words, running];
+    expect(codexLiveOutput(turn, running)).toContain("progress line 5 of a slow job");
+  });
+
+  it("reads a chunk cut to the page's length as far as it goes, and whole once loaded", () => {
+    const long = Array.from({ length: 100 }, (_, n) => `line ${n} ${"x".repeat(45)}`).join("\n");
+    const raw = `Script completed\nWall time 5.0 seconds\nOutput:\n\n${JSON.stringify({ chunk_id: "c", session_id: 28799, output: `${long}\n` })}`;
+    // as the server's trimOutput leaves it: the head, then the mark
+    const first: ToolPart = { ...parts[1]!, output: `${raw.slice(0, 4000)}\n… trimmed`, output_ref: "call_cut", output_size: raw.length };
+    const running: ToolPart = { ...parts.at(-1)!, output: "", state: "pending" };
+    const preview = codexLiveOutput([first, running], running)!;
+    expect(preview.startsWith("line 0 ")).toBe(true);
+    expect(long.startsWith(preview)).toBe(true);
+    expect(codexLiveOutput([first, running], running, new Map([["call_cut", raw]]))).toBe(long);
+  });
+
+  it("takes only the running session's chunks from a call that started several commands", () => {
+    const chunk = (session: number, output: string) => JSON.stringify({ chunk_id: `c${session}`, wall_time_seconds: 1, session_id: session, original_token_count: 3, output });
+    const both: ToolPart = { kind: "tool", name: "exec", summary: "exec", call_id: "both",
+      input: "const [a, b] = await Promise.all([tools.exec_command({cmd:'alpha'}), tools.exec_command({cmd:'beta'})]); text(a); text(b);",
+      output: `Script completed\nWall time 1.0 seconds\nOutput:\n\n${chunk(21931, "ALPHA stdout\n")}\n${chunk(64527, "BETA stdout\nBETA stderr\n")}` };
+    const poll = (session: number): ToolPart => ({ kind: "tool", name: "exec", summary: "exec", call_id: `poll${session}`, state: "pending", output: "",
+      input: `text(await tools.write_stdin({session_id:${session},chars:"",yield_time_ms:1000}));\n` });
+    expect(codexLiveOutput([both, poll(64527)], poll(64527))).toBe("BETA stdout\nBETA stderr");
+    expect(codexLiveOutput([both, poll(21931)], poll(21931))).toBe("ALPHA stdout");
+  });
+
+  it("splits a native result at its own envelope, whatever the command printed", () => {
+    const start: ToolPart = { kind: "tool", name: "exec_command", summary: "run", call_id: "start", input: JSON.stringify({ cmd: "./job.sh" }),
+      output: "Chunk ID: 1a2b\nWall time: 1.0 seconds\nProcess running with session ID 1234\nOriginal token count: 4\nOutput:\nbefore\nOutput:\nafter\n" };
+    const poll: ToolPart = { kind: "tool", name: "write_stdin", summary: "poll", call_id: "poll", state: "pending", output: "", input: JSON.stringify({ session_id: 1234, chars: "" }) };
+    expect(codexLiveOutput([start, poll], poll)).toBe("before\nOutput:\nafter");
+  });
+
+  it("is null for a call that names no session, and empty before any chunk", () => {
+    const first: ToolPart = { ...parts[0]!, output: "", state: "pending" };
+    expect(codexLiveOutput([first], first)).toBeNull();
+    const poll: ToolPart = { ...parts[1]!, output: "", state: "pending" };
+    expect(codexLiveOutput([poll], poll)).toBe("");
+  });
+});
+
+describe("isCommandTool", () => {
+  it("counts Codex's poll of a running command's terminal as a command, not an edit", () => {
+    expect(isCommandTool("write_stdin")).toBe(true);
+    expect(isCommandTool("exec_command")).toBe(true);
+    expect(isCommandTool("Write")).toBe(false);
+  });
+});
+
+describe("claudeLiveOutput", () => {
+  const bash = (id: string, rest: Partial<ToolPart>): ToolPart => ({ kind: "tool", name: "Bash", summary: id, input: "{}", output: "", call_id: id, ...rest });
+
+  it("never shows a background task's file as a running command's", () => {
+    const foreground = bash("fg", { state: "pending" });
+    // the later parallel call went to the background: its result names its file
+    const background = bash("bg", { state: "ok", output: "Command running in background with ID: b2. Output is being written to: /tmp/claude-501/p/s/tasks/b2.output" });
+    const files = [{ id: "b1", text: "FOREGROUND output" }, { id: "b2", text: "BACKGROUND output" }];
+    expect(claudeLiveOutput(files, [foreground, background], foreground)).toBe("FOREGROUND output");
+    expect(claudeLiveOutput([...files].reverse(), [foreground, background], foreground)).toBe("FOREGROUND output");
+  });
+
+  it("gives parallel running commands their files in the order they started, and nothing before a file exists", () => {
+    const first = bash("one", { state: "pending" });
+    const second = bash("two", { state: "pending" });
+    const files = [{ id: "a", text: "A" }, { id: "b", text: "B" }];
+    expect(claudeLiveOutput(files, [first, second], first)).toBe("A");
+    expect(claudeLiveOutput(files, [first, second], second)).toBe("B");
+    expect(claudeLiveOutput([{ id: "a", text: "A" }], [first, second], second)).toBe("");
+    expect(claudeLiveOutput(files, [first], bash("done", { state: "ok" }))).toBe("");
+  });
+});
+
+describe("runNames", () => {
+  // what Turn keeps between draws: each part's run name, by part index
+  const draw = (parts: ConversationPart[], previous: ReadonlyMap<number, string>) => {
+    const runs = turnSegments(parts).flatMap((segment) => segment.kind === "work" ? [segment] : []);
+    const names = runNames(runs, new Map(parts.map((part, index) => [part, index])), previous);
+    return { names, next: new Map(runs.flatMap((run, index) => run.parts.map((part) => [parts.indexOf(part), names[index]!] as const))) };
+  };
+
+  it("names a run by its first part the first time, and keeps the name while its parts change", () => {
+    const narration = { ...text("Checking."), phase: "commentary" as const };
+    const first = draw([text("Checking."), tool("ls")], new Map());
+    expect(first.names).toEqual(["work:1"]);
+    expect(draw([narration, tool("ls")], first.next).names).toEqual(["work:1"]);
+  });
+
+  it("gives a split run's first part the old name and never hands a shown name to a new run", () => {
+    const shown = draw([tool("A"), text(""), tool("B"), text("between"), tool("C")], new Map());
+    expect(shown.names).toEqual(["work:0", "work:4"]);
+    expect(draw([tool("A"), text("arrived"), tool("B"), text("between"), tool("C")], shown.next).names).toEqual(["work:0", "work:2", "work:4"]);
+    // the run named work:0 now starts at 2; a new run at 0 must not take its name
+    expect(draw([tool("new"), text("between"), tool("A")], new Map([[2, "work:0"]])).names).toEqual(["work:0+", "work:0"]);
   });
 });
 
@@ -50,10 +322,10 @@ describe("workStartsOpen", () => {
     expect(workStartsOpen(false, [commentary("Checking."), tool("exec_command"), final("Done"), tool("cleanup")])).toBe(false);
   });
 
-  it("keeps a settled turn open when its words are followed by an action and no answer: the fold would hide all of them", () => {
-    expect(workStartsOpen(false, [text("on it"), tool("bash")])).toBe(true);
+  it("folds a settled turn when an unphased answer is followed by an action because the answer remains visible", () => {
+    expect(workStartsOpen(false, [text("The answer"), tool("bash")])).toBe(false);
     // a todo update after the closing summary is not even counted in the header
-    expect(workStartsOpen(false, [tool("read"), text("Here is the full answer."), tool("TodoWrite")])).toBe(true);
+    expect(workStartsOpen(false, [tool("read"), text("Here is the full answer."), tool("TodoWrite")])).toBe(false);
   });
 
   it("keeps a settled turn open when it ends in Codex commentary: folding would hide its last text", () => {
@@ -72,6 +344,33 @@ describe("workStartsOpen", () => {
     expect(workStartsOpen(false, [])).toBe(false);
     expect(workStartsOpen(false, [thinking("hm")])).toBe(false);
     expect(workStartsOpen(false, [tool("bash"), text("  ")])).toBe(false);
+  });
+});
+
+describe("workBlockStartsOpen", () => {
+  const commentary = (value: string) => ({ ...text(value), phase: "commentary" as const });
+  const running = { live: true, waiting: false, last: true };
+  const settled = { live: false, waiting: false, last: true };
+  const endsInWords = [tool("exec_command"), commentary("Still investigating")];
+
+  it("starts as it always has while Collapse work is off", () => {
+    expect(workBlockStartsOpen(running, [tool("bash")], false)).toBe(true);
+    expect(workBlockStartsOpen({ ...running, waiting: true }, [tool("bash")], false)).toBe(true);
+    expect(workBlockStartsOpen(settled, [tool("read"), text("done")], false)).toBe(false);
+    expect(workBlockStartsOpen(settled, endsInWords, false)).toBe(true);
+    // a run before the turn's last part: what follows it is still to read
+    expect(workBlockStartsOpen({ ...settled, last: false }, endsInWords, false)).toBe(false);
+    expect(workBlockStartsOpen({ ...running, live: false, last: false }, [tool("bash")], false)).toBe(false);
+  });
+
+  it("folds every block with Collapse work on, the running one and one ending in the agent's words included (#2228)", () => {
+    expect(workBlockStartsOpen(running, [tool("bash")], true)).toBe(false);
+    expect(workBlockStartsOpen(settled, endsInWords, true)).toBe(false);
+    expect(workBlockStartsOpen(settled, [tool("read"), text("done")], true)).toBe(false);
+  });
+
+  it("keeps the block that waits on the user open with Collapse work on: it may hold what they answer", () => {
+    expect(workBlockStartsOpen({ ...running, waiting: true }, [tool("bash")], true)).toBe(true);
   });
 });
 
@@ -108,6 +407,14 @@ describe("workFailed", () => {
     expect(workFailed([tool("Edit"), thinking("x"), text("y")])).toBe(0);
   });
 
+  it("counts native runtime errors without marking warnings or recovery as failures", () => {
+    const notices: ConversationPart[] = ["warning", "guardian_warning", "deprecation_notice", "auth_recovery_started", "auth_recovery_completed"].map((source) => ({ kind: "notice", native: true, source, text: source }));
+    expect(workFailed(notices)).toBe(0);
+    const errors: ConversationPart[] = ["error", "stream_error"].map((source) => ({ kind: "notice", native: true, source, text: source }));
+    expect(workFailed([...notices, ...errors, failed])).toBe(3);
+    expect(workFailed([{ kind: "notice", source: "error", text: "Another agent's notice" }])).toBe(0);
+  });
+
   it("counts a failed call the summary does not count", () => {
     const parts: ConversationPart[] = [{ ...failed, name: "TodoWrite" }];
     expect(workSummary(parts)).toBe("");
@@ -125,6 +432,15 @@ it("keeps an approval-blocked assistant turn live, including with a last-activit
   expect(isLiveWorkTurn(turn, false, "blocked")).toBe(false);
   expect(isLiveWorkTurn(turn, true, "idle")).toBe(false);
   expect(isLiveWorkTurn({ ...turn, role: "user" }, true, "blocked")).toBe(false);
+});
+
+it("does not title a turn that ended on its final answer as running when the agent begins another by itself", async () => {
+  const { isLiveWorkTurn } = await import("./workBlocks.ts");
+  const answered = { role: "assistant" as const, ts: null, parts: [tool("Glob"), { kind: "text" as const, text: "The subagent is still running.", phase: "final_answer" as const }] };
+  // a background task ended: herdr says working, the new turn has no row yet, and nothing was sent from here
+  expect(isLiveWorkTurn(answered, true, "working")).toBe(false);
+  // words that are no final answer yet are the running turn's own
+  expect(isLiveWorkTurn({ ...answered, parts: [answered.parts[0]!, { kind: "text" as const, text: "Let me look." }] }, true, "working")).toBe(true);
 });
 
 it("does not title a finished turn as running after a message was sent over it", async () => {
@@ -156,6 +472,14 @@ it("says the open block waits for the user while the agent is blocked, and only 
 });
 
 describe("visibleWorkParts", () => {
+  it("keeps native wrappers with returned images or errors while hiding represented text-only wrappers", () => {
+    const wrapper: ToolPart = { ...tool("exec"), native_wrapper: true };
+    const pictured: ToolPart = { ...wrapper, images: [{ media_type: "image/png", ref: "codex-tool:mixed:0" }] };
+    const failed: ToolPart = { ...wrapper, error: true };
+    expect(visibleWorkParts([wrapper, pictured, failed], false)).toEqual([pictured, failed]);
+    expect(visibleWorkParts([{ ...wrapper, images: [] }], false)).toEqual([]);
+  });
+
   it("draws no rows for skills, nor for thinking unless it is shown", () => {
     const skill: ConversationPart = { kind: "skill", skill: { name: "review", evidence: "invocation", status: "loaded" } };
     expect(visibleWorkParts([skill, thinking("hm")], false)).toEqual([]);

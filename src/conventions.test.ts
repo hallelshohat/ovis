@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fail, files as scan, read, repo } from "../scripts/source-scan.ts";
+import { fail, lineOf, files as scan, read, repo } from "../scripts/source-scan.ts";
 
 // Client conventions from AGENTS.md and src/AGENTS.md that used to be prose only. Each failure
 // says what to change; server rules are in server/conventions.test.ts, repo-wide ones in
@@ -25,6 +25,13 @@ const NAMED_COLORS = "aliceblue antiquewhite aqua aquamarine azure beige bisque 
 const COLOR_LITERAL = new RegExp(String.raw`#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(|(?<![\w-])(?:${NAMED_COLORS.join("|")})(?![\w-])`, "i");
 
 describe("component CSS", () => {
+  it("sizes viewport fallbacks with dynamic height", () => {
+    const offenders = scan("src/**/*.css").flatMap((file) =>
+      declarationValues(read(file)).filter((value) => /\b100vh\b/i.test(value)).map((value) => `${file}: ${value}`),
+    );
+    fail(offenders, "Use var(--app-height, 100dvh), or 100dvh for a measured-room fallback, so browser chrome and the phone keyboard do not enlarge the visible viewport.");
+  });
+
   // The light theme and the opt-in palettes are only token overrides in src/styles.css: a literal
   // in a component stylesheet stays the same in every theme, and `!important` beats the order the
   // primitives rely on (src/AGENTS.md).
@@ -182,6 +189,32 @@ describe("UI wording", () => {
       .flatMap((file) => read(file).split("\n").flatMap((line, index) =>
         /^\s*(?:\/\/|\/?\*)/.test(line) || !/\bNew [Ss]ession\b/.test(line) ? [] : [`${file}:${index + 1}: ${line.trim()}`]));
     fail(offenders, "UI text says \"New workspace\", not \"New session\" (AGENTS.md, UI wording). Change the string and its i18n entries in src/lib/i18n.*.ts or src/lib/i18n/*.ts.");
+  });
+});
+
+describe("regular expressions", () => {
+  // Safari before 16.4 cannot parse a lookbehind, and one in any module stops the whole app from
+  // loading there (#2534); the build does not rewrite regular expressions.
+  it("use no lookbehind in the client's code", () => {
+    const offenders = [...scan("src/**/*.{ts,tsx}"), ...scan("shared/**/*.ts")].filter((name) => !/\.test\./.test(name)).flatMap((file) => {
+      // read as written: comment stripping takes a `/*` in a regex class for a comment and hides what follows
+      const source = read(file);
+      return [...source.matchAll(/\(\?<[=!]/g)].map((match) => `${file}:${lineOf(source, match.index)}`);
+    });
+    fail(offenders, "No lookbehind ((?<= or (?<!) in the client: match the character before with the pattern, or check it in code (shared/lookbehind.ts).");
+  });
+});
+
+describe("popstate listeners", () => {
+  // lib/useAddressBar.ts reads the entry every Back and Forward lands on, and holds the address back
+  // until it has. The order of the listeners does not matter to that; a listener that stops the
+  // event does, since the read then never comes.
+  it("never stop the event for the listeners after them", () => {
+    const offenders = scan("src/**/*.{ts,tsx}").filter((name) => !/\.test\./.test(name)).filter((file) => {
+      const source = read(file);
+      return /["'\x60]popstate["'\x60]/.test(source) && source.includes("stopImmediatePropagation");
+    });
+    fail(offenders, "A file that listens for popstate does not call stopImmediatePropagation: every popstate listener after it, lib/useAddressBar.ts's among them, must hear each Back and Forward. A listener for another event that needs the call goes in a file of its own.");
   });
 });
 

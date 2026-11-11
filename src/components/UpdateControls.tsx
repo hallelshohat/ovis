@@ -1,18 +1,40 @@
-import { useEffect, useState } from "react";
-import { X } from "lucide-react";
-import { CHECKOUT_CHANGED_REASON, SUMMARY_GROUPS, type SummaryGroup, type UpdateNotes, type UpdateStatus } from "../../shared/update.ts";
+import { useContext, useEffect, useState } from "react";
+import { Download, Info, X } from "lucide-react";
+import { CHECKOUT_CHANGED_REASON, DESKTOP_APP_UPDATES, SUMMARY_GROUPS, type SummaryGroup, type UpdateNotes, type UpdateStatus } from "../../shared/update.ts";
 import { useHerdrUpdate } from "../lib/herdrUpdate.ts";
 import { runningAppVersion, runningHerdrVersion, staleClientVersion, versionLabel } from "../lib/runningVersion.ts";
 import { useSettings } from "../lib/settings.ts";
-import { announcesUpdate, readAnnounced, summaryFor, watchAnnounced, writeAnnounced } from "../lib/updateNotes.ts";
+import { announcesUpdate, readAnnounced, readOfferClosed, summaryFor, watchAnnounced, watchOfferClosed, writeAnnounced, writeOfferClosed } from "../lib/updateNotes.ts";
 import { describeUpdate } from "../lib/updateProgress.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
+import type { DesktopUpdateLine } from "../lib/desktopUpdate.ts";
 import { lazyChunkFailed, onLazyChunkFailure } from "../lib/lazyChunk.ts";
 import { Markdown } from "./Markdown.tsx";
 import { RenderBoundary } from "./RenderBoundary.tsx";
+import { SettingsBare, SettingsRow } from "./SettingsControls.tsx";
 import "./Machines.css";
 import "./UpdateControls.css";
-import { useLocale, useT } from "../lib/i18n.ts";
+import { useLocale, useT, type Translate } from "../lib/i18n.ts";
+
+/**
+ * The server's reasons an update cannot run from here, in the reader's language (G-099). The server
+ * writes them in English (server/updater.ts, shared/update.ts) and each is a key of its own; one not
+ * listed here is shown as it came. The two long ones are known by their start.
+ */
+const BLOCKED_REASONS: ReadonlyArray<{ is: (reason: string) => boolean; words: (t: Translate) => string }> = [
+  { is: (reason) => reason === "Start with bun run start or the herdr plugin to enable updates.", words: (t) => t("Start with bun run start or the herdr plugin to enable updates.") },
+  { is: (reason) => reason === "Switch the source checkout to main to update.", words: (t) => t("Switch the source checkout to main to update.") },
+  { is: (reason) => reason === CHECKOUT_CHANGED_REASON, words: (t) => t("The source checkout changed. Restart the app before updating.") },
+  { is: (reason) => reason === "The source checkout has local changes. Commit or move them before updating.", words: (t) => t("The source checkout has local changes. Commit or move them before updating.") },
+  { is: (reason) => reason === "Updates require a Git checkout on the main branch.", words: (t) => t("Updates require a Git checkout on the main branch.") },
+  { is: (reason) => reason.startsWith("This server runs from an installed update's folder"), words: (t) => t("This server runs from an installed update's folder, not from its source checkout. Restart Ovis from its source checkout (the herdr plugin's Stop, then Start, or bun run start there) to update.") },
+  { is: (reason) => reason.startsWith("The running version is not part of the release history"), words: (t) => t("The running version is not part of the release history; automatic downgrade is disabled.") },
+];
+
+/** `reason` as the server gave it, in the reader's words when it is a known one; an unknown reason as it came. */
+export function blockedReasonWords(reason: string, t: Translate): string {
+  return BLOCKED_REASONS.find((entry) => entry.is(reason))?.words(t) ?? reason;
+}
 
 declare const __APP_VERSION__: string;
 
@@ -24,7 +46,8 @@ const RESTART_HELP = "https://github.com/devswha/ovis/blob/main/docs/guide.md#up
  * What an update brings, or brought: each release it installs, newest first. A release is told
  * as patch notes, short lines in the app's language under what is new, improved and fixed, with
  * its changelog section folded under them; a release that wrote none shows the section as the
- * release wrote it (English). The box scrolls on its own, so the buttons under it stay in reach. The text comes
+ * release wrote it (English). The summary scrolls with Settings; the full changelog scrolls in a box of its
+ * own, so the buttons under it stay in reach (G-145). The text comes
  * from the Git remote: a section that cannot be drawn says so and takes nothing else down
  * with it.
  */
@@ -35,12 +58,14 @@ function ReleaseNotes({ notes, label }: { notes: Pick<UpdateNotes, "releases" | 
   const groups: Record<SummaryGroup, string> = { new: t("New features"), improved: t("Improvements"), fixed: t("Bug fixes") };
   return <>
     <span className="settings-label">{label}</span>
-    <div className="update-notes" role="region" aria-label={label} tabIndex={0}>
+    <div className="update-notes" role="region" aria-label={label}>
       {notes.releases.map((release) => {
         const summary = summaryFor(release, resolvedLanguage);
-        const section = <RenderBoundary resetKey={release.notes} fallback={() => <p className="settings-hint">{t("These notes could not be shown.")} <a href={CHANGELOG} target="_blank" rel="noopener noreferrer">{t("Full changelog")}</a></p>}>
-          <Markdown>{release.notes}</Markdown>
-        </RenderBoundary>;
+        const section = <div className="update-changelog" role="region" aria-label={t("Full changelog")} tabIndex={0}>
+          <RenderBoundary resetKey={release.notes} fallback={() => <p className="settings-hint">{t("These notes could not be shown.")} <a href={CHANGELOG} target="_blank" rel="noopener noreferrer">{t("Full changelog")}</a></p>}>
+            <Markdown>{release.notes}</Markdown>
+          </RenderBoundary>
+        </div>;
         return <section key={release.version}>
           <h4>v{release.version}{release.date && <time>{release.date}</time>}</h4>
           {summary === null ? section : <>
@@ -85,16 +110,40 @@ export function UpdateControls({ updates, bridgesFollow = false }: { updates: Up
   const installing = busy && (status?.phase === "building" || status?.phase === "restarting");
   const tabVersion = staleClientVersion(status, __APP_VERSION__);
   const restart = needsReload && reload === "restart";
-  // the restart line says what the check's own "checkout changed" reason says; other blockers stay
-  const blocked = restart && status?.blocked_reason === CHECKOUT_CHANGED_REASON ? null : status?.blocked_reason ?? null;
+  // the restart line says what the check's own "checkout changed" reason says; other blockers stay, in the reader's language
+  const reason = status?.blocked_reason === DESKTOP_APP_UPDATES ? t("This server is part of the Ovis app, which updates them together: updates come with the app, not from here.")
+    : status?.blocked_reason ? blockedReasonWords(status.blocked_reason, t) : null;
+  const blocked = restart && status?.blocked_reason === CHECKOUT_CHANGED_REASON ? null : reason;
+  const bare = useContext(SettingsBare);
+  // bare (herdr-app's About): one line, the version and its state with the buttons beside it, while
+  // nothing needs a sentence; an install, a failure or a reload falls back to the full section below
+  if (bare && !installing && !needsReload && failure === null && !error && !status?.error && !blocked && !tabVersion) {
+    const state = busy ? t("Checking for updates…") : status?.available ? t("Version {version} is available.", { version: versionLabel(status.latest_version, status.latest_revision) ?? "" }) : status?.checked_at ? t("Up to date.") : null;
+    return <section className="settings-section settings-updates" data-section="updates" tabIndex={-1} aria-labelledby="settings-updates-title">
+      {/* the section keeps its name for a link and a screen reader, out of sight like a bare page's captions */}
+      <h3 id="settings-updates-title" className="visually-hidden">{t("Updates")}</h3>
+      <div className="settings-card">
+        <SettingsRow label="Ovis" icon={Info}>
+          <span className="settings-fact">{t("Running {version}", { version: runningAppVersion(status, __APP_VERSION__) })}</span>
+          {state && <span className="settings-hint" role="status">{state}</span>}
+          {status?.managed && (status.available
+            ? <button type="button" className="btn btn-primary" disabled={busy || offered === null} onClick={() => { if (offered) void request({ command: "install", expected_revision: offered }); }}>{t("Update and restart")}</button>
+            : <button type="button" className="btn" disabled={busy} onClick={() => void request({ command: "check" })}>{t("Check for updates")}</button>)}
+        </SettingsRow>
+        {notes && <div className="settings-item"><ReleaseNotes notes={notes} label={t("What's new")} /></div>}
+        {/* what the header's "What's new" opens: kept in the compact line too */}
+        {installed && installed.releases.length > 0 && <div className="settings-item"><ReleaseNotes notes={installed} label={t("What the last update brought")} /></div>}
+      </div>
+    </section>;
+  }
   // focusable from code only: a button that points here (the header line's) lands on it
   return <section className="settings-section settings-updates" data-section="updates" tabIndex={-1} aria-labelledby="settings-updates-title">
-    <h3 id="settings-updates-title">{t("Updates")}</h3>
+    <h3 id="settings-updates-title" className={bare === true ? "visually-hidden" : undefined}>{t("Updates")}</h3>
     <div className="settings-card"><div className="settings-item">
     {/* always a version: the sidebar no longer carries one */}
     <p className="settings-hint">{t("Running {version}", { version: runningAppVersion(status, __APP_VERSION__) })}</p>
     {tabVersion && reload !== "restart" && <p className="settings-hint">{t("This tab still runs {version} until it is reloaded.", { version: tabVersion })}</p>}
-    {installing && !error ? <div role="status"><UpdateProgress status={status} fallback={t(status?.phase === "building" ? "Installing dependencies and building…" : "Restarting the bridge…")} /></div> : <p className="settings-hint" role="status">
+    {installing && !error ? <div role="status"><UpdateProgress status={status} fallback={t(status?.phase === "building" ? "Installing dependencies and building…" : "Restarting the bridge…")} /></div> : <p className="settings-hint" role={error || status?.error || failure ? "alert" : "status"}>
       {(failure === "offer-changed" ? t("A newer release was published after you chose this update, so nothing was installed. Check again to review it.") : null) ?? error ?? status?.error ?? (restart ? <><span>{t("Ovis was updated on this PC. Restart it there to load the update.")}</span> <a className="settings-link" href={RESTART_HELP} target="_blank" rel="noreferrer">{t("How to restart")}</a></> : null) ?? blocked ?? (busy ? t("Checking for updates…") :
         status?.available ? t("Version {version} is available.", { version: versionLabel(status.latest_version, status.latest_revision) ?? "" }) : status?.checked_at ? t("Up to date.") : t("Waiting for an update check…"))}
     </p>}
@@ -122,10 +171,23 @@ export function UpdateControls({ updates, bridgesFollow = false }: { updates: Up
  * herdr itself. `herdr update` typed into a pane is refused by herdr, and every terminal here is
  * a pane: the server runs it instead and moves the running panes onto the new version.
  */
-export function HerdrUpdateControls({ enabled, herdrVersion }: { enabled: boolean; herdrVersion: string | null }) {
+/** `showVersion`: on a bare page, name herdr's version here too, where no runtime line above names it */
+export function HerdrUpdateControls({ enabled, herdrVersion, showVersion = false }: { enabled: boolean; herdrVersion: string | null; showVersion?: boolean }) {
   const t = useT();
   const { status, error, busy, request } = useHerdrUpdate(enabled);
   const version = runningHerdrVersion(status, herdrVersion);
+  const bare = useContext(SettingsBare);
+  // bare: About's first line already names herdr's version; here only its Update button, while nothing needs a sentence
+  if (bare && !(status?.supported && ((status.stale && !!status.binary_version && !!status.server_version) || error || busy || status.output || status.phase === "error"))) {
+    return status?.supported || (showVersion && version) ? <section className="settings-section settings-herdr-update">
+      <div className="settings-card">
+        <SettingsRow label="herdr" icon={Download}>
+          {showVersion && version && <span className="settings-fact">{version}</span>}
+          {status?.supported && <button type="button" className="btn" onClick={() => void request()}>{t("Update herdr")}</button>}
+        </SettingsRow>
+      </div>
+    </section> : null;
+  }
   // Windows, an older server, a herdr that does not answer: nothing to offer, and the version
   // the health check reported is still read here, since the sidebar no longer carries it
   if (!status?.supported) {
@@ -144,9 +206,11 @@ export function HerdrUpdateControls({ enabled, herdrVersion }: { enabled: boolea
     <div className="update-actions">
       <button type="button" className={stale ? "btn btn-primary" : "btn"} disabled={busy} onClick={() => void request()}>{t("Update herdr")}</button>
     </div>
-    {(error || busy) && <p className="settings-hint" role="status">{error ?? t("Updating herdr…")}</p>}
+    {(error || busy) && <p className="settings-hint" role={error ? "alert" : "status"}>{error ?? t("Updating herdr…")}</p>}
     {/* herdr's own words: what it installed, or why it did not */}
-    {!busy && status.output && <pre className="update-output" data-failed={status.phase === "error" || undefined}>{status.output}</pre>}
+    {!busy && status.output && <pre className="update-output" role={status.phase === "error" ? "alert" : undefined} data-failed={status.phase === "error" || undefined}>{status.output}</pre>}
+    {/* a failure herdr printed nothing for still says it failed */}
+    {!busy && !status.output && status.phase === "error" && <p className="settings-hint" role="alert">{t("herdr could not be updated, and it printed nothing to say why.")}</p>}
     </div></div>
   </section>;
 }
@@ -163,6 +227,9 @@ export function UpdateNotice({ updates, onOpen }: { updates: UpdatesModel; onOpe
   const [announced, setAnnounced] = useState(readAnnounced);
   // subscribed first, then read: a dismissal in another tab between this tab's first read and its subscription is not lost
   useEffect(() => { const stop = watchAnnounced(setAnnounced); setAnnounced(readAnnounced()); return stop; }, []);
+  // the release whose offer this device closed (G-102), as the done line is closed: the next release offers again
+  const [closedOffer, setClosedOffer] = useState(readOfferClosed);
+  useEffect(() => { const stop = watchOfferClosed(setClosedOffer); setClosedOffer(readOfferClosed()); return stop; }, []);
   // the check an install starts with reports nothing available until it is done: the line this
   // button sits on must not leave between the tap and the first step
   const [started, setStarted] = useState(false);
@@ -214,6 +281,9 @@ export function UpdateNotice({ updates, onOpen }: { updates: UpdatesModel; onOpe
   // unseen. An install names the release this render offered.
   const install = failure === null ? offered : null;
   const changed = failure === "offer-changed";
+  // only the plain offer closes: a failure or a changed offer stays until it is dealt with, and Settings still offers the release
+  const offer = !failed && !changed && !attempted ? status?.latest_revision ?? null : null;
+  if (offer !== null && offer === closedOffer) return null;
   const text = changed ? t("A newer release was published after you chose this update, so nothing was installed. Check again to review it.") : failed ? t("The update could not be installed.") : status?.latest_version ? t("Ovis v{version} is available.", { version: status.latest_version }) : t("An Ovis update is available.");
   return <div className={changed ? "update-notice is-line is-warning" : "update-notice is-line"} role="status">
     <span title={text}>{text}</span>
@@ -223,6 +293,33 @@ export function UpdateNotice({ updates, onOpen }: { updates: UpdatesModel; onOpe
       setAttempted(true); setStarted(install !== null);
       void request(install !== null ? { command: "install", expected_revision: install } : { command: "check" });
     }}>{t(failed ? "Try again" : "Update")}</button>
+    {offer !== null && <button type="button" className="icon-button update-notice-dismiss" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={(event) => {
+      // the line goes with its Close: a keyboard's focus moves to the header's More beside where it was, not to the page
+      const focused = event.currentTarget === document.activeElement;
+      writeOfferClosed(offer); setClosedOffer(offer);
+      if (focused) document.querySelector<HTMLElement>(".header-more-button")?.focus();
+    }}><X /></button>}
+  </div>;
+}
+
+/**
+ * The desktop app's line for an update it has downloaded (lib/desktopUpdate.ts), on the release
+ * line's row: the server such an app carries offers no release of its own. Restart to Update is
+ * the tray's; closed, the line stays closed for that version, in the app.
+ */
+export function DesktopUpdateNotice({ update }: { update: DesktopUpdateLine | null }) {
+  const t = useT();
+  if (update === null) return null;
+  const text = t("Ovis {version} is ready.", { version: update.version });
+  return <div className="update-notice is-line" role="status">
+    <span title={text}>{text}</span>
+    <button type="button" className="btn btn-primary" disabled={update.installing} onClick={update.install}>{t("Restart to Update")}</button>
+    <button type="button" className="icon-button update-notice-dismiss" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={(event) => {
+      // as the release line's Close: a keyboard's focus moves to the header's More, not to the page
+      const focused = event.currentTarget === document.activeElement;
+      update.close();
+      if (focused) document.querySelector<HTMLElement>(".header-more-button")?.focus();
+    }}><X /></button>
   </div>;
 }
 

@@ -1,0 +1,286 @@
+/*
+ * The relay shell's account part (AccountPcs.tsx), inside the sign-in column (RelayShell.css) and
+ * Settings → Account. Sign-in is one centred 368px column on --bg: 44px mark, --fs-display h1,
+ * equal neutral 44px provider buttons with 18px brand marks at a fixed --space-4 inset, saved-PC
+ * continuation above the hairline when present, full-width ghost Pair with a QR or code below the
+ * hairline, and --fs-xs fine print at the foot.
+ */
+
+/* signed out: the column's mark, title and fine print centred */
+.account-centered {
+  text-align: center;
+}
+
+.account-centered .relay-shell-mark {
+  margin-inline: auto;
+}
+
+.account-providers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/*
+ * Equal neutral outlined buttons at 44px (--touch-target), with the 18px brand mark anchored at a
+ * fixed --space-4 (16px) left inset and the label centered across the full button width.
+ */
+.account-provider {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 100%; min-width: 0; height: auto; min-height: var(--touch-target);
+  padding-block: var(--space-2); padding-inline: calc(var(--space-4) + var(--icon-size) + var(--space-2));
+  background: var(--bg-elevated); border: var(--hairline) solid var(--border); color: var(--text-strong);
+  font-weight: var(--fw-medium); line-height: var(--lh-tight); text-align: center; white-space: normal; overflow-wrap: anywhere;
+}
+
+@media (hover: hover) {
+  .account-provider:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); color: var(--text-strong); }
+}
+
+.account-provider-mark { flex: none; width: var(--icon-size); height: var(--icon-size); }
+
+.btn.account-provider > svg.account-provider-mark,
+.account-provider > .account-provider-mark {
+  position: absolute; inset-inline-start: var(--space-4); width: var(--icon-size); height: var(--icon-size);
+}
+
+@media (max-width: 240px) {
+  .account-provider { padding-inline: calc(var(--space-3) + var(--icon-size) + var(--space-2)) var(--space-3); }
+  .btn.account-provider > svg.account-provider-mark, .account-provider > .account-provider-mark { inset-inline-start: var(--space-3); }
+}
+
+.account-provider-spinner {
+  border-width: 2px;
+}
+
+.account-error-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  text-align: start;
+}
+
+.account-error {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--danger-text);
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.account-error-block > .account-error {
+  margin: 0;
+}
+
+.account-error-retry {
+  align-self: flex-start;
+}
+
+.account-continue-saved {
+  width: 100%; min-width: 0; height: auto; min-height: var(--touch-target); margin-top: var(--space-2);
+  padding-block: var(--space-2); line-height: var(--lh-tight); text-align: center; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums;
+}
+
+.account-divider {
+  width: 100%;
+  height: 0;
+  margin: var(--space-4) 0;
+  border: 0;
+  border-top: var(--hairline) solid var(--border);
+}
+
+/* the other way in: a ghost button or quiet link at touch-target height */
+.account-link {
+  display: inline-flex; align-items: center; justify-content: center; width: 100%; min-width: 0;
+  height: auto; min-height: var(--touch-target); margin-top: var(--space-2); padding: var(--space-2) var(--space-3);
+  background: none; border: 0; border-radius: var(--radius-md); font: inherit; font-size: var(--fs-sm);
+  font-weight: var(--fw-medium); line-height: var(--lh-tight); color: var(--text-dim); text-align: center;
+  text-decoration: underline; text-underline-offset: 0.15em; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; cursor: pointer;
+}
+
+.account-link.btn-ghost {
+  margin-top: 0;
+  color: var(--text);
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .account-link:hover:not(:disabled) {
+    color: var(--text-strong);
+  }
+
+  .account-link.btn-ghost:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+}
+
+.account-link:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.account-fineprint {
+  margin: var(--space-4) 0 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  color: var(--text-dim);
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+.account-fineprint a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.account-pc-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* the state in words, after the shared inline StatusDot glyph */
+.account-pc-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+/* a PC to compare digits with: the row is the button, as a saved PC's row is the link */
+.account-pc-join {
+  width: 100%;
+  background: none;
+  border: 0;
+  border-bottom: var(--hairline) solid var(--border);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+/* sign out and leave: quiet links under the list; leaving asks once more, in the card */
+.account-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: var(--hairline) solid var(--border);
+}
+
+/* Settings on the PC's own page: GitHub's device code, set like the pairing code (.devices-code) */
+.account-device {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.account-device-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-pairing);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-code);
+  color: var(--text-strong);
+  user-select: all;
+}
+
+.account-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settings-row.account-limits-row {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+}
+
+.settings-row.account-limits-row > .account-limits-summary {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline-start: auto;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Settings → Account: the account's ways to sign in, each with its provider's mark */
+.account-method-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account-method {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch-target);
+}
+
+.account-method-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-method-text .settings-description {
+  margin: 0;
+}
+
+.account-method-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.account-method-add .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Check now: a compact ghost button above the list's right edge, over the rows it refreshes */
+.relay-shell-check {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.relay-shell-check-btn {
+  min-width: calc(var(--space-8) * 3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Settings → Devices and PCs: the line under the device list of an account that lists no PC yet */
+.account-no-pc {
+  padding-top: var(--space-2);
+}
+
+/* under the account's PCs in that list: where a browser opens them, with the one link to it */
+.devices-row.account-pcs-open {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.account-pcs-open > .settings-description {
+  flex: 1 1 12em;
+  min-width: 0;
+  margin: 0;
+}
+
+.account-pcs-open > .btn {
+  flex: none;
+}

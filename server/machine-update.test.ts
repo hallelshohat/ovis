@@ -29,9 +29,9 @@ describe("approved bridge replacement", () => {
     const request = async (path: string, body?: unknown) => {
       const response = await handleMachineRequest(new Request(`http://localhost:7317/api/machines/setup${path}`, {
         method: body === undefined ? "GET" : "POST",
-        headers: { origin: "http://localhost:7317", "x-herdr-machine": "1", "content-type": "application/json" },
+        headers: { origin: "http://localhost:7317", "x-herdr-machine": "1", "x-herdr-update": "1", "content-type": "application/json" },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      }), manager);
+      }), manager, undefined, undefined, false, undefined, undefined, undefined, undefined, true);
       expect(response.ok).toBe(true);
       return response.json() as Promise<SetupJob>;
     };
@@ -206,6 +206,13 @@ describe("approved bridge replacement", () => {
     const { result, operations } = await scenario({ onlyFirst: true, initialProtocol: BRIDGE_PROTOCOL, initialBundle: REMOTE_BUNDLE_VERSION, identity: { bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1) } });
     expect(result).toMatchObject({ phase: "failed", action_required: "bridge_conflict" });
     expect(result.error).toContain("Update this app");
+    expect(operations).toEqual(["verify:4242"]);
+  });
+  it("sends a newer independently managed bridge to this app's own update, not to that server", async () => {
+    const { result, operations } = await scenario({ onlyFirst: true, initialProtocol: BRIDGE_PROTOCOL, initialBundle: REMOTE_BUNDLE_VERSION, identity: { bundle_version: String(Number(REMOTE_BUNDLE_VERSION) + 1), managed_remote: false } });
+    expect(result).toMatchObject({ phase: "failed", action_required: "setup" });
+    expect(result.error).toContain("Update this app");
+    expect(result.error).not.toContain("its own Settings");
     expect(operations).toEqual(["verify:4242"]);
   });
   it("sends an incompatible independently managed bridge to its own Settings, not to an update", async () => {

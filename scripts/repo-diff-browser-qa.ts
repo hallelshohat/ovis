@@ -129,14 +129,16 @@ function fixtures(): { main: string; detached: string; plain: string; long: stri
   const plain = join(root, "plain");
   mkdirSync(plain);
 
-  // one line longer than any screen, its match 600 characters in, beside a short one
+  // one line longer than any screen, its match 600 characters in, beside a short one; below it an
+  // unchanged line that wraps taller than any view, its match at the very end
   const long = join(root, "long");
   mkdirSync(join(long, "src"), { recursive: true });
   git(long, "init", "-q", "-b", "main");
-  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} old";\n`);
+  const tall = `export const tall = "${"word ".repeat(3000)}haystack";\n`;
+  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} old";\n${tall}`);
   git(long, "add", ".");
   git(long, "commit", "-q", "-m", "long");
-  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} needle";\n`);
+  writeFileSync(join(long, "src/long.ts"), `export const short = 1;\nexport const wide = "${"x".repeat(600)} needle";\n${tall}`);
 
   // a branch forked from main, which went on without it: base-only commits, branch commits, staged
   // and unstaged work, a rename, untracked text and binary files, local and remote branches
@@ -232,12 +234,12 @@ let demoServer: ReturnType<typeof Bun.serve> | undefined;
 
 /** The route the real server gives these paths, on a stand-in that maps a pane to its folder. */
 async function api(request: Request, url: URL): Promise<Response | null> {
-  const diff = /^\/api\/(?:machines\/([^/]+)\/)?workspace\/diff\/(files|file|refs)$/.exec(url.pathname);
+  const diff = /^\/api\/(?:machines\/([^/]+)\/)?workspace\/diff\/(files|file|contents|refs)$/.exec(url.pathname);
   if (diff) {
     requests.push(url.pathname);
     diffQueries.push(`${url.pathname}?${url.searchParams}`);
     const paneId = url.searchParams.get("pane_id");
-    const kind = diff[2] as "files" | "file" | "refs";
+    const kind = diff[2] as "files" | "file" | "contents" | "refs";
     // a device that may only watch is refused as the server refuses it, before any repository is read
     if (paneId === "pane-observe") return Response.json({ error: { code: "read_only", message: "this device can only watch" } }, { status: 403 });
     // a bridge from before the branch scope: no refs route, and a scope it does not know
@@ -381,7 +383,11 @@ async function refNote(page: Page): Promise<string> {
   await note.waitFor();
   return (await note.textContent()) ?? "";
 }
-/** The scope buttons' pressed transition has ended: a capture mid-way would show two of them lit. */
+/**
+ * The scope buttons' pressed transition has ended: a capture mid-way would show two of them lit. The
+ * pressed pill is read where it is drawn: the button's own background, or under a coarse pointer its
+ * ::before (the button a finger's height, its pill inset inside it: the segmented rule in styles.css).
+ */
 async function scopesSettled(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const probe = document.createElement("span");
@@ -389,7 +395,8 @@ async function scopesSettled(page: Page): Promise<void> {
     probe.style.backgroundColor = "var(--bg-hover)";
     const pressed = getComputedStyle(probe).backgroundColor;
     probe.remove();
-    return [...document.querySelectorAll(".repo-changes-scopes button")].every((button) => (button.getAttribute("aria-pressed") === "true") === (getComputedStyle(button).backgroundColor === pressed));
+    const pill = matchMedia("(pointer: coarse)").matches ? "::before" : null;
+    return [...document.querySelectorAll(".repo-changes-scopes button")].every((button) => (button.getAttribute("aria-pressed") === "true") === (getComputedStyle(button, pill).backgroundColor === pressed));
   });
 }
 /** The identity line under the repository line: the merge base a branch comparison was read from. */
@@ -1194,11 +1201,45 @@ try {
       await inViewAcross("needle in split");
       await page.getByRole("button", { name: "Unified", exact: true }).click();
     }
+    // wrapped rows: a match at the end of a row taller than the view is brought into view itself, not the row's middle
+    await page.evaluate(() => window.repoDiffQA.settings({ wrapCode: true }));
+    await query.fill("haystack");
+    const down = (): Promise<{ count: string; place: string; text: string; row: { top: number; bottom: number }; match: { top: number; bottom: number }; view: { top: number; bottom: number } }> => page.evaluate(() => {
+      const bar = document.querySelector(".repo-diff-find");
+      const range = [...(CSS.highlights.get("repo-diff-find") ?? [])][0] as Range | undefined;
+      const row = document.querySelector(".repo-diff diffs-container")?.shadowRoot?.querySelector<HTMLElement>("[data-line][data-find-active]")?.getBoundingClientRect();
+      const match = range?.getBoundingClientRect();
+      const view = document.querySelector(".repo-diff-scroll")?.getBoundingClientRect();
+      return {
+        count: [...(bar?.querySelector(".find-bar-count")?.childNodes ?? [])].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join(""),
+        place: bar?.querySelector(".repo-diff-find-place")?.textContent ?? "",
+        text: range?.toString() ?? "",
+        row: { top: row?.top ?? 0, bottom: row?.bottom ?? 0 },
+        match: { top: match?.top ?? 0, bottom: match?.bottom ?? 0 },
+        view: { top: view?.top ?? 0, bottom: view?.bottom ?? 0 },
+      };
+    });
+    try {
+      await page.waitForFunction(() => {
+        const range = [...(CSS.highlights.get("repo-diff-find") ?? [])][0] as Range | undefined;
+        const view = document.querySelector(".repo-diff-scroll")?.getBoundingClientRect();
+        if (!range || !view || range.toString() !== "haystack") return false;
+        const match = range.getBoundingClientRect();
+        return match.height > 0 && match.top >= view.top - 1 && match.bottom <= view.bottom + 1;
+      });
+    } catch (error) {
+      throw new Error(`${label} tall wrapped row: the match never came into view: ${JSON.stringify(await down())}`, { cause: error });
+    }
+    const tall = await down();
+    assert.deepEqual([tall.count, tall.place], ["1 of 1", "Unchanged line 3"], `${label}: the tall row's match is the active one: ${JSON.stringify(tall)}`);
+    assert.ok(tall.row.bottom - tall.row.top > tall.view.bottom - tall.view.top, `${label}: the wrapped row is taller than the view: ${JSON.stringify(tall)}`);
+    await findShot(page, width, theme, "tall-row");
+    await page.evaluate(() => window.repoDiffQA.settings({ wrapCode: false }));
     await page.keyboard.press("Escape");
     await query.waitFor({ state: "detached" });
     await closeDiff(page);
     assert.deepEqual(errors, [], `${label}: no errors after the long line`);
-    console.log(`PASS ${label}: a match past the right edge of an unwrapped row is scrolled into view across${phone ? "" : ", in split too"}, and back for one at the start`);
+    console.log(`PASS ${label}: a match past the right edge of an unwrapped row is scrolled into view across${phone ? "" : ", in split too"}, and back for one at the start; one at the end of a wrapped row taller than the view is brought into view itself`);
 
     // a comparison changed under live results drops them; a patch on its way, an offline PC and a watch-only device have none to search.
     // The Files list stays open beneath, as when a row opens a diff: closing a phone's sheet goes Back in history, which would race the next open
@@ -1375,7 +1416,7 @@ try {
     await waitRows(page);
     await page.getByRole("button", { name: "Open file", exact: true }).click();
     await page.getByRole("dialog", { name: "money.ts", exact: true }).waitFor();
-    assert.deepEqual(requests.filter((path) => path.includes("/workspace/diff/")), ["/api/machines/remote-fixture/workspace/diff/files", "/api/machines/remote-fixture/workspace/diff/file"], `remote diff requests: ${requests.join(", ")}`);
+    assert.deepEqual(requests.filter((path) => path.includes("/workspace/diff/")), ["/api/machines/remote-fixture/workspace/diff/files", "/api/machines/remote-fixture/workspace/diff/file", "/api/machines/remote-fixture/workspace/diff/files"], `remote diff requests (the list, the patch, and the viewer's own list for its file column): ${requests.join(", ")}`);
     assert.ok(requests.some((path) => path === "/api/machines/remote-fixture/fs/stat"), `remote file requests: ${requests.join(", ")}`);
     await context.close();
     console.log("PASS a remote PC's changes and files read through its bridge");
