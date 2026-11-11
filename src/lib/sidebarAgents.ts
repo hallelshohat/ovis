@@ -69,7 +69,11 @@ export function rollupAgentStatus({ panes, agentRows, statusOf = paneStatus }: {
 }): KnownStatus {
   const agentIds = new Set(agentRows.map(({ pane }) => pane.pane_id));
   const agents = panes.filter((pane) => agentIds.has(pane.pane_id));
-  return rollupStatus((agents.length > 0 ? agents : panes).map(statusOf));
+  const own = agents.length > 0 ? agents : panes;
+  const status = rollupStatus(own.map(paneStatus));
+  if (status !== "done") return status;
+  // Reading a finish changes its mark, not whether that agent completed its work.
+  return own.some((pane) => statusOf(pane) === "done") ? "done" : "idle";
 }
 
 /**

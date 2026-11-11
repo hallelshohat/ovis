@@ -301,6 +301,49 @@ try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
       const finishCase = process.env["SIDEBAR_FINISH_CASE"];
+      if (!finishCase || finishCase === "split-unread-finish") {
+        for (const mobile of [false, true]) await withPage(browser, {}, async (page) => {
+          await page.evaluate(async ({ api, web }) => {
+            await window.sidebarFixture.split(web, api);
+            await window.sidebarFixture.finish(api, "working", 199);
+            await window.sidebarFixture.finish(web, "working", 200);
+          }, panes);
+          await page.goto(`${url}?pane=${encodeURIComponent(panes.api)}&view=terminal`);
+          await page.locator(`.pane-frame[data-layout-pane="${panes.api}"] .terminal-stack:not(.is-chat)[data-pane-content]`).waitFor();
+          await page.evaluate(async (id) => {
+            await window.sidebarFixture.finish(id, "done", 201);
+            window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "Claude finished review 201\r\n" });
+          }, panes.api);
+          await agent(page, API).locator('.sidebar-status[data-status="idle"]').waitFor({ state: "attached" });
+          const workspaceId = await page.locator(`.workspace-select[data-pane="${panes.api}"]`).evaluate((row) => row.closest(".workspace-group")?.getAttribute("data-workspace"));
+          assert.ok(workspaceId);
+          const workspace = page.locator(`.workspace-group[data-workspace="${workspaceId}"] > .workspace-header .sidebar-status`);
+          await page.evaluate((id) => window.sidebarFixture.finish(id, "done", 202), panes.web);
+          await agent(page, WEB).locator('.sidebar-status[data-status="done"]').waitFor({ state: "attached" });
+          const drawer = page.locator('button[aria-controls="workspace-drawer"]');
+          if (mobile) {
+            await drawer.tap();
+            await page.locator(".sidebar.is-open").waitFor();
+          }
+          await workspace.and(page.locator('[data-status="done"]')).waitFor();
+          assert.equal(await agent(page, API).locator(".sidebar-status").getAttribute("data-status"), "idle", "Claude's finish is already acknowledged");
+          assert.equal(await page.locator(".tab-strip-item.is-active .tab-strip-dot").getAttribute("data-status"), "done", "the tab agrees that both agents finished");
+          const evidence = process.env["UI_EVIDENCE_DIR"];
+          if (evidence) {
+            mkdirSync(evidence, { recursive: true });
+            await page.screenshot({ path: join(evidence, `split-unread-finish-${mobile ? "phone" : "desktop"}.png`), animations: "disabled" });
+          }
+          if (mobile) await drawer.tap();
+          await agent(page, WEB).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
+          await page.keyboard.press("ControlOrMeta+Shift+J");
+          await page.locator(`.pane-frame[data-layout-pane="${panes.web}"] .terminal-stack:not(.is-chat)[data-pane-content]`).waitFor();
+          await page.evaluate((id) => window.sidebarFixture.frame({ type: "pty-data", pane_id: id, data: "Codex finished work 202\r\n" }), panes.web);
+          await agent(page, WEB).locator('.sidebar-status[data-status="idle"]').waitFor({ state: "attached" });
+          if (mobile) await drawer.tap();
+          assert.equal(await workspace.getAttribute("data-status"), "idle", "the workspace clears only after both finishes are acknowledged");
+        }, mobile);
+        console.log("PASS an acknowledged split sibling preserves the unread completion on desktop and phone until both finishes are read");
+      }
       if (!finishCase || finishCase === "split-status") {
         for (const mobile of [false, true]) await withPage(browser, {}, async (page) => {
           const drawer = page.locator('button[aria-controls="workspace-drawer"]');
@@ -340,7 +383,7 @@ try {
           const evidence = process.env["UI_EVIDENCE_DIR"];
           if (evidence) {
             mkdirSync(evidence, { recursive: true });
-            await page.screenshot({ path: join(evidence, `split-status-${mobile ? "phone" : "desktop"}.png`) });
+            await page.screenshot({ path: join(evidence, `split-status-${mobile ? "phone" : "desktop"}.png`), animations: "disabled" });
           }
           if (mobile) await drawer.tap();
           await page.keyboard.press("ControlOrMeta+Shift+K");

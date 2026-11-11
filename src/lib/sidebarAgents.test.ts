@@ -115,6 +115,27 @@ describe("rollupAgentStatus", () => {
     expect(rollupAgentStatus({ panes: [completed], agentRows, statusOf: (pane) => shownStatus(pane, { completed: 5 }) })).toBe("idle");
   });
 
+  it("keeps an unread sibling's finish until every completed agent has been acknowledged", () => {
+    const claude = pane("claude", { agent: "claude", agent_status: "done", finish_id: 201 });
+    const codex = pane("codex", { agent: "codex", agent_status: "done", finish_id: 202 });
+    const current = snapshot([claude, codex]);
+    const agentRows = sidebarAgents(current);
+    const seen = { claude: 201, codex: 0 };
+    const statusOf = (pane: HerdrPane) => shownStatus(pane, seen);
+    expect(statusOf(claude)).toBe("idle");
+    expect(statusOf(codex)).toBe("done");
+    expect(rollupAgentStatus({ panes: current.panes, agentRows, statusOf })).toBe("done");
+    expect(rollupAgentStatus({ panes: [codex, claude], agentRows, statusOf })).toBe("done");
+    seen.codex = 202;
+    expect(rollupAgentStatus({ panes: current.panes, agentRows, statusOf })).toBe("idle");
+    codex.finish_id = 203;
+    expect(rollupAgentStatus({ panes: current.panes, agentRows, statusOf })).toBe("done");
+    claude.agent_status = "idle";
+    expect(rollupAgentStatus({ panes: current.panes, agentRows, statusOf })).toBe("idle");
+    claude.agent_status = "working";
+    expect(rollupAgentStatus({ panes: current.panes, agentRows, statusOf })).toBe("working");
+  });
+
   it("falls back to pane status for shell-only groups and unknown for an empty group", () => {
     expect(rollupAgentStatus({ panes: [pane("shell")], agentRows: [] })).toBe("idle");
     expect(rollupAgentStatus({ panes: [pane("shell", { agent_status: "working" })], agentRows: [] })).toBe("working");

@@ -1024,7 +1024,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - A repository's parent row keeps `workspace.label`; its opened linked
   worktree rows show their actual checkout branches. Each row's compact status
   glyph rolls up its agent panes: working, blocked, background waiting, ready, unknown, then done.
-  Done requires every agent to be done; ordinary shells do not prevent completion. A shell-only
+  Done requires every agent's raw state to be done; its mark remains while any finish is unread,
+  even when another finished pane has been read. Ordinary shells do not prevent completion. A shell-only
   workspace uses its panes' states, and a folded worktree parent rolls up its whole group. Tabs
   use the same rule for their own panes. Like [Warp's tab summaries](https://docs.warp.dev/terminal/windows/vertical-tabs/),
   split-pane activity stays visible; Ovis keeps one aggregate mark, so any working agent wins.
