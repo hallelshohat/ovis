@@ -162,6 +162,11 @@ async function checkChatLoading(): Promise<void> {
         short = false;
         if (!baseline) {
           const conversationRoute = "**/api/pane/conversation?*";
+          await page.route(conversationRoute, route => route.fulfill({ status: 504, json: { error: { code: "timeout", message: "Synthetic slow read" } } }));
+          await page.goto(url);
+          await page.getByText("Waiting for the PC…", { exact: true }).waitFor();
+          assert.equal(await page.locator(".chat-loading-placeholder").count(), 1, "a slow first read keeps its skeleton");
+          await page.unroute(conversationRoute);
           await page.route(conversationRoute, route => route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Synthetic read failure" } } }));
           await page.goto(url);
           await page.getByRole("button", { name: "Try again", exact: true }).click({ trial: true });
