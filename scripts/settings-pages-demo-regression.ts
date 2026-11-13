@@ -228,8 +228,9 @@ async function rowLayouts({ browser, url }: { browser: import("playwright-core")
       await hint.waitFor({ state: "attached" });
       assert(await hint.evaluate((node) => parseFloat(getComputedStyle(node).paddingInlineStart) > 0), "the standalone push-health hint keeps its icon indent");
       await page.goto(`${url}?settings=about`);
-      await page.locator(".settings-about .settings-row-icon").waitFor();
-      assert(await page.locator(".settings-about .settings-label-line").evaluate((line) => line.querySelector("a")!.getBoundingClientRect().left > line.querySelector("svg")!.getBoundingClientRect().right), "the standalone About label stays beside its icon");
+      const website = page.locator(".settings-about .settings-label-line").filter({ has: page.getByRole("link", { name: "ovis.sh", exact: true }) });
+      await website.locator(".settings-row-icon").waitFor();
+      assert(await website.evaluate((line) => line.querySelector("a")!.getBoundingClientRect().left > line.querySelector("svg")!.getBoundingClientRect().right), "the standalone About label stays beside its icon");
     } finally { await context.close(); }
   }
   console.log("PASS Settings icon, reset-only, condition and preview layouts on desktop and mobile");

@@ -64,7 +64,6 @@ import { liveGroupKeys, movedAgentGroup } from "./lib/namedAgentGroups.ts";
 import { ReorderContext } from "./lib/machineContext.tsx";
 import { pcLoadOn, phoneInboxOn, useSettings } from "./lib/settings.ts";
 import { usePaneLocked } from "./lib/paneLocks.ts";
-import { useHiddenMachines, useShownMachines } from "./lib/hiddenMachines.ts";
 import { useHiddenMachines } from "./lib/hiddenMachines.ts";
 import { placeMachine, useOrderedMachines } from "./lib/machineOrder.ts";
 import { formatKeys, shortcutDisplayKeys, useShortcuts } from "./lib/shortcuts.ts";
