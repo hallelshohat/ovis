@@ -3583,7 +3583,8 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
     const found = await loadedToolConversation({ paneId, processes, screen: screen.text, home });
     // Tool evidence is never remembered; a picker resume can leave the previous thread loaded.
     boundRollouts.delete(paneId);
-    return found;
+    if (found !== null || resumedPath === null) return found;
+    return soleLoadedResume({ paneId, processes, screen: screen.text, home, resumedPath, newer: resumedNewer });
   }
   const unsure = [...new Set([...boundNewer, ...(resumedPath !== null ? resumedNewer : [])])];
   if (unsure.length > 0) {
