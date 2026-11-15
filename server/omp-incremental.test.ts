@@ -18,7 +18,7 @@ const titleResult = (id: string, title: string) => message("toolResult", "Starte
 });
 
 /** Every record boundary also exercises a speculative valid and torn final line. */
-function appendRecords(rows: unknown[], options: { toolImages?: boolean } = {}) {
+function appendRecords(rows: unknown[], options: { images?: boolean } = {}) {
   const parser = createOmpTranscriptParser(options);
   let committed = "";
   for (const row of rows) {
@@ -45,10 +45,10 @@ test("delayed results update the right tool across turns without changing older 
   const intervening = [message("user", "Also check the build"), answer("Checking both", "stop")];
   const result = message("toolResult", [
     { type: "text", text: "x".repeat(7000) },
-    { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+    { type: "image", mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUg==" },
     { type: "image", mimeType: "image/svg+xml", data: "ignored" },
   ], { callId: "read", isError: true });
-  const parser = createOmpTranscriptParser({ toolImages: true });
+  const parser = createOmpTranscriptParser({ images: true });
   parser.write(jsonl(opening));
   const older = parser.snapshot();
   const original = structuredClone(older);
@@ -67,7 +67,7 @@ test("delayed results update the right tool across turns without changing older 
   const exposed = parser.snapshot();
   tools(exposed)[0]!.images![0]!.ref = "consumer edit";
   exposed[0]!.parts.length = 0;
-  expect(parser.snapshot()).toEqual(parseOmpTranscript(jsonl([...opening, ...intervening, result]), Infinity, { toolImages: true }));
+  expect(parser.snapshot()).toEqual(parseOmpTranscript(jsonl([...opening, ...intervening, result]), Infinity, { images: true }));
   expect(tools(parser.snapshot())[0]?.output).toBe("x".repeat(4000) + "\n… trimmed");
   expect(tools(parser.snapshot())[0]?.images).toEqual([{ media_type: "image/png", ref: "pi:read:0" }]);
   expect(older).toEqual(original);
@@ -78,7 +78,7 @@ test("delayed results update the right tool across turns without changing older 
 test("embedded results and Pi aliases normalize once, including results placed before their calls", () => {
   const rows = [
     message("assistant", [
-      { type: "toolResult", id: "inline", output: [{ type: "text", text: "inline failure" }, { type: "image", media_type: "image/jpeg", data: "aW1hZ2U=" }], isError: true },
+      { type: "toolResult", id: "inline", output: [{ type: "text", text: "inline failure" }, { type: "image", media_type: "image/jpeg", data: "/9j/4AAQSkZJRg==" }], isError: true },
       { type: "toolCall", toolCallId: "inline", toolName: "Bash", input: { command: "false" } },
       { type: "toolCall", id: "later", name: "Read", arguments: { path: "/tmp/later" } },
     ], { stopReason: "toolUse" }),
@@ -94,7 +94,7 @@ test("embedded results and Pi aliases normalize once, including results placed b
     { kind: "tool", name: "Read", summary: "/tmp/later", input: '{\n  "path": "/tmp/later"\n}', output: "later output" },
   ]);
   expect(turns[0]?.parts.at(-1)).toEqual({ kind: "text", text: "Finished", phase: "final_answer" });
-  expect(tools(appendRecords(rows, { toolImages: true }).snapshot())[0]?.images).toEqual([{ media_type: "image/jpeg", ref: "pi:inline:0" }]);
+  expect(tools(appendRecords(rows, { images: true }).snapshot())[0]?.images).toEqual([{ media_type: "image/jpeg", ref: "pi:inline:0" }]);
 });
 
 test("settled boundaries survive previews, hidden wakeups, empty assistant messages and later errors", () => {
@@ -109,7 +109,7 @@ test("settled boundaries survive previews, hidden wakeups, empty assistant messa
   ];
   expect(appendRecords(rows).snapshot().map((turn) => turn.parts)).toEqual([
     [{ kind: "text", text: "The complete answer", phase: "final_answer" }],
-    [{ kind: "thinking", text: "New work" }, { kind: "text", text: "Error: Provider unavailable" }, { kind: "text", text: "Recovered", phase: "final_answer" }],
+    [{ kind: "thinking", text: "New work" }, { kind: "text", text: "Error: Provider unavailable", failed: true }, { kind: "text", text: "Recovered", phase: "final_answer" }],
     [{ kind: "text", text: "Another wake", phase: "final_answer" }],
   ]);
 });
@@ -188,6 +188,24 @@ test("a valid clear preview is detached, committed clear drops old tools but pre
   expect(tools(current)).toEqual([]);
   expect(tools(older)[0]?.output).toBe("");
   expect(older[1]?.parts).toEqual([{ kind: "compact", text: "Keep this history until clear" }]);
+});
+
+test("a goal's wait is withdrawn the same way record by record, in previews and in one-shot parses", () => {
+  const warmup = (phase: string) => ({ type: "custom", customType: "goal-cache-warmup", data: { phase, dueAtMs: 1_790_000_000_000, wakeSources: { "terminal-monitors": 1 } } });
+  const parser = appendRecords([
+    message("user", "Watch the build"),
+    answer("Watching", "stop"),
+    warmup("scheduled"),
+    { type: "custom", customType: "engine-turn-start", data: { customType: "senpi-monitor:notification" } },
+    answer("Build passed", "stop"),
+    warmup("scheduled"),
+    warmup("scheduled"),
+    warmup("resumed"),
+    { type: "custom_message", customType: "goal-continuation", display: false, content: "<untrusted_objective>\nShip it\n</untrusted_objective>" },
+    warmup("scheduled"),
+    answer("Shipped", "stop"),
+  ]);
+  expect(parser.snapshot().map((turn) => turn.parts[0]?.kind)).toEqual(["text", "text", "text", "notice", "text"]);
 });
 
 test("snapshots retain the normalized window while one-shot turn limits and final-line handling stay compatible", () => {

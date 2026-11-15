@@ -12,6 +12,10 @@ const xtermSource = normalizePath(buildXtermSource(fileURLToPath(new URL(".", im
 
 let revision: string | null = null;
 try { revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* non-Git build */ }
+// whether the tree differs from that commit, an untracked (not ignored) file included: it can go into the build, so such a
+// build is not that revision (server/app-revision.ts trusts no dirty one)
+let dirty = true;
+try { dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=normal"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim() !== ""; } catch { /* non-Git build: unverified */ }
 
 // agentSvgMarks.ts carries LobeHub Icons paths (MIT): their notice ships with every built client
 const thirdPartyNotices: Plugin = {
@@ -26,13 +30,16 @@ const thirdPartyNotices: Plugin = {
 const buildRevision: Plugin = {
   name: "build-revision",
   generateBundle() {
-    if (revision !== null) this.emitFile({ type: "asset", fileName: "build.json", source: `${JSON.stringify({ revision })}\n` });
+    if (revision !== null) this.emitFile({ type: "asset", fileName: "build.json", source: `${JSON.stringify({ revision, dirty })}\n` });
   },
 };
 
-export default defineConfig({
+// `vite build --mode shell` builds the hosted shell (scripts/shell-build.ts) into its own directory;
+// its plugin is loaded only then, so the server-served build stays as it is
+export default defineConfig(async ({ mode }) => ({
   // the theme boot script is emitted before compressedAssets and serviceWorkerBuild read the bundle
-  plugins: [react(), thirdPartyNotices, buildRevision, themeBootstrapBuild(), compressedAssets(), serviceWorkerBuild()],
+  plugins: [react(), thirdPartyNotices, buildRevision, themeBootstrapBuild(), compressedAssets(), serviceWorkerBuild(mode === "shell"),
+    ...(mode === "shell" ? [(await import("./scripts/shell-build.ts")).shellBuild()] : [])],
   define: {
     __APP_REVISION__: JSON.stringify(revision),
     __APP_VERSION__: JSON.stringify((JSON.parse(readFileSync("package.json", "utf8")) as { version: string }).version),
@@ -49,13 +56,15 @@ export default defineConfig({
     },
   },
   // Keep Vite 6's syntax targets when changing the bundler, including installed mobile clients.
-  build: { outDir: "dist", target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"] },
+  build: { outDir: mode === "shell" ? "dist-shell" : "dist", target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"] },
   // The Bun patch targets xterm's readable source, not its minified distribution. Build that
   // source so dev, production and the website use the same reviewed IME backport.
   resolve: { alias: [
     { find: /^@xterm\/xterm$/, replacement: `${xtermSource}/browser/public/Terminal.js` },
     { find: /^browser\//, replacement: `${xtermSource}/browser/` },
     { find: /^common\//, replacement: `${xtermSource}/common/` },
+    { find: /^vs\/nls$/, replacement: `${xtermSource}/vs/patches/nls.js` },
+    { find: /^vs\//, replacement: `${xtermSource}/vs/` },
     { find: "@shared", replacement: new URL("./shared", import.meta.url).pathname },
   ] },
-});
+}));

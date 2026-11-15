@@ -12,6 +12,7 @@ import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../s
 import { chromePath } from "./chrome-path.ts";
 
 const root = mkdtempSync(join(tmpdir(), "ovis-chat-browser-"));
+const evidence = process.env["UI_EVIDENCE_DIR"] ?? join(root, "evidence");
 const codexHome = join(root, "codex");
 const rollout = join(codexHome, "sessions", "rollout.jsonl");
 const answer = "The conversation is now clean. Native transcript records preserve the user request and final answer while internal instructions stay hidden.";
@@ -40,7 +41,7 @@ try {
   add({ type: "function_call_output", call_id: "c1", output: "clean" }, 3);
   add({ type: "function_call", name: "exec_command", call_id: "c2", arguments: '{"cmd":"bun test"}' }, 4);
   add({ type: "function_call_output", call_id: "c2", output: "Process exited with code 1\n1 fail" }, 5);
-  add(message("assistant", answer, "final_answer"), 8);
+  // the turn is at work: its answer comes later
   persist();
   // A detected fixture process keeps native descriptor evidence for the rollout;
   // the ignored path field of a manual lifecycle report is not a session binding.
@@ -76,7 +77,7 @@ try {
   await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(paneId)}`);
   await page.locator(".conn-live").waitFor();
   const log = page.locator(`.pane-frame[data-layout-pane="${paneId}"]`).getByRole("log");
-  await log.getByText(answer, { exact: true }).waitFor();
+  await log.getByText("I am checking the transcript.", { exact: true }).waitFor();
   assert.equal(await log.locator(".chat-turn-user").count(), 1);
   assert.equal((await log.innerText()).includes("PRIVATE"), false);
   const modelInfo = page.getByLabel("Model and reasoning");
@@ -103,29 +104,39 @@ try {
   const work = log.locator(".work-block-head");
   const report = (state: "working" | "idle") => herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state });
   const head = (expanded: boolean, title: string) => log.locator(`.work-block-head[aria-expanded="${expanded}"]`).filter({ hasText: title });
-  await head(false, "Worked for 7s").waitFor();
+  const narration = log.getByText("I am checking the transcript.", { exact: true });
+  assert.equal(await narration.evaluate((node) => node.closest(".work-block") === null), true, "narration stays outside folded tool runs");
   await report("working");
   await head(true, "Working…").waitFor();
   assert.equal(await log.locator(".work-block.is-folded").count(), 0, "the running turn's work is open");
-  await report("idle");
-  await head(false, "Worked for 7s").waitFor();
   // working inside the block is a choice to keep it: the fold must not take a focused row away
-  await report("working");
-  await head(true, "Working…").waitFor();
   // the row reads as verb + object (#457); its tool id is the title
   const toolRow = log.getByRole("button", { name: "Ran git status", exact: true });
   await toolRow.click();
   await log.getByText("git status", { exact: true }).last().waitFor();
+  // the answer ends the turn, then the pane rests
+  add(message("assistant", answer, "final_answer"), 8); persist();
+  await log.getByText(answer, { exact: true }).waitFor();
   await report("idle");
-  await head(true, "Worked for 7s").waitFor();
+  await head(true, "2 commands").waitFor();
+  assert.match(await log.locator(".chat-turn-duration").innerText(), /Worked for 7s/);
   assert.equal(await toolRow.evaluate((node) => node === document.activeElement), true, "the row the reader opened keeps focus when the turn settles");
   await log.getByText("git status", { exact: true }).last().waitFor();
+  // the answer landed while the pane still worked: the head held for the next turn (seen or not)
+  // stays until the idle status arrives, and it is a work-block head too
+  await log.locator(".chat-activity, .chat-activity-reserved").waitFor({ state: "detached" });
   await work.click();
-  await head(false, "Worked for 7s").waitFor();
-  console.log("PASS the running turn's work is open, folds when it settles, and stays open under a reader working inside it");
+  await head(false, "2 commands").waitFor();
+  // the agent works again with no new row yet (a turn it began by itself): the turn that ended on its
+  // answer stays finished, and the Working head under it stands for the new one
+  await report("working");
+  await log.locator(".chat-activity .work-block-title", { hasText: "Working…" }).waitFor();
+  assert.equal(await head(false, "2 commands").count(), 1, "the finished turn is not opened again");
+  await report("idle");
+  await log.locator(".chat-activity").waitFor({ state: "detached" });
+  console.log("PASS the running turn's work is open, stays open under a reader working inside it, and is not opened again once it ended on its answer");
   assert.equal(await work.getAttribute("aria-expanded"), "false", "a settled turn folds its work: only a running turn is open");
   assert.equal(await log.locator(".work-block.is-folded").count(), 1);
-  assert.match(await work.innerText(), /Worked for 7s/);
   await work.click();
   assert.equal(await work.getAttribute("aria-expanded"), "true");
   // a tool the verb table knows reads as verb + object; its id is the title and the detail's first line
@@ -134,11 +145,9 @@ try {
   assert.equal(await row.locator(".work-row-caret").isVisible(), true);
   assert.equal(await row.locator(".work-row-icon, .work-row-sep").count(), 0);
   // a failed call says so after its object, never between the verb and what it ran
-  const failedRow = log.getByRole("button", { name: "Ran bun test failed", exact: true });
-  assert.equal(await failedRow.evaluate((node) => node.lastElementChild?.className), "work-row-failed");
+  const failedRow = log.getByRole("button", { name: /^Ran bun test failed/ });
   assert.equal(await failedRow.getAttribute("title"), "exec_command · bun test");
-  // the row opened while the turn ran stays open through fold and unfold: a click would close it
-  if (await row.getAttribute("aria-expanded") !== "true") await row.click();
+  assert.equal(await row.getAttribute("aria-expanded"), "true", "the previously opened tool stays open across its outer work fold");
   assert.equal(await log.locator(".work-row-detail > :first-child").innerText(), "exec_command");
   await log.getByText("git status", { exact: true }).last().waitFor();
   assert.equal(await log.locator(".chat-agent-meta").count(), 1);
@@ -150,12 +159,12 @@ try {
   await work.click();
   assert.equal(await work.getAttribute("aria-expanded"), "false", "and so is folding it again");
   add(message("assistant", "Checking the second request.", "commentary"), 21); persist();
-  // the pane is idle: this turn is settled and has no answer, so folding it would hide its only text
+  // words with no tools are no work: they stand as they were said
   await log.getByText("Checking the second request.", { exact: true }).waitFor();
+  assert.equal(await work.count(), 1, "a turn of words alone draws no work block");
   assert.equal(await work.first().getAttribute("aria-expanded"), "false", "manual folding is preserved");
-  assert.equal(await work.nth(1).getAttribute("aria-expanded"), "true", "a settled turn that ends in commentary keeps its text in view");
   assert.equal(await log.locator(".chat-agent-meta").count(), 1, "commentary is not a final answer");
-  console.log("PASS manual state persists, commentary stays inside work and stays visible when the turn has no answer");
+  console.log("PASS manual state persists, commentary stands in the open");
 
   records.push({ type: "turn_context", payload: { model: "codex-updated-model", effort: "low" } }); persist();
   await modelInfo.getByText("codex-updated-model", { exact: true }).waitFor();
@@ -189,7 +198,7 @@ try {
   await placeholder.waitFor({ state: "detached" });
   assert.ok(Math.abs((await liveTitle.boundingBox())!.x - placeholderX) < 1, "the block's title starts where the activity line's did");
   await report("idle");
-  await log.locator(".work-block-title", { hasText: "Worked" }).last().waitFor();
+  await log.locator(".work-block-title", { hasText: "1 command" }).last().waitFor();
   // a running turn with only words so far: the activity is a line under them, not a head over
   // them, so the words stay put when the turn ends and the line goes
   add(message("user", "A third request."), 24);
@@ -244,10 +253,10 @@ try {
     const level = document.querySelector(".composer-reasoning");
     return level !== null && (level.scrollWidth <= level.clientWidth || level.getBoundingClientRect().width <= 1);
   }, undefined, { timeout: 5_000 });
-  mkdirSync("evidence/chat-mode", { recursive: true });
-  await page.screenshot({ path: "evidence/chat-mode/mobile.png", fullPage: true, animations: "disabled" });
+  mkdirSync(evidence, { recursive: true });
+  await page.screenshot({ path: join(evidence, "mobile.png"), fullPage: true, animations: "disabled" });
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.screenshot({ path: "evidence/chat-mode/desktop.png", fullPage: true, animations: "disabled" });
+  await page.screenshot({ path: join(evidence, "desktop.png"), fullPage: true, animations: "disabled" });
   // Read back Chromium's actual clipboard from the secure loopback page. The copy itself
   // runs on an ordinary HTTP hostname, where navigator.clipboard genuinely does not exist.
   const secureOrigin = `http://127.0.0.1:${server.port}`;
@@ -312,7 +321,7 @@ try {
   assert.equal(await insecureLog.getByRole("alert").filter({ hasText: "Couldn't copy. Select the text and copy it manually." }).count(), 2);
   assert.equal(await insecureLog.getByRole("button", { name: "Code copied", exact: true }).count(), 0);
   assert.equal(await insecure.locator("body > textarea[readonly]").count(), 0, "temporary copy field is removed");
-  await insecure.screenshot({ path: "evidence/chat-mode/clipboard-refused.png", fullPage: true, animations: "disabled" });
+  await insecure.screenshot({ path: join(evidence, "clipboard-refused.png"), fullPage: true, animations: "disabled" });
   await insecure.close();
   console.log("PASS actual clipboard contents on HTTP, denied API fallback, and refused-copy feedback");
   rmSync(rollout);

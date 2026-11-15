@@ -10,9 +10,13 @@
 import type { BunFile } from "bun";
 import { existsSync } from "node:fs";
 import { join, normalize } from "node:path";
+import { accountServiceOrigin, CSP_DIRECTIVES, DEFAULT_ACCOUNT_SERVICE, IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy } from "../shared/web-policy.ts";
+import { ASSETS } from "./entries.ts";
+
+export { accountServiceOrigin, DEFAULT_ACCOUNT_SERVICE, IMMUTABLE_CACHE, REVALIDATE, shellContentSecurityPolicy };
 
 // A URL's pathname is not a file path: on Windows it is `/C:/...`, and spaces come percent-encoded.
-const DIST_DIR = join(import.meta.dir, "..", "dist");
+const DIST_DIR = join(ASSETS, "dist");
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -26,14 +30,13 @@ const MIME: Record<string, string> = {
   ".ico": "image/x-icon",
   ".woff": "font/woff",
   ".woff2": "font/woff2",
+  ".wasm": "application/wasm",
 };
 
 /** Files whose URL never changes but whose contents decide what the app becomes. */
-const REVALIDATED_PATHS = new Set(["/sw.js", "/manifest.webmanifest"]);
+const REVALIDATED_PATHS = new Set(["/sw.js", "/manifest.webmanifest", "/index.html"]);
 
-const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 const SHORT_CACHE = "public, max-age=86400";
-const REVALIDATE = "no-cache";
 
 function contentTypeFor(path: string): string {
   const dot = path.lastIndexOf(".");
@@ -48,71 +51,8 @@ function cacheControlFor(pathname: string): string {
 }
 
 /**
- * The app's own Content-Security-Policy, sent with the shell and every static file. The file
- * viewer's own answers (`/api/fs/*`, a PDF in a frame, images in an <img>) do not pass through
- * here: `fileResponse` (file-view.ts) sends them its own, stricter `sandbox; default-src 'none'`.
- * Every directive is here for a reason, and none of them is a guess:
- *
- * - `default-src 'self'`: the fallback for anything not named below. Nothing is fetched
- *   from another host: the API, the terminal socket, the machines event stream, the
- *   fonts (bundled woff2, `src/fonts/`), the PC bundle and the push endpoints are all
- *   same-origin, and the remote PCs are reached through this server's own /api/machines
- *   proxy rather than from the browser.
- * - `script-src 'self'`: both entry points are Vite modules (index.html), nothing in the
- *   app evaluates a string, and there is no inline handler attribute. This is the
- *   directive that matters: KaTeX output and the agent marks are the two places that put
- *   third-party HTML into the page.
- * - `style-src 'self' 'unsafe-inline'`: inline style attributes are how measured layout
- *   reaches the DOM (AgentPicker, RowMenu, Droplet, UsageMeters), and KaTeX writes one on
- *   every expression it cannot render. It is also load-bearing for the terminal itself:
- *   xterm.js builds its layers by appending a <style> element to the DOM, and a
- *   DOM-inserted <style> is subject to style-src, so without 'unsafe-inline' the pane
- *   loses its cursor and its layers. The unsafe part is styles, not script.
- * - `img-src 'self' data: blob:`: same-origin icons, pane images and file-viewer images;
- *   `blob:` for a pasted image previewed before it is uploaded; `data:` for the inline
- *   agent marks.
- * - `font-src 'self' data:`: every face is bundled (the app's own and KaTeX's, both
- *   through Vite). No font CDN. The `data:` is Vite's own inlining: an asset under ~4 KB
- *   is emitted as a data: URL inside the CSS rather than as a file, and KaTeX_Size3's
- *   3 KB woff2 is one of them. That data: is app-bundled bytes, never anything an agent
- *   or a transcript can reach. Measured in Chromium: without it the load reports one
- *   `font-src` violation per maths-bearing page, and the browser falls through to the
- *   same-origin .woff of the same face, so the maths still draws.
- * - `connect-src 'self'`: every fetch is a relative /api path, the terminal socket is
- *   window.location.host over ws:/wss: (which 'self' matches — confirmed in Chromium:
- *   an explicit `new WebSocket("ws://<same host>/ws")` and the machines event stream both
- *   connect under the enforcing header).
- * - `media-src 'self'`: the file viewer's <video>/<audio>, same-origin.
- * - `frame-src 'self'`: the PDF viewer frames /api/fs/file, same-origin. With the request's
- *   origin known, also any port of the host the browser used for the app: the web panel
- *   (src/lib/webPanel.ts) frames a page served by this PC, a dev server's localhost:5173 named
- *   under that host. No other host is framed.
- * - `worker-src 'self'`: the service worker is /sw.js, same-origin.
- * - `object-src 'none'`: no <object>/<embed> in the app, and none may appear.
- * - `base-uri 'self'`: no <base>, and a tag that adds one changes what every relative URL
- *   in the page means.
- * - `form-action 'self'`: every form is submitted by script, but a form that ever grows
- *   an action must not post this PC's credentials somewhere else.
- * - `frame-ancestors 'none'`: nothing frames the app itself.
- */
-const CSP_DIRECTIVES = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "media-src 'self'",
-  "frame-src 'self'",
-  "worker-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-];
-
-/**
- * The policy both headers carry. A browser script that serves a build of its own sends it as it is:
+ * The policy both headers carry, before contentSecurityPolicy() adds the request's host to `frame-src`
+ * and the account service to `connect-src`. A browser script that serves a build of its own sends it as it is:
  * serveStatic reads only this checkout's dist/, and sends no policy before that is built.
  */
 export const CONTENT_SECURITY_POLICY = CSP_DIRECTIVES.join("; ");
@@ -128,8 +68,13 @@ export function contentSecurityPolicy(origin?: string): string {
   } catch {
     host = null;
   }
-  if (host === null || !FRAMEABLE_HOST.test(host)) return CONTENT_SECURITY_POLICY;
-  return CSP_DIRECTIVES.map((directive) => directive === "frame-src 'self'" ? `frame-src 'self' http://${host}:* https://${host}:*` : directive).join("; ");
+  const frameable = host !== null && FRAMEABLE_HOST.test(host);
+  const account = accountServiceOrigin();
+  return CSP_DIRECTIVES.map((directive) => {
+    if (directive === "frame-src 'self'" && frameable) return `frame-src 'self' http://${host}:* https://${host}:*`;
+    if (directive === "connect-src 'self'" && account !== null) return `connect-src 'self' ${account}`;
+    return directive;
+  }).join("; ");
 }
 
 /**
@@ -196,12 +141,23 @@ export function renameShell(html: string, name: string): string {
   return html.replace(APPLE_TITLE, (_, start: string, end: string) => `${start}${content}${end}`);
 }
 
-/** The file as built, or the manifest and the shell under OVIS_APP_NAME. */
+/**
+ * The shell with the account service its own pages sign in to (`ovis-pc-account-service`, read by
+ * src/lib/account/service.ts): the very origin `connect-src` admits, so the two never disagree, and
+ * none when the account is off. The hosted shell's `ovis-account-service` is another meta.
+ */
+export function accountShell(html: string): string {
+  const origin = accountServiceOrigin();
+  return origin === null ? html : html.replace("</head>", `<meta name="ovis-pc-account-service" content="${origin}" />\n</head>`);
+}
+
+/** The file as built, or the manifest under OVIS_APP_NAME, and the shell with its account service and name. */
 async function body(file: BunFile, kind: "manifest" | "shell" | null, origin?: string): Promise<BunFile | string> {
   if (kind === "manifest" && origin !== undefined) return manifestBody(await file.text(), origin);
   const name = appName();
+  if (kind === "shell") return accountShell(name ? renameShell(await file.text(), name) : await file.text());
   if (!name || !kind) return file;
-  return kind === "manifest" ? renameManifest(await file.text(), name) : renameShell(await file.text(), name);
+  return renameManifest(await file.text(), name);
 }
 
 /** Accepted representations, with a server preference for br over gzip on ties.
@@ -232,9 +188,9 @@ export async function serveStatic(pathname: string, acceptEncoding?: string | nu
   if (candidate.startsWith(DIST_DIR) && relative !== "/" && existsSync(candidate)) {
     const file = Bun.file(candidate);
     if ((await file.exists()) && !(await file.stat()).isDirectory()) {
-      // Only immutable JS/CSS get build-time sidecars. Never compress user/API
-      // data, the service worker, or the shell on a request's hot path.
-      if (pathname.startsWith("/assets/") && /\.(?:js|css)$/.test(pathname)) {
+      // Only immutable JS/CSS/WebAssembly get build-time sidecars (scripts/compressed-assets.ts).
+      // Never compress user/API data, the service worker, or the shell on a request's hot path.
+      if (pathname.startsWith("/assets/") && /\.(?:js|css|wasm)$/.test(pathname)) {
         for (const encoding of encodings(acceptEncoding)) {
           const body = encoding === "identity" ? file : Bun.file(`${candidate}.${encoding === "br" ? "br" : "gz"}`);
           if (!await body.exists()) continue;

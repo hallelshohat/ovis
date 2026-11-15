@@ -8,7 +8,7 @@ import type { HerdrPane, SlashCommand } from "../shared/protocol.ts";
 import { resolveAgent, typingRoots } from "./pane-context.ts";
 import { paneProcessRoots } from "./conversation.ts";
 import { CATALOG_SOURCE_BUDGET_MS, registerCatalogSource } from "./catalog-sources.ts";
-import { builtinCommands, cachedPaneCommands, paneCommands } from "./commands.ts";
+import { builtinCommands, cachedPaneCommands } from "./commands.ts";
 import { opencodeSessionId } from "./opencode.ts";
 import { listOpenCodeCatalog, openCodeHasSession, openCodeService, subscribeOpenCodeEvents, type OpenCodeEvent, type OpenCodeService } from "./opencode-service.ts";
 import { skillTokens, type PromptPiece } from "./opencode-skill-attach.ts";
@@ -43,24 +43,31 @@ const WATCH_MS = 10 * 60_000;
 const WATCH_MAX = 64;
 const EARLY_MAX = 256;
 /** how long a pane's verified service and session are trusted without asking again (as openCodeService's) */
-const PANE_VERIFIED_MS = 5_000;
+export const PANE_VERIFIED_MS = 5_000;
 /**
  * The panes that keep the shared event stream open: each verified to run OpenCode v2 on the stream's
  * service with its session there. A pane's end, its agent changing, or a verification that now fails
  * releases it; the stream closes when no verified pane uses its service.
  */
-const verifiedPanes = new Map<string, { sessionID: string; key: string; until: number }>();
+const verifiedPanes = new Map<string, { sessionID: string; key: string; until: number; generation: number; pid: number | null; started: number }>();
+let verificationGeneration = 0;
+/** A collector snapshot can release only ownership verified before its read began. */
+export function openCodeVerificationCheckpoint(): number { return verificationGeneration; }
 /**
  * The verifications still in flight: all of them (a reset cancels every one), and per pane (its
  * release cancels that pane's). A cancelled verification opens no stream and caches nothing. Each
  * set holds only verifications in flight, and a pane's entry goes when its last one finishes, so
  * nothing is evicted and no cancellation can be undone.
  */
-type Verification = { cancelled: boolean };
+/** `started`: the verification counter when it began, so a snapshot read before it cannot cancel it */
+type Verification = { cancelled: boolean; started: number };
 const inFlight = new Set<Verification>();
 const inFlightByPane = new Map<string, Set<Verification>>();
-/** the status collectors that end a pane: a verified pane is tracked so its close reaches releaseOpenCodePane */
-const paneTrackers = new Map<(paneId: string) => void, Set<string>>();
+/**
+ * the status collectors that end a pane: a verified pane is tracked so its close reaches releaseOpenCodePane.
+ * Each one's `refresh` asks it for a snapshot without registering any pane again.
+ */
+const paneTrackers = new Map<(paneId: string) => void, { handed: Set<string>; refresh: () => void }>();
 /** each tracker gets a pane once while it stays verified: tracking asks herdr for a snapshot */
 function handOver(track: (paneId: string) => void, handed: Set<string>, paneId: string): void {
   if (handed.has(paneId)) return;
@@ -69,13 +76,35 @@ function handOver(track: (paneId: string) => void, handed: Set<string>, paneId: 
 }
 
 /**
+ * herdr can change a pane's agent without a status event or a lifecycle frame (0.9.3 on a loaded host: OpenCode
+ * gone, the shell idle in front, and nothing said for its pane), so no snapshot would read it until the collector's
+ * backstop. While panes hold the stream, each one's collectors read it again whenever its verification is due
+ * (PANE_VERIFIED_MS): what that snapshot shows releases it as any other (server/core/status.ts, onReconciled).
+ * Each collector is only asked to read again: tracking a pane anew would make every snapshot already on its
+ * way older than the pane, so on a host where a read outlasts the recheck a pane gone would never be ended.
+ */
+let recheck: ReturnType<typeof setInterval> | null = null;
+function scheduleRecheck(): void {
+  if (recheck !== null) return;
+  recheck = setInterval(() => {
+    if (verifiedPanes.size === 0) { stopRecheck(); return; }
+    for (const { refresh } of paneTrackers.values()) refresh();
+  }, PANE_VERIFIED_MS);
+  recheck.unref?.();
+}
+function stopRecheck(): void {
+  if (recheck !== null) clearInterval(recheck);
+  recheck = null;
+}
+
+/**
  * A status hub's collector tracks verified OpenCode panes (server/core/status.ts): it gets every pane
  * verified now, and each one verified later, so a collector that replaces another misses no pane.
- * Returns its unregistration.
+ * `refresh` asks it for a snapshot, registering nothing. Returns its unregistration.
  */
-export function trackVerifiedOpenCodePanes(track: (paneId: string) => void): () => void {
+export function trackVerifiedOpenCodePanes(track: (paneId: string) => void, refresh: () => void): () => void {
   const handed = new Set<string>();
-  paneTrackers.set(track, handed);
+  paneTrackers.set(track, { handed, refresh });
   for (const paneId of verifiedPanes.keys()) handOver(track, handed, paneId);
   return () => { paneTrackers.delete(track); };
 }
@@ -162,29 +191,59 @@ function ensureStream(service: OpenCodeService): Stream {
   return next;
 }
 
-/** A global reset: closes the stream, forgets every pane and watch, and cancels verifications in flight. */
+/**
+ * The servers running in this process (createServer holds, its stop releases): the stream, the verified
+ * panes and the watches are shared by all of them, so a server that stops resets them only when no other
+ * still runs. After the last release a verification still on its way opens no stream (`released`).
+ */
+let holders = 0;
+let released = false;
+
+/** Held by a running server; the release (idempotent) of the last holder resets everything (closeOpenCodeNative). */
+export function holdOpenCodeNative(): () => void {
+  holders += 1;
+  released = false;
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    holders -= 1;
+    if (holders > 0) return;
+    closeOpenCodeNative();
+    released = true;
+  };
+}
+
+/** A global reset: closes the stream, forgets every pane and watch, and cancels verifications in flight. What follows starts over. */
 export function closeOpenCodeNative(): void {
+  released = false;
   for (const verification of inFlight) verification.cancelled = true;
   inFlight.clear();
   inFlightByPane.clear();
-  for (const handed of paneTrackers.values()) handed.clear();
+  for (const { handed } of paneTrackers.values()) handed.clear();
   stream?.close();
   stream = null;
   catalogs.clear();
   watches.length = 0;
   verifiedPanes.clear();
+  stopRecheck();
 }
 
 /**
  * A pane ended, or is no longer OpenCode v2 (server/core/status.ts calls this from the same pane-end
  * and agent-change paths that forget its other state): its watches and its hold on the stream go, a
  * verification of it still in flight is cancelled, and the stream closes once no verified pane uses it.
+ * A snapshot supplies its starting checkpoint: verification since then is newer evidence and stays.
  */
-export function releaseOpenCodePane(paneId: string): void {
+export function releaseOpenCodePane(paneId: string, checkpoint = Infinity): void {
+  if ((verifiedPanes.get(paneId)?.generation ?? 0) > checkpoint) return;
+  // a verification begun since the snapshot's read is newer evidence too: it settles the pane itself
+  for (const verification of inFlightByPane.get(paneId) ?? []) if (verification.started > checkpoint) return;
   for (const verification of inFlightByPane.get(paneId) ?? []) { verification.cancelled = true; inFlight.delete(verification); }
   inFlightByPane.delete(paneId);
-  for (const handed of paneTrackers.values()) handed.delete(paneId);
+  for (const { handed } of paneTrackers.values()) handed.delete(paneId);
   verifiedPanes.delete(paneId);
+  if (verifiedPanes.size === 0) stopRecheck();
   for (let index = watches.length - 1; index >= 0; index--) if (watches[index]!.paneId === paneId) watches.splice(index, 1);
   if (stream && ![...verifiedPanes.values()].some((entry) => entry.key === stream!.key)) {
     stream.close();
@@ -197,13 +256,18 @@ export function openCodeNativeState(): { stream: boolean; panes: string[] } {
   return { stream: stream !== null, panes: [...verifiedPanes.keys()] };
 }
 
+/** The OpenCode process a verified pane was last verified with, as herdr named it in front; null when unknown. */
+export function openCodePanePid(paneId: string): number | null {
+  return verifiedPanes.get(paneId)?.pid ?? null;
+}
+
 /** The verified service a pane's exact session lives in, or null (scan rows and screen paths stay). */
 export async function openCodePaneService(pane: Pick<HerdrPane, "agent" | "agent_session"> & { pane_id?: string }, signal?: AbortSignal, stateDir?: string): Promise<{ service: OpenCodeService; sessionID: string } | null> {
   const label = resolveAgent(pane).agent;
   if (label !== "opencode") return null;
   const paneId = pane.pane_id;
   // registered before the first wait (the process roots too), so a release or reset meanwhile cancels it
-  const verification: Verification = { cancelled: false };
+  const verification: Verification = { cancelled: false, started: ++verificationGeneration };
   inFlight.add(verification);
   if (paneId !== undefined) {
     const own = inFlightByPane.get(paneId) ?? new Set<Verification>();
@@ -213,8 +277,12 @@ export async function openCodePaneService(pane: Pick<HerdrPane, "agent" | "agent
   let held: boolean;
   let service: OpenCodeService | null;
   let sessionID: string;
+  let pid: number | null = null;
   try {
-    const roots = paneId ? typingRoots(await paneProcessRoots(paneId, label)) : null;
+    const found = paneId ? await paneProcessRoots(paneId, label) : null;
+    // a pid herdr did not report comes back as -1: unknown, not a process
+    pid = found?.pid != null && found.pid > 0 ? found.pid : null;
+    const roots = found ? typingRoots(found) : null;
     if (verification.cancelled || resolveAgent(pane, roots).agent !== "opencode") return null;
     const id = opencodeSessionId(pane);
     if (!id) return null;
@@ -227,8 +295,8 @@ export async function openCodePaneService(pane: Pick<HerdrPane, "agent" | "agent
     own?.delete(verification);
     if (own?.size === 0) inFlightByPane.delete(paneId!);
   }
-  // a reset or the pane's release while this was asked: nothing it found is used or kept
-  if (verification.cancelled) return null;
+  // a reset or the pane's release while this was asked, or the last server stopped: nothing it found is used or kept
+  if (verification.cancelled || released) return null;
   if (!held) {
     // no longer an OpenCode v2 pane on a verified service: it holds the stream no more
     if (paneId !== undefined && verifiedPanes.has(paneId)) releaseOpenCodePane(paneId);
@@ -237,10 +305,17 @@ export async function openCodePaneService(pane: Pick<HerdrPane, "agent" | "agent
   if (paneId === undefined) return { service: service!, sessionID };
   // a verified OpenCode v2 pane keeps its service's event stream open, so a later send's events are not missed
   const live = ensureStream(service!);
+  const earlier = verifiedPanes.get(paneId);
+  // An older verification ending after a newer one leaves the newer one's pid, even none: a read that names no process
+  // clears it, so a new OpenCode stopped before any read saw it is still looked for (stoppedAgentJob walks without one)
+  const known = earlier !== undefined && earlier.started > verification.started ? earlier.pid : pid;
+  // the latest start a committed pid came from: an older verification ending later never lowers it
+  const started = Math.max(verification.started, earlier?.started ?? 0);
   verifiedPanes.delete(paneId);
-  verifiedPanes.set(paneId, { sessionID, key: live.key, until: Date.now() + PANE_VERIFIED_MS });
+  verifiedPanes.set(paneId, { sessionID, key: live.key, until: Date.now() + PANE_VERIFIED_MS, generation: ++verificationGeneration, pid: known, started });
   // a pane closed without an exit frame ends only if its collector tracks it
-  for (const [track, handed] of paneTrackers) handOver(track, handed, paneId);
+  for (const [track, { handed }] of paneTrackers) handOver(track, handed, paneId);
+  scheduleRecheck();
   return { service: service!, sessionID };
 }
 
@@ -286,27 +361,22 @@ registerCatalogSource({
 type Sent = (CommandSend & { store: string | null }) | undefined;
 const UNKNOWN_FORMS = [{ match: "bare", interaction: "unknown" }] as const;
 
-/**
- * The pane's verified service and (for `cwd`) its lists, under one budget for all of it. `version` is
- * the verified service's, known even when its session lookup or lists then fail or run out.
- */
-async function boundCatalog(pane: HerdrPane, cwd: string | null, budgetMs: number, stateDir?: string): Promise<{ bound: boolean; rows: SlashCommand[] | null; version: string | null }> {
+/** The pane's verified service and (for `cwd`) its lists, under one budget for all of it. */
+async function boundCatalog(pane: HerdrPane, cwd: string | null, budgetMs: number, stateDir?: string): Promise<{ bound: boolean; rows: SlashCommand[] | null }> {
+  const deadline = Date.now() + budgetMs;
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let version: string | null = null;
   const expired = new Promise<null>((resolve) => { timer = setTimeout(() => { controller.abort(); resolve(null); }, budgetMs); });
   const asked = (async () => {
-    version = (await openCodeService(stateDir, controller.signal))?.version ?? null;
+    const version = (await openCodeService(stateDir, controller.signal))?.version ?? null;
+    if (Date.now() >= deadline) { controller.abort(); return null; }
     const bound = version ? await openCodePaneService(pane, controller.signal, stateDir) : null;
-    // an answer in time that the pane's session is not this service's: its version says nothing about the pane
-    // (an OpenCode 1.x TUI, whose '@' names a file); only a lookup that ran out keeps it (a hung service)
-    if (!bound && !controller.signal.aborted) version = null;
     if (!bound) return null;
     return { bound: true, rows: cwd ? await openCodeCatalogRows(bound.service, cwd, controller.signal) : null };
   })().catch(() => null);
   try {
     const answer = await Promise.race([asked, expired]);
-    return { bound: answer?.bound ?? false, rows: answer?.rows ?? null, version };
+    return { bound: answer?.bound ?? false, rows: answer?.rows ?? null };
   } finally { clearTimeout(timer); }
 }
 
@@ -315,7 +385,7 @@ async function boundCatalog(pane: HerdrPane, cwd: string | null, budgetMs: numbe
  * OpenCode pane's text with an `@` token waits here (delivery has to, to attach a skill), and only up to
  * the catalog budget. With no catalog remembered for the pane's current identity (a bridge restarted
  * under an open tab, a new OpenCode session), the record is made from the verified service's own lists,
- * or from the scanned ones when the service does not answer. A skill that cannot be attached goes as
+ * never from a synchronous filesystem scan on the delivery path. A skill that cannot be attached goes as
  * plain text and its record is terminal-required with the note why.
  */
 export async function openCodeSkillsToType(pane: HerdrPane, sent: Sent, text: string, screen = "", stateDir?: string): Promise<{ sent: Sent; skills: string[] }> {
@@ -324,16 +394,18 @@ export async function openCodeSkillsToType(pane: HerdrPane, sent: Sent, text: st
   const roots = typingRoots(await paneProcessRoots(pane.pane_id, label));
   if (resolveAgent(pane, roots).agent !== "opencode") return { sent, skills: [] };
   const tokensOf = (record: Sent): string[] => record?.agent === "opencode" ? skillTokens(text, record.invocations.map((invocation) => invocation.name)) : [];
-  const cold = cachedPaneCommands(pane) === undefined;
-  if (!cold && tokensOf(sent).length === 0) return { sent, skills: [] };
+  const cached = cachedPaneCommands(pane);
+  const cold = cached === undefined;
+  let record = sent ?? (cached?.agent === "opencode" ? commandSendFrom(pane, "opencode", cached.commands, text, screen) : undefined);
+  if (!cold && tokensOf(record).length === 0) return { sent: record, skills: [] };
   const cwd = pane.foreground_cwd ?? pane.cwd ?? null;
-  const { bound, rows, version } = await boundCatalog(pane, cold ? cwd : null, CATALOG_SOURCE_BUDGET_MS, stateDir);
-  let record = sent;
+  const { bound, rows } = await boundCatalog(pane, cold ? cwd : null, CATALOG_SOURCE_BUDGET_MS, stateDir);
   if (cold) {
     const native = rows?.filter((row) => row.source !== "builtin").map((row): SlashCommand => ({ ...row, forms: row.forms ?? [...UNKNOWN_FORMS], visibility: row.visibility ?? "offered", provenance: { transport: "native", verified: true } }));
-    // the scanned lists are read only when the service gave none, after the wait delivery already had; without the
-    // service's version nothing says the pane is v2, whose `@` names a skill (v1's names a file)
-    record = commandSendFrom(pane, "opencode", native ? [...builtinCommands("opencode"), ...native] : paneCommands("opencode", cwd, undefined, {}, version), text, screen);
+    // A synchronous scan cannot be interrupted by the lookup timer. Without a native catalog,
+    // no mention is known to be a skill; files and other @words remain ordinary plain text.
+    record = commandSendFrom(pane, "opencode", [...builtinCommands("opencode"), ...(native ?? [])], text, screen);
+    if (!native) return { sent: record, skills: [] };
   }
   const tokens = tokensOf(record);
   if (tokens.length === 0) return { sent: record, skills: [] };

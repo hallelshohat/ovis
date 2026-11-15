@@ -43,6 +43,7 @@ describe("toolVerb", () => {
   const part = (name: string, args: Record<string, unknown> = {}) => ({ name, input: JSON.stringify(args, null, 2) });
 
   it("is the verb a row shows before its object", () => {
+    expect(toolVerb(part("view_image", { path: "/images/probe.png" }), "/images/probe.png")).toBe("Viewed image");
     expect(toolVerb(part("Read", { file_path: "src/metrics.ts" }), "src/metrics.ts")).toBe("Read");
     expect(toolVerb(part("read", { path: "src/metrics.ts" }), "src/metrics.ts")).toBe("Read");
     expect(toolVerb(part("Edit", { file_path: "src/pages/Reports.tsx", old_string: "a", new_string: "b" }), "src/pages/Reports.tsx")).toBe("Edited");
