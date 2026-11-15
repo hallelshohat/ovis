@@ -103,7 +103,7 @@ export const boardTaskRepo = (task: Pick<BoardTask, "id">): string => task.id.sl
 const trimSlash = (path: string): string => path.replace(/\/+$/, "");
 
 /** The task whose own checkout this workspace is on: one workspace, one task, whatever their names say. */
-export function boardTaskOf(workspace: { worktree?: { checkout_path: string; is_linked_worktree: boolean } | null }, tasks: readonly BoardTask[]): BoardTask | null {
+export function boardTaskOf<T extends Pick<BoardTask, "worktree">>(workspace: { worktree?: { checkout_path: string; is_linked_worktree: boolean } | null }, tasks: readonly T[]): T | null {
   const checkout = workspace.worktree?.is_linked_worktree ? trimSlash(workspace.worktree.checkout_path) : null;
   if (!checkout) return null;
   const owners = tasks.filter((task) => task.worktree !== null && trimSlash(task.worktree) === checkout);

@@ -1,7 +1,7 @@
 /**
- * A chat's pull requests, as `GET /api/pane/pull-requests` answers them (server/pull-requests/).
- * A chat holds a list, never one: the PR links its transcript wrote and the PRs of every branch it
- * ran on. The first in attention order leads; the others are counted beside it.
+ * A space's pull requests, as `GET /api/pane/pull-requests` answers them (server/pull-requests/):
+ * its board record, successful creations in its chat, and its exact current head's PRs, all by
+ * the authenticated author. The first in attention order leads; the others are counted beside it.
  */
 export type PrState = "open" | "draft" | "merged" | "closed";
 export type PrChecks = "passing" | "failing" | "pending" | "none";
@@ -38,7 +38,7 @@ export interface PanePullRequests {
   pull_requests: PullRequest[];
   /** time order */
   events: PrEvent[];
-  /** the PR links the chat wrote, counted even when gh cannot read them: why a chat with none says nothing */
+  /** board/creation links, counted even when gh cannot read them; known foreign authors are excluded */
   linked: number;
 }
 

@@ -23,7 +23,7 @@ export class UpdateUnavailable extends Error {
   constructor() { super("Grok history cannot be reconstructed"); this.name = "GrokUnavailable"; }
 }
 
-function outputText(value: unknown): string {
+export function outputText(value: unknown): string {
   if (typeof value === "string") return value;
   if (!Array.isArray(value)) return "";
   return value.map((item) => {

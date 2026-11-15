@@ -2,11 +2,25 @@ import { describe, expect, it } from "bun:test";
 import listed from "../fixtures/gh/pr-list-branch.json";
 import viewed from "../fixtures/gh/pr-view-open.json";
 import { attentionRank } from "../../shared/pull-requests.ts";
-import { ghRepo, toPullRequest, type Run } from "./gh.ts";
+import { ghRepo, ghViewer, ghView, ghListHead, toPullRequest, type Run } from "./gh.ts";
 
 const answer = (code: number, stdout = "", stderr = ""): Run => async () => ({ code, stdout, stderr });
 
 describe("gh pull requests", () => {
+  it("reads the authenticated author and refuses malformed identities", async () => {
+    expect(await ghViewer({ run: answer(0, '{"login":"owner"}'), cwd: "/w" })).toEqual({ status: "ok", login: "owner" });
+    expect(await ghViewer({ run: answer(0, '{"login":null}'), cwd: "/w" })).toEqual({ status: "error", login: null });
+    expect(await ghViewer({ run: answer(4), cwd: "/w" })).toEqual({ status: "unauthenticated", login: null });
+    expect(await ghView({ run: answer(0, JSON.stringify(viewed)), cwd: "/w", url: viewed.url, ownRepo: "acme/api" })).toBeNull();
+    expect((await ghView({ run: answer(0, JSON.stringify({ ...viewed, author: { login: "owner" } })), cwd: "/w", url: viewed.url, ownRepo: "acme/api" }))?.author).toBe("owner");
+  });
+
+  it("asks for only the viewer's exact head, including completed PRs", async () => {
+    const calls: string[][] = [];
+    const run: Run = async (argv) => { calls.push(argv); return { code: 0, stdout: "[]", stderr: "" }; };
+    expect(await ghListHead({ run, cwd: "/w", branch: "feature-a", ownRepo: "acme/api" })).toEqual([]);
+    expect(calls[0]).toEqual(["gh", "pr", "list", "--head", "feature-a", "--author", "@me", "--state", "all", "--limit", "50", "--json", expect.stringContaining("author")]);
+  });
   it("reads a failing check, another repository and a requested review", () => {
     const pr = toPullRequest(viewed, "acme/api");
     expect(pr).toMatchObject({ number: 88, repo: "acme/client-sdk", own: false, state: "open", checks: "failing", review: "review_required", head: "feat/idem-key", base: "main", additions: 214, deletions: 38, merged_at: null });
