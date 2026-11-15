@@ -25,12 +25,19 @@ export const hasCodexToolActivity = (screen: string): boolean => toolPreviews(sc
 export async function codexToolActivityConflict({ screen, segments }: { screen: string; segments: readonly HistorySegment[] }): Promise<boolean> {
   const shown = toolPreviews(screen);
   if (shown.length < MIN_PAIRS) return true;
-  const scan = await scanCodexHistory({ key: JSON.stringify(shown), segments, cache: conflicts, initial: newEvidence,
+  const key = JSON.stringify(shown);
+  const cache = conflicts.get(key) ?? new Map<string, CodexHistoryScan<Evidence>>();
+  conflicts.delete(key);
+  conflicts.set(key, cache);
+  if (conflicts.size > KEPT_SCREENS) conflicts.delete(conflicts.keys().next().value!);
+  const scan = await scanCodexHistory({ key: "tool-activity", segments, cache, initial: newEvidence,
     each: (evidence, line) => weighLine({ line, shown, evidence }) });
   return scan === null || scan.value.quoted.size === shown.length || scan.value.pending.size > 0;
 }
 
-const conflicts = new Map<string, CodexHistoryScan<Evidence>>();
+// Each screen must retain its peers' progress while other screens are recovering.
+const conflicts = new Map<string, Map<string, CodexHistoryScan<Evidence>>>();
+const KEPT_SCREENS = 64;
 
 const MIN_PAIRS = 2;
 const MIN_OUTPUT = 64;

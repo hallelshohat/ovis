@@ -257,6 +257,26 @@ it("refuses a rewrite during projection without contaminating cached evidence", 
   expect(cache.size).toBe(0);
 });
 
+it("does not retain a cache after its owner releases it", () => {
+  // Isolate collection from assertion frames retained by the test runner.
+  const child = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+    import {scanCodexHistory} from ${JSON.stringify(new URL("./codex-history-scan.ts", import.meta.url).href)};
+    import {setImmediate} from "node:timers/promises";
+    async function warm() {
+      const cache = new Map();
+      const result = await scanCodexHistory({key:"temporary", segments:[{path:${JSON.stringify(path)},end:8}], cache, initial:()=>[], each:()=>true});
+      if (result === null) throw new Error("cache did not warm");
+      return new WeakRef(cache);
+    }
+    const reference = await warm();
+    await setImmediate();
+    Bun.gc(true);
+    if (reference.deref()) throw new Error("scanner retained an unowned cache");
+  `], stdout: "pipe", stderr: "pipe", timeout: 5000 });
+  expect(child.stderr.toString()).toBe("");
+  expect(child.exitCode).toBe(0);
+});
+
 async function eventually<T>(read: () => Promise<T | null>): Promise<T> {
   const until = performance.now() + 5000;
   while (performance.now() < until) {
