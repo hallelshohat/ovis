@@ -1123,6 +1123,36 @@ describe("connection-owned pending input", () => {
     expect(f.bytes()).toBe(`${paste("send this now")}\r\u001b`);
   }, 30_000);
 
+  it.each([false, true])("confirms Codex Send now with a wrapped footer (background rows=%s)", async (background) => {
+    const text = "CONFIRM_BACKGROUND: acknowledge this marker and keep waiting.";
+    const recorded = readFileSync(new URL("./fixtures/codex-chat-parity/0.169.0-steering-wrapped-footer.txt", import.meta.url), "utf8");
+    const screen = background ? recorded.replace("• Messages to be submitted", "  └ sleep 180\n  └ Tip: Use /rename to rename your threads.\n\n• Messages to be submitted") : recorded;
+    const f = await setup("codex-wrapped-footer", "codex");
+    const message = await f.queue(1, text);
+    f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });
+    await f.waitBytes("\r");
+    await f.showScreen(screen.replace(/ {10,}/g, " "), "f2 to view");
+    expect(await f.socket.action(10)).toMatchObject({ ok: true });
+    await f.removed(message.id, "sent");
+    await f.waitBytes("\u001b");
+    expect(f.bytes()).toBe(`${paste(text)}\r\u001b`);
+    expect(f.socket.seen.some((frame: ServerMessage) => frame.type === "pending-messages"
+      && frame.messages.some((item) => item.id === message.id && item.state === "uncertain"))).toBe(false);
+  }, 30_000);
+
+  it("keeps Codex Send now uncertain when the wrapped-footer panel does not contain its message", async () => {
+    const f = await setup("codex-wrapped-wrong-message", "codex");
+    const message = await f.queue(1, "the missing message");
+    f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });
+    await f.waitBytes("\r");
+    const screen = readFileSync(new URL("./fixtures/codex-chat-parity/0.169.0-steering-wrapped-footer.txt", import.meta.url), "utf8");
+    await f.showScreen(screen.replace(/ {10,}/g, " "), "f2 to view");
+    expect(await f.socket.action(10)).toMatchObject({ ok: false, code: "submit_changed" });
+    await f.socket.wait((frame: ServerMessage) => frame.type === "pending-messages"
+      && frame.messages.some((item) => item.id === message.id && item.state === "uncertain"));
+    expect(f.bytes()).toBe(`${paste("the missing message")}\r`);
+  }, 30_000);
+
   it("withholds Codex Escape when its sender's lease lapses while the key RPC connects", async () => {
     const f = await setup("codex-guard-escape", "codex"); const message = await f.queue(1, "send this now");
     f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });

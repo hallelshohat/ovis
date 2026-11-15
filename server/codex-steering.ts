@@ -11,6 +11,7 @@ interface SteeringIO {
 }
 
 const STEERING_HINT = "Messages to be submitted after next tool call (press esc to interrupt and send immediately)";
+const MAX_FOOTER_ROWS = 4;
 const compact = (text: string) => text.replace(/\s/g, "");
 function lastLine<T>(lines: T[], matches: (line: T) => boolean): number {
   for (let index = lines.length - 1; index >= 0; index--) if (matches(lines[index]!)) return index;
@@ -34,10 +35,11 @@ function workingLine(line: string): boolean {
 
 /** Only the bottom composer with a Codex footer identifies a live input panel. */
 export function codexComposer(screen: string): { rows: { indent: number; text: string }[]; composer: number; empty: boolean; status: number; footer: string[] } | null {
-  const rows = stripVTControlCharacters(screen).split(/\r?\n/).map((raw) => {
+  const drawn = stripVTControlCharacters(screen).split(/\r?\n/).map((raw) => {
     const line = raw.replace(/^│/, "").replace(/\s*│\s*$/, "").trimEnd();
     return { indent: line.length - line.trimStart().length, text: line.trim() };
-  }).filter((row) => row.text);
+  });
+  const rows = drawn.filter((row) => row.text);
   // A resize can reflow the tail of a previously drawn status; join only an exact known suffix.
   for (let index = 0; index + 1 < rows.length; index++) {
     const row = rows[index]!;
@@ -52,8 +54,14 @@ export function codexComposer(screen: string): { rows: { indent: number; text: s
   if (composer < 0) return null;
   let footerStart = lines.length;
   while (footerStart > composer + 1 && FOOTER.test(lines[footerStart - 1]!)) footerStart--;
+  // A reflowed thread title continues the footer's first row, after the blank separating it from input.
+  const wrappedStart = rows.findIndex((row, index) => index > composer && FOOTER.test(row.text) && drawn[drawn.indexOf(row) - 1]?.text === "");
+  const wrapped = wrappedStart < 0 ? [] : rows.slice(wrappedStart);
+  if (wrapped.length > 0 && wrapped.length <= MAX_FOOTER_ROWS && wrapped.every((row, index) => FOOTER.test(row.text)
+    || (index > 0 && row.indent > column && row.indent === wrapped[0]!.indent && drawn[drawn.indexOf(row) - 1]?.text
+      && wrapped.slice(1, index).every((previous) => !FOOTER.test(previous.text))))) footerStart = wrappedStart;
   const footer = lines.slice(footerStart);
-  if (footer.length === 0 || footer.length > 4 || footer.some((line) => !FOOTER.test(line))) return null;
+  if (footer.length === 0 || footer.length > MAX_FOOTER_ROWS) return null;
   if (rows.slice(composer + 1, footerStart).some((row) => row.indent <= column)) return null;
   const empty = footerStart === composer + 1 && /^[›»](?:\s+Ask Codex to do anything)?$/.test(lines[composer]!);
   let status = lastLine(lines.slice(0, composer), workingLine);
@@ -73,7 +81,9 @@ export function codexSteeringPending(screen: string, text: string): boolean {
   if (!live?.empty) return false;
   const { rows, composer, status } = live;
   if (status < 0) return false;
-  const panel = rows.slice(status + 1, composer);
+  const start = rows.findIndex((row, index) => index > status && index < composer && row.indent === rows[status]!.indent && /^[•◦]/.test(row.text));
+  if (start < 0) return false;
+  const panel = rows.slice(start, composer);
   const isEntry = (row: { text: string }) => /^↳\s*\S/.test(row.text);
   const first = panel.findIndex(isEntry);
   if (first < 1) return false;
