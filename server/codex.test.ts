@@ -722,6 +722,50 @@ describe("Codex rollout resolution", () => {
     expect(matchCodexTranscript("Done", [{ path: "short", text: jsonl(message("assistant", "Done")) }])).toBeNull();
   });
 
+  describe("working Codex messages rendered from Markdown", () => {
+    const raw = "All verification jobs passed, including independent cleanup and inventory. I’m checking their receipts before starting the shared-service stage.\n\nThe measured speedup is **1.34×**, and `base + 1` remains unchanged. These results confirm that the current source starts and cleans up the service pool.";
+    const rendered = raw.replaceAll("**", "").replaceAll("`", "");
+    const wrapped = rendered.replaceAll("\n", "\n  ");
+    const candidate = { path: "working", text: jsonl(message("assistant", raw, "commentary")) };
+    const working = (body: string) => `${body}\n\n• Working (8m 29s • esc to interrupt)\n› Ask Codex to do anything\nGPT-6-Astra high · /project\n? for shortcuts`;
+
+    it("matches a complete formatted commentary message between tool calls", () => {
+      const screen = working(`• Ran bun test\n  └ all checks passed\n\n• ${wrapped}\n\n• Ran git diff\n  └ no changes`);
+      expect(matchCodexTranscript(screen, [candidate])).toBe(candidate.path);
+      expect(matchCodexTranscript(screen.replace("8m 29s", "8m 30s"), [candidate])).toBe(candidate.path);
+    });
+
+    it("refuses identical renderings in different conversations", () => {
+      const twin = { path: "plain-twin", text: jsonl(message("assistant", rendered, "commentary")) };
+      expect(matchCodexTranscript(working(`• ${wrapped}`), [candidate, twin])).toBeNull();
+    });
+
+    it("preserves punctuation, numbers and word boundaries", () => {
+      for (const changed of [wrapped.replace("base + 1", "base - 1"), wrapped.replace("1.34×", "1.43×"), wrapped.replace("source starts", "sourcestarts")]) {
+        expect(matchCodexTranscript(working(`• ${changed}`), [candidate])).toBeNull();
+      }
+    });
+
+    it("requires the entire message within one assistant block", () => {
+      for (const changed of [wrapped.slice(4), wrapped.slice(0, -8), `Note: ${wrapped}`, `${wrapped} Extra.`, wrapped.replace("\n  \n  ", "\n\n• ")]) {
+        expect(matchCodexTranscript(working(`• ${changed}`), [candidate])).toBeNull();
+      }
+    });
+
+    it("ignores messages quoted in tools, prompts, queued messages and drafts", () => {
+      for (const quoted of [`• Ran cat report\n  └ ${wrapped}`, `› ${wrapped}`, `  ↳ ${wrapped}`]) {
+        expect(matchCodexTranscript(working(quoted), [candidate])).toBeNull();
+      }
+      expect(matchCodexTranscript(working("").replace("› Ask Codex to do anything", `› ${wrapped}`), [candidate])).toBeNull();
+    });
+
+    it("requires a recognized working composer for the rendered-message match", () => {
+      const screen = working(`• ${wrapped}`);
+      expect(matchCodexTranscript(screen.replace("• Working (8m 29s • esc to interrupt)", ""), [candidate])).toBeNull();
+      expect(matchCodexTranscript(screen.replace("GPT-6-Astra high · /project", "unrecognized footer"), [candidate])).toBeNull();
+    });
+  });
+
   // a finished turn as herdr read Codex 0.163.0 on macOS: the answer, then Codex's "Worked for" footer and the composer
   const recordedScreen = "\r\n  >_ OpenAI Codex (v0.163.0)\r\n     /private/tmp/kiro2420-qa/proj\r\n\r\n\r\n› Write one paragraph of about 90 words about a ferryman named Oskar on the Elbe who counts swans at noon, with three\r\n  invented dates.\r\n\r\n\r\n• At noon, Oskar the ferryman rested his oars beside the Elbe and counted the swans as they drifted past: one, two,\r\n  then seven, whenever a ripple made him lose his place. He kept a little calendar in his coat, marked with three dates\r\n  nobody else had heard of: 31 Frostwake, 8 Swanrise, and 46 Lanternfall. Each was a day he swore the river had changed\r\n  its tune. When the last white neck slipped beneath the bridge, Oskar smiled, shut the calendar, and rowed toward the\r\n  far bank, carrying his strange year with him.\r\n\r\n  Worked for 4s • 7:05 PM                                                                                              \r\n\r\n\r\n\r\n› Ask Codex to do anything\r\n\r\n  GPT-6-Luna low · /private/tmp/kiro2420-qa/proj · Write Oskar’s Elbe paragraph\r\n  ← for agents · ? for shortcuts";
   const recordedAnswer = "At noon, Oskar the ferryman rested his oars beside the Elbe and counted the swans as they drifted past: one, two, then seven, whenever a ripple made him lose his place. He kept a little calendar in his coat, marked with three dates nobody else had heard of: 31 Frostwake, 8 Swanrise, and 46 Lanternfall. Each was a day he swore the river had changed its tune. When the last white neck slipped beneath the bridge, Oskar smiled, shut the calendar, and rowed toward the far bank, carrying his strange year with him.";
