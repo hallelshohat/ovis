@@ -1453,6 +1453,23 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: answer });
   });
 
+  heldIt("recovers native commands with a loaded peer's valid output larger than 8 MiB", async () => {
+    await resumedWithSuccessors();
+    const peer = elsewhereThread(other, [{ type: "response_item", payload: {
+      type: "function_call_output", call_id: "unrelated", output: "x".repeat(9 * 1024 * 1024),
+    } }]);
+    await loaded(thread, other);
+    ownThread(nativeCommands());
+    screen = toolScreen();
+    expect(await resolve()).toBe(path);
+    expect(await resolve()).toBe(path);
+    appendFileSync(peer, JSON.stringify(said("agent_message", "Unrelated completed work.")) + "\n");
+    expect(await resolve()).toBe(path);
+    const chat = await conversationModule.paneConversation(root, home);
+    expect(chat.source).toBe("codex-transcript");
+    expect(chat.turns.flatMap((turn) => turn.parts).some((part) => part.kind === "tool" && part.output === commandOutputs[0])).toBe(true);
+  });
+
   heldIt("recovers the sole resumed owner when commands fall outside the native tail", async () => {
     await resumedWithSuccessors();
     ownThread([said("agent_message", answer), ...nativeCommands()]);

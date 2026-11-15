@@ -68,6 +68,20 @@ it("keeps its verified prefix across an incomplete appended record", async () =>
   expect(lines).toBe(3);
 });
 
+it("checks large records in full and preserves their prefix across an incomplete append", async () => {
+  const padding = "x".repeat(9 * 1024 * 1024);
+  writeFileSync(path, JSON.stringify({ padding, n: 1 }) + "\n");
+  expect((await eventually(scan)).value).toEqual([1]);
+  expect((await scan())?.value).toEqual([1]);
+  expect(lines).toBe(1);
+  appendFileSync(path, `{"padding":"${padding}","n":`);
+  expect(await scan()).toBeNull();
+  expect(cache.size).toBe(1);
+  appendFileSync(path, '2}');
+  expect((await eventually(scan)).value).toEqual([1, 2]);
+  expect(lines).toBe(3);
+}, 10_000);
+
 it("invalidates same-size rewrites, truncations, replacements and missing files", async () => {
   expect((await scan())?.value).toEqual([1]);
   writeFileSync(path, '{"n":2}\n');
