@@ -30,4 +30,3 @@ export function throughEntities({ text, word, steps }: { text: string; word: str
   }
   return false;
 }
-

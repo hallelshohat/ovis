@@ -127,4 +127,3 @@ function mayQuoteOutput({ text, shown }: { text: string; shown: readonly Preview
   return shown.some((preview) => [`Ran${letters(preview.command)}`, ...preview.words]
     .every((word) => encoded.includes(word) || throughEntities({ text: encoded, word, steps })));
 }
-
