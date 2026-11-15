@@ -101,3 +101,20 @@ export interface RepoDiffFilePatch {
   truncated: boolean;
   limits: { max_patch_bytes: number; context_lines: number };
 }
+
+/**
+ * GET /api/workspace/diff/contents: both whole sides of one file of a comparison, read when the
+ * viewer expands the unchanged lines between hunks. `old` is null for an added or untracked file,
+ * `new` for a deleted one; both are null when `unavailable` says why.
+ */
+export interface RepoDiffFileContents {
+  repository: RepoDiffRepository;
+  scope: RepoDiffScope;
+  comparison: RepoBranchComparison | null;
+  file: RepoDiffFile;
+  old: string | null;
+  new: string | null;
+  /** `binary` (a side holds a NUL byte), `too_large` (a side past `limits.max_bytes`), `unmerged`, or `unsupported` (a side is no regular file) */
+  unavailable: "binary" | "too_large" | "unmerged" | "unsupported" | null;
+  limits: { max_bytes: number };
+}

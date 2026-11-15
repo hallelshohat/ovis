@@ -14,7 +14,7 @@ import { chromePath } from "./chrome-path.ts";
 import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
 
 const state = mkdtempSync(join(tmpdir(), "omo-question-wheel-"));
-const evidence = process.env["CHECK_BROWSER_EVIDENCE_DIR"] ?? state;
+const evidence = process.env["CHECK_BROWSER_EVIDENCE_DIR"] || state;
 mkdirSync(evidence, { recursive: true });
 const baseline = process.env["EXPECT_CAPTURED_WHEEL"] === "1";
 const workspaces: string[] = [];
@@ -173,6 +173,8 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
         return screen && screen.getBoundingClientRect().width <= innerWidth;
       });
       await resizedMetrics;
+      // the reflow at the phone's width can leave the view off the end: the touch starts from the end
+      await lineWheel(1, 0, Math.ceil(after.max_offset_from_bottom / 3) + 2);
       const mobile = await screen.boundingBox();
       assert.ok(mobile);
       const cdp = await context.newCDPSession(page);
@@ -193,9 +195,14 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
       assert.equal(readFileSync(log, "utf8"), "", "touch sends no mouse reports to the question");
       await page.screenshot({ path: join(evidence, "after-omo-mobile.png") });
       await cdp.detach();
+      // back to the desktop size: herdr reflows the history at the new width, which moves the view's place in it,
+      // so the wheels that bring it back to the end go once that size has reached herdr, not alongside it
+      const desktopMetrics = page.waitForResponse(async response => response.url().includes("/pane/scroll?")
+        && (await response.json()).scroll?.viewport_rows === after.viewport_rows);
       await page.setViewportSize({ width: 1280, height: 800 });
+      await desktopMetrics;
       console.log("PASS speed-two line wheels, maximum/bottom clamps, and phone touch history");
-      await lineWheel(1, 0, 4);
+      await lineWheel(1, 0, Math.ceil(after.max_offset_from_bottom / 3) + 2);
       // Closing the native question updates the existing once-attached wheel handler via its ref.
       settledPane = pane;
       appendFileSync(fixture.transcript, JSON.stringify({ type: "custom", customType: "ask-user:settlement",
@@ -203,6 +210,9 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
       await Promise.race([settled.promise, new Promise<never>((_resolve, reject) => {
         AbortSignal.timeout(10000).addEventListener("abort", () => reject(new Error("question settlement status did not arrive")), { once: true });
       })]);
+      // the frame is heard before the page has drawn it: the wheel decides by what the pane was last drawn with
+      // (PaneTerminal's wheelStateRef), so it goes once the tab's own mark shows the question settled
+      await page.locator('.tab-strip-item.is-active .tab-strip-dot[data-status="working"]').waitFor();
       const backToApp = waitOutput(pane, "WHEEL_RECEIVED");
       const desktop = await screen.boundingBox();
       assert.ok(desktop);
@@ -215,6 +225,36 @@ process.stdout.write(Array.from({ length: 400 }, (_, n) => "history " + n + "\\r
     } else {
       assert.equal(after.offset_from_bottom, 0);
       assert.match(input, /\x1b\[<64;\d+;\d+M/, "herdr hands SGR wheel input to the capturing program");
+      // A trackpad's small pixel steps report one wheel per row of travel, as xterm.js 5.5 counted
+      // them: xterm.js 6.0 scales a delta under 50 px by 0.3 (#1617). Untrusted, so not repeated at
+      // the wheel speed: 12 steps of 0.55 rows are 6 reports, and 2 with the 0.3 scale.
+      const reports = () => (readFileSync(log, "utf8").match(/\x1b\[<64;/g) ?? []).length;
+      const reportsBefore = reports();
+      const rowPx = bounds.height / initial.viewport_rows;
+      for (let sent = 0; sent < 12; sent += 1) await screen.dispatchEvent("wheel", { deltaY: -rowPx * 0.55, deltaMode: 0, bubbles: true, cancelable: true });
+      for (const deadline = Date.now() + 10_000; reports() - reportsBefore < 6;) {
+        if (Date.now() > deadline) throw new Error(`12 trackpad steps of 0.55 rows sent ${reports() - reportsBefore} wheel reports, not 6`);
+        await Bun.sleep(25);
+      }
+      assert.equal(reports() - reportsBefore, 6, "a trackpad's small steps report one wheel per row");
+      console.log("PASS trackpad-sized pixel wheels report one wheel per row of travel");
+      // Holding Ctrl does not speed an application's wheel up, as in xterm.js 5.5, where only Alt
+      // did: 6.0 multiplies by fastScrollSensitivity under Alt or Ctrl (#2336). Each event sends at
+      // most one report, once the travel adds up to a row: the same 12 steps travel 6.6 rows, plus
+      // under one row the earlier steps left, so 6 or 7 reports; five times faster, all 12 report.
+      // A later wheel down marks the end, since the reports reach the program in order. Ctrl adds
+      // 16 to the button.
+      const ctrlReports = () => (readFileSync(log, "utf8").match(/\x1b\[<80;/g) ?? []).length;
+      const fastBefore = ctrlReports();
+      for (let sent = 0; sent < 12; sent += 1) await screen.dispatchEvent("wheel", { deltaY: -rowPx * 0.55, deltaMode: 0, ctrlKey: true, bubbles: true, cancelable: true });
+      await screen.dispatchEvent("wheel", { deltaY: rowPx * 3, deltaMode: 0, bubbles: true, cancelable: true });
+      for (const deadline = Date.now() + 10_000; !/\x1b\[<65;/.test(readFileSync(log, "utf8"));) {
+        if (Date.now() > deadline) throw new Error("the closing wheel down never reached the program");
+        await Bun.sleep(25);
+      }
+      const ctrlSent = ctrlReports() - fastBefore;
+      assert.ok(ctrlSent >= 6 && ctrlSent <= 7, `12 Ctrl-held steps of 0.55 rows report one wheel per row, 6 or 7, not ${ctrlSent}`);
+      console.log("PASS Ctrl-held wheels report at the normal speed");
     }
   }
   assert.deepEqual(errors, []);

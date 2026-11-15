@@ -1,0 +1,98 @@
+/* A background task's output in the sheet (BackgroundTaskOutput.tsx): the terminal's own colours
+   on the terminal's own background, monospace, its lines kept as printed and wrapped where too long.
+   The output scrolls inside its frame, which fills the sheet's body, so the sheet's header and the
+   task's facts stay in view while a long output streams. The 16 ANSI colours are the theme's
+   terminal palette (--term-*); a theme without one falls back on its status colours. */
+.bg-output {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+
+.bg-output-frame {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 12rem;
+}
+
+.bg-output-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--term-bg);
+  color: var(--term-fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bg-output-text:focus-visible {
+  outline-offset: calc(-1 * var(--ring-offset));
+}
+
+.bg-output-dropped {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* following the end paused: one button brings it back, over the output's lower right corner */
+.bg-output-jump {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  gap: var(--space-1);
+  box-shadow: var(--shadow-pop);
+}
+
+.bg-output-jump svg {
+  width: var(--fs-md);
+  height: var(--fs-md);
+}
+
+.ansi-bold { font-weight: var(--fw-semibold); }
+.ansi-dim { opacity: 0.7; }
+.ansi-italic { font-style: italic; }
+.ansi-underline { text-decoration: underline; }
+.ansi-fg-inverse { color: var(--term-bg); }
+.ansi-bg-inverse { background-color: var(--term-fg); }
+.ansi-fg-0 { color: var(--term-black, var(--text-dim)); }
+.ansi-bg-0 { background-color: var(--term-black, var(--text-dim)); }
+.ansi-fg-1 { color: var(--term-red, var(--status-blocked)); }
+.ansi-bg-1 { background-color: var(--term-red, var(--status-blocked)); }
+.ansi-fg-2 { color: var(--term-green, var(--status-done)); }
+.ansi-bg-2 { background-color: var(--term-green, var(--status-done)); }
+.ansi-fg-3 { color: var(--term-yellow, var(--accent)); }
+.ansi-bg-3 { background-color: var(--term-yellow, var(--accent)); }
+.ansi-fg-4 { color: var(--term-blue, var(--status-working)); }
+.ansi-bg-4 { background-color: var(--term-blue, var(--status-working)); }
+.ansi-fg-5 { color: var(--term-magenta, var(--primary)); }
+.ansi-bg-5 { background-color: var(--term-magenta, var(--primary)); }
+.ansi-fg-6 { color: var(--term-cyan, var(--status-working)); }
+.ansi-bg-6 { background-color: var(--term-cyan, var(--status-working)); }
+.ansi-fg-7 { color: var(--term-white, var(--term-fg)); }
+.ansi-bg-7 { background-color: var(--term-white, var(--term-fg)); }
+.ansi-fg-8 { color: var(--term-bright-black, var(--text-dim)); }
+.ansi-bg-8 { background-color: var(--term-bright-black, var(--text-dim)); }
+.ansi-fg-9 { color: var(--term-bright-red, var(--status-blocked)); }
+.ansi-bg-9 { background-color: var(--term-bright-red, var(--status-blocked)); }
+.ansi-fg-10 { color: var(--term-bright-green, var(--status-done)); }
+.ansi-bg-10 { background-color: var(--term-bright-green, var(--status-done)); }
+.ansi-fg-11 { color: var(--term-bright-yellow, var(--accent)); }
+.ansi-bg-11 { background-color: var(--term-bright-yellow, var(--accent)); }
+.ansi-fg-12 { color: var(--term-bright-blue, var(--status-working)); }
+.ansi-bg-12 { background-color: var(--term-bright-blue, var(--status-working)); }
+.ansi-fg-13 { color: var(--term-bright-magenta, var(--primary)); }
+.ansi-bg-13 { background-color: var(--term-bright-magenta, var(--primary)); }
+.ansi-fg-14 { color: var(--term-bright-cyan, var(--status-working)); }
+.ansi-bg-14 { background-color: var(--term-bright-cyan, var(--status-working)); }
+.ansi-fg-15 { color: var(--term-bright-white, var(--term-fg)); }
+.ansi-bg-15 { background-color: var(--term-bright-white, var(--term-fg)); }

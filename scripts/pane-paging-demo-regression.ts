@@ -70,6 +70,12 @@ try {
       return socket;
     };
     for (const name of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"]) Object.defineProperty(window.WebSocket, name, { value: Demo[name] });
+    // the paging fixture owns its rows' geometry to the device pixel: the demo chat's pull request
+    // lines (site/demo/pullRequests.ts) would add rows of their own, so this page has none
+    const demoFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href).pathname.endsWith("/pane/pull-requests")
+      ? Promise.resolve(new Response(JSON.stringify({ gh: "ok", pull_requests: [], events: [], linked: 0 }), { headers: { "content-type": "application/json" } }))
+      : demoFetch(input, init);
   })();</script>`;
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>\n${record}\n<script type="module"`));
   const prefix = "/herdr-web-ui/demo/app/";
@@ -119,6 +125,17 @@ try {
           node.dispatchEvent(new Event("scroll", { bubbles: true }));
         });
         await settled(page);
+        // The gap below exists only when the scroll range, in device pixels (×1.25), rounds down:
+        // (scrollHeight − clientHeight) mod 4 is 1. The range follows the chat's own content, so
+        // the view's height is chosen to give that remainder, and the resizes below keep to it.
+        const viewHeight = await transcript.evaluate((node: HTMLElement) => {
+          const extra = (((node.scrollHeight - node.clientHeight - 1) % 4) + 4) % 4;
+          node.style.height = `${100.25 + extra}px`;
+          node.scrollTop = node.scrollHeight;
+          node.dispatchEvent(new Event("scroll", { bubbles: true }));
+          return 100.25 + extra;
+        });
+        await settled(page);
         const beforeInput = await inputs(page);
         const geometry = await transcript.evaluate((node) => ({ scale: devicePixelRatio, height: node.getBoundingClientRect().height, gap: node.scrollHeight - node.clientHeight - node.scrollTop }));
         assert.equal(geometry.scale, 1.25);
@@ -128,10 +145,10 @@ try {
         await settled(page);
         const paged = await transcript.evaluate((node) => node.scrollTop);
         await returnControl(page).waitFor();
-        await transcript.evaluate((node: HTMLElement) => { node.style.height = "99.25px"; });
+        await transcript.evaluate((node: HTMLElement, height: number) => { node.style.height = `${height}px`; }, viewHeight - 1);
         await settled(page);
         assert.ok(Math.abs(await transcript.evaluate((node) => node.scrollTop) - paged) < 0.5, "one-pixel upward intent survives deferred scroll and fractional resize");
-        await transcript.evaluate((node: HTMLElement) => { node.style.height = "100.25px"; });
+        await transcript.evaluate((node: HTMLElement, height: number) => { node.style.height = `${height}px`; }, viewHeight);
         await settled(page);
         // Reach the physical end and ask PageDown before its deferred scroll event arrives.
         const clamped = await transcript.evaluate((node) => {
@@ -144,7 +161,7 @@ try {
         assert.ok(clamped.gap > 0 && clamped.gap < 1, "the clamped downward page keeps the rounded gap");
         await settled(page);
         await returnControl(page).waitFor({ state: "hidden" });
-        await transcript.evaluate((node: HTMLElement) => { node.style.height = "99.25px"; });
+        await transcript.evaluate((node: HTMLElement, height: number) => { node.style.height = `${height}px`; }, viewHeight - 1);
         await settled(page);
         await followedBottom(page, "fractional-clamped-down");
         await page.keyboard.press("Meta+Shift+PageUp");
@@ -161,7 +178,7 @@ try {
           await page.keyboard.press("Meta+Shift+PageDown");
           await settled(page);
         }
-        await transcript.evaluate((node: HTMLElement) => { node.style.height = "98.25px"; });
+        await transcript.evaluate((node: HTMLElement, height: number) => { node.style.height = `${height}px`; }, viewHeight - 2);
         await settled(page);
         await followedBottom(page, "fractional-repeat-down");
         assert.deepEqual(await inputs(page), beforeInput, "fractional paging never sends terminal input");

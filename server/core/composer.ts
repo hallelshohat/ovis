@@ -4,32 +4,43 @@
  * itself (createSubmitText), handed the state it reads. Pending delivery and the immediate send
  * share them.
  */
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { withoutTrailingBreaks } from "../../shared/launch-rules.ts";
+import { stripVTControlCharacters } from "node:util";
 import type { HerdrPane } from "../../shared/protocol.ts";
-import { secretPrompt } from "../../shared/secret-prompt.ts";
+import { displayWidth, secretPrompt } from "../../shared/secret-prompt.ts";
+import { AGENT_INPUT_DRAFT_MESSAGE, CLAUDE_FOLDED_DRAFT_MESSAGE, NO_AGENT_MESSAGE } from "../../shared/submit-outcome.ts";
 import { agentPrompt, HerdrError, paneGet, paneProcessInfo, paneRead, paneScrollInfo, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
 import { mirrorInput } from "../mirror-input.ts";
 import { paneAgentOf, resolveAgent, typingRoots } from "../pane-context.ts";
 import { paneProcessRoots } from "../conversation.ts";
 import type { CommandSend } from "../outcome.ts";
 import { processStartedAt } from "../process-start.ts";
-import { isOmpProcess, ompConfigDir } from "../omp.ts";
+import { isOmpProcess, ompLoadsIntegration } from "../omp.ts";
 import { processEnviron } from "../omo.ts";
-import { bindCommandProcess, CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputBoxContent, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, codexQuestionsCollapsed, heldCandidate, lastChatSubmitted, hermesInputDraft, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
-import { registry } from "../dialogs/registry.ts";
+import { bindCommandProcess, CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputBoxContent, claudeInputDraft, foldedPlaceholder, claudeInputEmpty, claudeRestoredDraft, claudeRewindOpen, claudeSendAnywayBox, codexQuestionsCollapsed, heldCandidate, historyEndShowsLive, lastChatSubmitted, hermesInputDraft, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
+import { agentPickerWaits, registry, SCREEN_READ_AGENTS } from "../dialogs/registry.ts";
+import { codexOwnScreenOpen, CODEX_OWN_SCREEN_MESSAGE } from "../dialogs/codex.ts";
 import { CLAUDE_REWIND_OPEN_MESSAGE } from "../dialogs/claude.ts";
 import { type PendingIdentity, PendingInputError } from "../pending-input.ts";
 import { startOpenCodeWatch, openCodeSkillsToType, skillsNotAttached } from "../opencode-native.ts";
 import { herdrSkillAttachIo, type SkillAttachIo, typeWithSkills } from "../opencode-skill-attach.ts";
+import { userHome } from "../user-home.ts";
+import { drawsColour, inputRowState, readsTypedDraft, screenFromAnsi, typedDraft } from "../../shared/input-row.ts";
 
 const CLAUDE_INPUT_DRAFT_MESSAGE = "Claude Code's input box is not empty (a draft, bash mode, or a box that could not be read); send or clear it in the terminal, then send this message";
 
+/** The refusal's message for Claude Code's box: its own one where the box holds a folded paste or image, which offers no send anyway (#3563). */
+const claudeRefusalMessage = (live: string): string => {
+  const content = claudeInputBoxContent(live);
+  return content !== null && foldedPlaceholder(content, true) ? CLAUDE_FOLDED_DRAFT_MESSAGE : CLAUDE_INPUT_DRAFT_MESSAGE;
+};
+
 const HERMES_INPUT_DRAFT_MESSAGE = "Hermes' input in the terminal is not empty (a draft, or an input that could not be read); send or clear it there, then send this message";
+
 
 /**
  * input_draft, naming the one-row draft the chat may offer to clear (claudeClearableDraft), or none.
- * `box`: the input box as read, whole (claudeInputBoxContent; the client is shown it cut), which a refusal naming no draft shows so the
+ * `box`: the input box as read, whole (claudeSendAnywayBox; the client is shown it cut), which a refusal naming no draft shows so the
  * user may send anyway; null where the refusal offers nothing (after a clear began).
  */
 export class InputDraftError extends HerdrError {
@@ -39,6 +50,12 @@ export class InputDraftError extends HerdrError {
     this.draft = draft;
   }
 }
+
+/**
+ * input_draft for a scrolled pane whose screen moved across the reads of one box check: nothing proves
+ * the box empty, so it counts as a draft. A wait for the box to empty (after clearing it) reads again.
+ */
+class ClaudeBoxMovedError extends InputDraftError {}
 
 /** between the two Esc presses that empty Claude Code's restored copy of the chat's message */
 const RESTORED_CLEAR_GAP_MS = 200;
@@ -76,11 +93,21 @@ const PROMPT_REFUSED = new Set(["agent_not_found", "agent_not_ready", "agent_blo
 export const modelSwitchText = (agent: string | null, text: string): string =>
   agent === "omp" && text.trim() === "/model" ? "/switch" : text;
 
-/** How long after its process starts an omp that has not reported is waited for: from cold it takes up to about 20 s. */
-const OMP_STARTUP_MS = 30_000;
+/**
+ * Claude Code reads `\` + Enter as a new line, so the Enter after a message whose last character is a
+ * backslash adds a line instead of sending: the message stays in the input box (Claude Code 2.1.312,
+ * #2277). A space after it lets the Enter send, and Claude Code records the message without the space.
+ * A framed payload gets the space inside its closing paste marker.
+ * A chat or queued message gets it; the terminal's input line types `\` + Enter as the keyboard does.
+ */
+export const closeBackslash = (agent: string | null, text: string): string =>
+  agent === "claude" ? text.replace(/\\(\u001b\[201~)?$/, "\\ $1") : text;
 
-/** Between the looks at an omp still starting (untilOmpReported). */
-const OMP_REPORT_POLL_MS = 250;
+/** How long after its process starts an omp that has not reported is waited for: from cold it takes up to about 20 s. */
+export const OMP_STARTUP_MS = 30_000;
+
+/** Between the looks at an omp still starting (untilOmpReported, and the queue's own wait in pending.ts). */
+export const OMP_REPORT_POLL_MS = 250;
 
 /**
  * omp (18.12.3) draws its input box before it takes an Enter: it connects its submit handler only once
@@ -90,55 +117,81 @@ const OMP_REPORT_POLL_MS = 250;
  * send waits for the report (at most OMP_STARTUP_MS after the process started) and then sends once:
  * nothing is pressed after a send. An omp without the integration (nothing would report it), one that has
  * run longer, or one whose start is unknown is sent to at once, as before.
+ *
+ * Every send waits so. The immediate one, and a queued one a person sends (pending.ts dispatchPendingText),
+ * wait here, as part of the send; one the queue sends by itself waits for the same report before it is
+ * taken up (pending.ts waitForOmp). The pane it returns is `pane` itself when nothing was waited for, and
+ * a later read of it after a wait: what the caller read before that wait is older than the report.
  */
-async function untilOmpReported(paneId: string, pane: HerdrPane, inTime: () => void, pollMs: number, startupMs: number): Promise<HerdrPane> {
+export async function untilOmpReported(paneId: string, pane: HerdrPane, inTime: () => void, options: { ompReportPollMs?: number; ompStartupMs?: number },
+  /** `strict`: a look at omp's process that herdr does not answer fails the send (startingOmp); `waiting`: called once, when a wait begins */
+  { strict = false, waiting }: { strict?: boolean; waiting?: () => void } = {}): Promise<HerdrPane> {
+  const pollMs = options.ompReportPollMs ?? OMP_REPORT_POLL_MS, startupMs = options.ompStartupMs ?? OMP_STARTUP_MS;
   if (pane.agent_session?.source === "herdr:omp") return pane;
-  const omp = await ompProcess(paneId);
+  const starting = await startingOmp(paneId, pane, startupMs, strict);
   inTime();
-  const pid = omp?.pid ?? null;
-  const started = omp?.integrated ? processStartedAt(omp.pid) : null;
-  if (started === null || Date.now() >= started + startupMs) return pane;
-  while (Date.now() < started + startupMs) {
+  if (starting === null) return pane;
+  waiting?.();
+  let reported = false;
+  while (Date.now() < starting.until) {
     await Bun.sleep(pollMs);
     inTime();
     pane = await paneGet(paneId);
     // an omp that quit while it started leaves its shell: the message was for omp, so it is not typed there
     if (resolveAgent(pane).agent !== "omp") throw new HerdrError("pending_target_changed", "The omp this message waited for stopped while it started; nothing was sent");
-    if (pane.agent_session?.source === "herdr:omp") break;
+    if (pane.agent_session?.source === "herdr:omp") { reported = true; break; }
   }
   // reported or out of time, a pane restarted into another omp meanwhile is not the one the message waited for
   // (a lookup that finds no omp proves nothing: the look above already found the pane's agent still omp)
-  const now = (await ompProcess(paneId))?.pid ?? null;
-  if (now !== null && now !== pid) throw new HerdrError("pending_target_changed", "The omp this message waited for was replaced while it started; nothing was sent");
+  const now = (await ompProcess(paneId).catch(() => null))?.pid ?? null;
+  if (now !== null && now !== starting.pid) throw new HerdrError("pending_target_changed", "The omp this message waited for was replaced while it started; nothing was sent");
+  if (!reported) console.warn(`[omp] ${paneId}: herdr's omp integration reported no session within ${startupMs / 1000} s of omp starting; sending anyway`);
   return pane;
 }
 
-/** herdr's omp integration (`herdr integration install omp`), in the extensions of the agent directory an omp loads. */
-const OMP_INTEGRATION = join("extensions", "herdr-omp-agent-state.ts");
+/**
+ * The omp a send to this pane waits for (untilOmpReported): one that started moments ago with herdr's
+ * integration and has not reported its session, with when its start is given up on. null for any other.
+ * A look at its process that herdr does not answer says nothing either way. The immediate send takes it for
+ * no omp starting and sends, as it always did; `strict` (the queue) fails on it: not known is not ready, and
+ * a message typed into an omp that does not take input yet is one its row says was sent.
+ */
+async function startingOmp(paneId: string, pane: HerdrPane, startupMs: number, strict: boolean): Promise<{ pid: number; until: number } | null> {
+  if (pane.agent_session?.source === "herdr:omp") return null;
+  const omp = await ompProcess(paneId).catch((error: unknown) => { if (strict) throw error; return null; });
+  const started = omp?.integrated ? processStartedAt(omp.pid) : null;
+  return omp === null || started === null || Date.now() >= started + startupMs ? null : { pid: omp.pid, until: started + startupMs };
+}
 
-/** The pane's omp process, and whether herdr's omp integration is installed where it loads extensions; null with none. */
+/** Until when a queued send to this pane would wait for its omp now (untilOmpReported); null when it would go at once. Fails when herdr does not say. */
+export async function ompStartingUntil(paneId: string, pane: HerdrPane, options: { ompStartupMs?: number }): Promise<number | null> {
+  return (await startingOmp(paneId, pane, options.ompStartupMs ?? OMP_STARTUP_MS, true))?.until ?? null;
+}
+
+/** The pane's omp process, and whether it loads herdr's omp integration (ompLoadsIntegration); null with none. Fails as herdr's answer does. */
 async function ompProcess(paneId: string): Promise<{ pid: number; integrated: boolean } | null> {
-  const info = await paneProcessInfo(paneId).catch(() => undefined);
+  const info = await paneProcessInfo(paneId);
   for (const candidate of info?.foreground_processes ?? []) {
     const argv = Array.isArray(candidate.argv) ? candidate.argv.map(String) : [];
     if (typeof candidate.pid !== "number" || !isOmpProcess(argv)) continue;
     const environ = processEnviron(candidate.pid);
-    const home = environ?.find((word) => word.startsWith("HOME="))?.slice(5) || process.env["HOME"] || "";
-    const agentDir = ompConfigDir(argv, environ, home);
-    return { pid: candidate.pid, integrated: agentDir !== null && existsSync(join(agentDir, OMP_INTEGRATION)) };
+    const home = environ?.find((word) => word.startsWith("HOME="))?.slice(5) || userHome();
+    return { pid: candidate.pid, integrated: ompLoadsIntegration(argv, environ, home, candidate.cwd ?? null) };
   }
   return null;
 }
 
 /** Is this pane's agent Codex, blocked only by questions waiting collapsed in its queue (codexQuestionsCollapsed)? */
 export async function blockedOnlyByCodexQueue(paneId: string): Promise<boolean> {
-  const pane = await paneGet(paneId).catch((error: unknown) => {
+  const codex = async (): Promise<boolean> => paneIs(await paneGet(paneId).catch((error: unknown) => {
     if (error instanceof HerdrError && error.code === "pane_not_found") return undefined;
     throw error;
-  });
-  if (!(await paneIs(pane, "codex"))) return false;
+  }), "codex");
+  if (!(await codex())) return false;
   // A collapsed queue in scrollback must not bypass an approval on the live screen.
-  return codexQuestionsCollapsed((await paneRead({ paneId, source: "detection", format: "text" })).text);
+  if (!codexQuestionsCollapsed((await paneRead({ paneId, source: "detection", format: "text" })).text)) return false;
+  // the screen was Codex's only if Codex still runs once it is read: one that exited meanwhile left a shell to type into
+  return await codex();
 }
 
 /** Is this pane's agent `kind`? The omo probe is spent only where the label already says so. */
@@ -159,8 +212,11 @@ export const pendingIdentity = (pane: HerdrPane): PendingIdentity => ({
 });
 
 export const pendingText = (text: string): string => {
-  const normalized = text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n");
-  if (!normalized.trim() || normalized.length > 20_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(normalized)) {
+  const written = withoutTrailingBreaks(text);
+  // a CRLF is read as one character, so a message of more than twice the limit cannot fit: its megabytes are not
+  // rewritten to be measured
+  const normalized = written.length > 2 * 20_000 ? written : written.replace(/\r\n?/g, "\n");
+  if (normalized.length > 20_000 || !normalized.trim() || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(normalized)) {
     throw new HerdrError("invalid_submit_text", "A pending chat message must be nonempty text, at most 20000 characters, without terminal control characters");
   }
   return normalized;
@@ -179,13 +235,16 @@ const MAX_TYPED_SUBMIT_CHARS = 32_768;
  * commands. `typed`: the terminal's input line, whose cap is the longer one.
  */
 export function submitFraming(text: string, payload: string, typed: boolean): { text: string; payload: string } {
-  const message = text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n");
+  const written = withoutTrailingBreaks(text);
   const limit = typed ? MAX_TYPED_SUBMIT_CHARS : MAX_CHAT_SUBMIT_CHARS;
+  const refusal = (): HerdrError => new HerdrError("invalid_submit_text", `A message must be at most ${limit} characters, without terminal control characters or paste markers, and sent as the composer shapes it; nothing was typed`);
+  // a CRLF is read as one character, so a message of more than twice the limit cannot fit: its megabytes are not
+  // rewritten twice to be measured
+  if (written.length > 2 * limit) throw refusal();
+  const message = written.replace(/\r\n?/g, "\n");
   const body = message.replace(/\n/g, "\r");
   if (message.length > limit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(message)
-    || (payload !== body && payload !== `\u001b[200~${body}\u001b[201~`)) {
-    throw new HerdrError("invalid_submit_text", `A message must be at most ${limit} characters, without terminal control characters or paste markers, and sent as the composer shapes it; nothing was typed`);
-  }
+    || (payload !== body && payload !== `\u001b[200~${body}\u001b[201~`)) throw refusal();
   return { text: message, payload };
 }
 
@@ -214,6 +273,81 @@ export async function freeHermesInput(paneId: string, identity?: PendingIdentity
 }
 
 /**
+ * Any other agent's input box whose recorded shape reports typed text (shared/input-row.ts typedDraft), refused
+ * with input_draft only when it shows text a person typed: the paste would join it and the Enter send both
+ * (#3627). Unlike Claude's and Hermes' checks, a box this read cannot make out is sent to as before, so a
+ * misreading never refuses every send to an agent. Claude and Hermes keep their own checks.
+ *
+ * herdr gives colours for the viewport alone, which any client may have scrolled into the history, so the
+ * viewport is read first and the live screen last: the colours count only when their text is the live
+ * screen's, and a read without any colour (NO_COLOR, a plain herdr-core read) proves nothing either.
+ * `codexScreens`: the live read is also the one Codex's own screens are refused on (freeCodexInput), so a
+ * dialog that opens between two checks is not pasted into. Text typed after the live read joins the
+ * message: herdr cannot compare and write in one step.
+ */
+export async function freeAgentInput(paneId: string, agent: string | null, identity?: PendingIdentity, codexScreens = false): Promise<void> {
+  if (!readsTypedDraft(agent)) return;
+  // reads that disagree (text typed or redrawn between them) are read again; a viewport that stays apart from the
+  // live screen (scrolled into the history) proves nothing, and the send goes as before
+  for (let round = 0; round < AGENT_BOX_READS; round++) {
+    const colors = (await paneRead({ paneId, source: "visible", format: "ansi" })).text;
+    const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
+    if (codexScreens && codexOwnScreenOpen(live)) throw new HerdrError("agent_blocked", CODEX_OWN_SCREEN_MESSAGE);
+    if (!drawsColour(colors)) return;
+    if (!showsLive(colors, live)) continue;
+    const screen = screenFromAnsi(colors);
+    // herdr labels an OmO `pi`: OmO's box where it is drawn is the typing agent's, with no process read to tell them apart
+    const typing = agent === "pi" && inputRowState("omo", screen) !== "gone" ? "omo" : agent;
+    if (typedDraft(typing, screen)) throw new InputDraftError(null, identity, null, AGENT_INPUT_DRAFT_MESSAGE);
+    return;
+  }
+}
+
+/** How many times freeAgentInput reads the viewport and the live screen for a pair that agrees. */
+const AGENT_BOX_READS = 3;
+
+/**
+ * Whether the viewport's read shows the live screen: its rows are the live screen's last ones. herdr's live read can
+ * hold a row more at its top than the viewport (measured with Gemini CLI 0.68.0), never other rows at the bottom.
+ */
+function showsLive(colors: string, live: string): boolean {
+  const shown = screenText(colors).split("\n"), current = screenText(live).split("\n");
+  return shown.length <= current.length && shown.length >= current.length - 2 && current.slice(current.length - shown.length).join("\n") === shown.join("\n");
+}
+
+/** A screen read's rows as plain text, each row's and the screen's right edge trimmed. */
+const screenText = (text: string): string => stripVTControlCharacters(text).split(/\r?\n/).map((line) => line.trimEnd()).join("\n").trimEnd();
+
+/**
+ * Codex's screen as every chat send reads it last, right before herdr is written to. herdr reports Codex at rest
+ * with one of its own screens up (a list such as `/model` or `/permissions`, `/rename`'s field, the `/diff` pager:
+ * dialogs/codex.ts codexOwnScreenOpen), so agent.prompt would paste the message there and its Enter would take the
+ * row under the cursor. While one is on screen the send is refused as for a menu herdr does report, and the message
+ * stays where it was written. herdr cannot compare and write in one step: a screen that opens during this read's
+ * answer or herdr's write is not seen.
+ */
+export async function freeCodexInput(paneId: string): Promise<void> {
+  if (codexOwnScreenOpen((await paneRead({ paneId, source: "detection", format: "text" })).text)) {
+    throw new HerdrError("agent_blocked", CODEX_OWN_SCREEN_MESSAGE);
+  }
+}
+
+/** The refusal of a chat send over a picker of the agent's own (agentPickerWaits): the chat's card answers it. */
+export const AGENT_PICKER_MESSAGE = "The agent is waiting for an answer to its own menu; answer the card above, then send";
+
+/**
+ * An agent no reader knows, as every chat send reads it last, right before herdr is written to. herdr reports such an
+ * agent at rest under a picker of its own (Devin's and Copilot's folder trust at start), so agent.prompt would paste
+ * the message there and its Enter would pick the row under the cursor ("Yes, trust"), losing the message. While one
+ * is on screen the send is refused, as over Codex's own screens, and the message stays where it was written.
+ */
+export async function freeAgentPicker(paneId: string, agent: string): Promise<void> {
+  if (agentPickerWaits(agent, (await paneRead({ paneId, source: "detection", format: "text" })).text)) {
+    throw new HerdrError("agent_blocked", AGENT_PICKER_MESSAGE);
+  }
+}
+
+/**
  * Claude Code's input box as every chat send reads it first, before anything is typed. herdr reports
  * Claude Code idle with its rewind dialog up, which shows no input box: on a Summarize row the message
  * and its Enter would go to the add-context field and summarize the conversation. While any state of
@@ -224,6 +358,21 @@ export async function claudeBoxReads(paneId: string): Promise<[string, string | 
   if (claudeRewindOpen(before)) throw new HerdrError("rewind_dialog_open", CLAUDE_REWIND_OPEN_MESSAGE);
   if (!claudeInputDraft(before, null)) return [before, null];
   const scrollBefore = await paneScrollInfo(paneId);
+  // a viewport scrolled into the history (any client's scroll is every client's) shows no live box:
+  // the history's last rows do, colors included, so Claude's grey suggestion is still told from a draft
+  if (scrollBefore !== null && scrollBefore.offset_from_bottom > 0) {
+    const recent = async (): Promise<string> => (await paneRead({ paneId, source: "recent", format: "ansi", lines: scrollBefore.viewport_rows })).text;
+    const colors = await recent();
+    const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
+    // read again last, after the live screen: equal words do not prove equal colors (a suggestion
+    // accepted with Tab keeps its words), so any change across the reads refuses as a draft does.
+    // Anything after this read falls in the gap every send has between its last read and its write.
+    const colorsAfter = await recent();
+    if (historyEndShowsLive(colors, colorsAfter, [before, live])) return [live, colors];
+    // the screen moved across the reads (typed, a dialog, a resize): no box is proven empty, so none is sent over
+    if (claudeRewindOpen(stripVTControlCharacters(colorsAfter))) throw new HerdrError("rewind_dialog_open", CLAUDE_REWIND_OPEN_MESSAGE);
+    throw new ClaudeBoxMovedError(null, undefined, claudeSendAnywayBox(live), claudeRefusalMessage(live));
+  }
   const colors = (await paneRead({ paneId, source: "visible", format: "ansi" })).text;
   const scrollAfter = await paneScrollInfo(paneId);
   const live = (await paneRead({ paneId, source: "detection", format: "text" })).text;
@@ -236,19 +385,21 @@ export async function claudeBoxReads(paneId: string): Promise<[string, string | 
  * right after it is cancelled. That copy, while the agent is not working, two Esc presses empty
  * again — never Ctrl+C, which would arm "press Ctrl-C again to exit" — then the box is read once
  * more before the send. Every other draft, and a box still not empty after them, refuses as before.
+ * An `automatic` send (a queued message, whether the drain or its own request types it) refuses over that copy too: the user stopped
+ * that send, and the composer gets it back only from its next prompt read, seconds after the drain.
  * `authorize` throws once the sender may no longer send: it is asked before each Esc, and again
  * right before herdr is written to. A send with less than RESTORED_CLEAR_RESERVE_MS left before its
  * `deadline` clears nothing: it would erase the copy, then time out without sending.
  */
-export async function freeClaudeBox(paneId: string, working: boolean, authorize: () => void, deadline: number): Promise<void> {
+export async function freeClaudeBox(paneId: string, working: boolean, authorize: () => void, deadline: number, automatic = false): Promise<void> {
   let refused: unknown;
   const allowed = (): boolean => { try { authorize(); return true; } catch (error) { refused = error; return false; } };
   // an Esc the guard stopped fails with the sender's own refusal (read_only, device_revoked), not herdr's `cancelled`
   const refusal = (error: unknown): never => { throw refused ?? error; };
   const [live, colors] = await claudeBoxReads(paneId);
   if (!claudeInputDraft(live, colors)) return;
-  if (working || claudeRestoredDraft(live, colors, lastChatSubmitted(paneId)) === null) {
-    throw new InputDraftError(claudeClearableDraft(live, colors), undefined, claudeInputBoxContent(live));
+  if (working || automatic || claudeRestoredDraft(live, colors, lastChatSubmitted(paneId)) === null) {
+    throw new InputDraftError(claudeClearableDraft(live, colors), undefined, claudeSendAnywayBox(live), claudeRefusalMessage(live));
   }
   if (deadline - Date.now() < RESTORED_CLEAR_RESERVE_MS) throw new HerdrError("submit_timeout", "Too little time was left to clear Claude Code's input box and send; nothing was typed");
   // the read proved the box holds the copy: a lone Esc on an EMPTY box would open Claude's
@@ -262,6 +413,19 @@ export async function freeClaudeBox(paneId: string, working: boolean, authorize:
   // fixed wait: the box redraws after the two Esc presses before it reads empty
   await Bun.sleep(RESTORED_CLEAR_SETTLE_MS);
   if (claudeInputDraft(...await claudeBoxReads(paneId))) throw new HerdrError("input_draft", CLAUDE_INPUT_DRAFT_MESSAGE);
+}
+
+/**
+ * A masked prompt on `screen` at any width it could be wrapped at. A send need not be attached, and an attachment's width
+ * can change during the read, so the widths tried are every one at which the row above the last reaches the right edge
+ * (secretPrompt joins only such a row): fail closed rather than trust a width the screen was not drawn at.
+ */
+function maskedPromptAtAnyWidth(screen: string): boolean {
+  const rows = screen.split(/\r?\n/u);
+  while (rows.length > 0 && !rows.at(-1)!.trim()) rows.pop();
+  // in terminal columns, as secretPrompt measures it: a wide character fills two
+  const above = displayWidth(rows.at(-2)?.trimEnd() ?? "");
+  return [Infinity, ...(above > 0 ? [above, above + 1] : [])].some((columns) => secretPrompt(screen, columns) !== null);
 }
 
 export function createSubmitText({ options, lastTyped, attachments, terminalAttach, SUBMIT_DEADLINE_MS, TYPED_SETTLE_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS, SUBMIT_DELAY_MS }: {
@@ -299,13 +463,15 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
    * the box still shows what they saw or reads empty. Never typed instead of agent.prompt.
    */
   async function submitText(paneId: string, text: string, payload: string, arrivedAt: number, fromTerminal = false, authorize: () => void = () => {},
-    clearDraft?: string, confirmation?: { draft: string | null; identity: PendingIdentity; box?: string | null }, sendAnyway = false): Promise<void> {
+    clearDraft?: string, confirmation?: { draft: string | null; identity: PendingIdentity; box?: string | null }, sendAnyway = false, agentOnly = false): Promise<void> {
     // before anything reads the pane, types or clears: closeMention and mirrorInput trust this framing
     ({ text, payload } = submitFraming(text, payload, fromTerminal));
     let clearedDraft = false;
     let sentText = text;
     let command: ReturnType<typeof prepareCommandSend>;
     let beforeScreen: string | undefined;
+    // an agent no reader knows whose screen was read for a picker of its own before agent.prompt (freeAgentPicker)
+    let pickerAgent: string | undefined;
     // herdr's foreground answer read before this send, which the outcome's process binding uses again
     let seen: ProcessInfo | undefined;
     // the send-time screen's history row, once the read alongside delivery confirms it; `noted`: the send it goes on
@@ -360,9 +526,9 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           const reads = await claudeBoxReads(paneId);
           beforeScreen = reads[0];
           inTime();
-          const box = claudeInputBoxContent(reads[0]);
-          // a box that cannot be read whole cannot be compared: it is refused, and offers no send anyway
-          if (claudeInputDraft(...reads) && (box === null || box !== confirmation!.box)) throw new InputDraftError(claudeClearableDraft(...reads), identity ?? undefined, box);
+          const box = claudeSendAnywayBox(reads[0]);
+          // a box that cannot be read whole cannot be compared, nor one hiding a folded paste: it is refused, and offers no send anyway
+          if (claudeInputDraft(...reads) && (box === null || box !== confirmation!.box)) throw new InputDraftError(claudeClearableDraft(...reads), identity ?? undefined, box, claudeRefusalMessage(reads[0]));
           // the reads waited on herdr: the pane may hold another Claude by now, checked again right before the write
           const now = pendingIdentity(await paneGet(paneId));
           inTime();
@@ -370,7 +536,9 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             throw new HerdrError("pending_target_changed", "The refused message's Claude terminal or session changed; nothing was sent");
           }
         }
-        const claudeRoots = await paneRootsAs(pane, "claude");
+        // read once for a pane herdr labels claude: Claude Code's own roots, or an OmO's (its Claude SDK child) for its box check below
+        const labelledClaude = pane && resolveAgent(pane).agent === "claude" ? await paneProcessRoots(pane.pane_id, "claude") : null;
+        const claudeRoots = labelledClaude && resolveAgent(pane!, typingRoots(labelledClaude)).agent === "claude" ? labelledClaude : null;
         const claude = claudeRoots !== null;
         seen = claudeRoots?.processes;
         // the process lookup waited on herdr: the device may have lost its access meanwhile
@@ -380,7 +548,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             try {
               await freeClaudeBox(paneId, pane?.agent_status === "working", authorize, arrivedAt + (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS));
             } catch (error) {
-              if (error instanceof InputDraftError) throw new InputDraftError(error.draft, identity ?? undefined, error.box);
+              if (error instanceof InputDraftError) throw new InputDraftError(error.draft, identity ?? undefined, error.box, error.message);
               throw error;
             }
           }
@@ -404,10 +572,15 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             }
           };
           if (clearDraft !== undefined) await clearScreenReady();
+          // Send it names the terminal's draft as the message itself. An empty box can mean it
+          // was already sent there; only Clear it and send of different text may continue.
+          if (clearDraft !== undefined && text === clearDraft && claudeInputEmpty(...reads)) {
+            throw new HerdrError("agent_not_ready", "The named draft is no longer in Claude Code's input box; nothing was cleared or sent");
+          }
           if (claudeInputDraft(...reads)) {
             // only the draft the user was shown goes, never what has since replaced it
             const draft = claudeClearableDraft(...reads);
-            if (clearDraft === undefined || draft !== clearDraft) throw new InputDraftError(draft, identity ?? undefined, clearDraft === undefined ? claudeInputBoxContent(reads[0]) : null);
+            if (clearDraft === undefined || draft !== clearDraft) throw new InputDraftError(draft, identity ?? undefined, clearDraft === undefined ? claudeSendAnywayBox(reads[0]) : null, claudeRefusalMessage(reads[0]));
             const reserve = DRAFT_CLEAR_WAIT_MS + 500;
             inTime(reserve);
             // A confirmation names the earlier draft, not text typed while it was inspected.
@@ -429,7 +602,12 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
               throw error;
             }
             clearedDraft = true;
-            for (const deadline = Date.now() + DRAFT_CLEAR_WAIT_MS; await clearScreenReady(), claudeInputDraft(...reads);) {
+            // the box redraws empty after the keys: a scrolled read that saw it move reads again
+            const stillDraft = async (): Promise<boolean> => {
+              try { await clearScreenReady(); } catch (error) { if (error instanceof ClaudeBoxMovedError) return true; throw error; }
+              return claudeInputDraft(...reads);
+            };
+            for (const deadline = Date.now() + DRAFT_CLEAR_WAIT_MS; await stillDraft();) {
               if (Date.now() >= deadline) throw new InputDraftError(claudeClearableDraft(...reads));
               await Bun.sleep(DRAFT_CLEAR_POLL_MS);
             }
@@ -458,10 +636,12 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           seen ??= roots.processes;
           agent = resolveAgent(pane, typingRoots(roots)).agent;
         }
-        const sent = modelSwitchText(agent, text);
+        const switched = modelSwitchText(agent, text);
+        const sent = closeBackslash(agent, switched);
         sentText = sent;
+        payload = switched === text ? closeBackslash(agent, payload) : sent;
         if (pane && agent === "omp") {
-          pane = await untilOmpReported(paneId, pane, inTime, options.ompReportPollMs ?? OMP_REPORT_POLL_MS, options.ompStartupMs ?? OMP_STARTUP_MS);
+          pane = await untilOmpReported(paneId, pane, inTime, options);
           // the last look waited on herdr: the device may have lost its access meanwhile
           inTime();
         }
@@ -484,9 +664,20 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
         let skills: string[] = [];
         if (pane) ({ sent: command, skills } = await openCodeSkillsToType(pane, command, text, beforeScreen, options.openCodeStateDir));
         inTime();
-        if (pane && command && skills.length > 0) {
+        // a message for an agent alone goes whole through agent.prompt (#511): typing it key by key checks the agent
+        // between writes, never with them, so its @skills stay text, as its send says
+        if (agentOnly && command) command = skillsNotAttached(command, skills);
+        if (pane && command && skills.length > 0 && !agentOnly) {
           const expected = pendingIdentity(pane);
           let current = pane;
+          // as the queued path does (pending.ts): no key goes into a masked prompt that came up on the live screen
+          const noMaskedPrompt = async (screen?: string): Promise<void> => {
+            if ((screen !== undefined && maskedPromptAtAnyWidth(stripVTControlCharacters(screen)))
+              || maskedPromptAtAnyWidth((await paneRead({ paneId, source: "detection", format: "text" })).text)) {
+              throw new HerdrError("agent_blocked", "The terminal is waiting for masked input; answer it with the secret-input form first");
+            }
+            inTime();
+          };
           // the lookup awaited the service: the pane, its session and its state are read again before every key
           const revalidate = async (): Promise<void> => {
             current = await paneGet(paneId);
@@ -497,10 +688,11 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             }
             // as agent.prompt refuses it; an unknown state is typed into, as its fallback below does
             if (current.agent_status === "blocked") throw new HerdrError("agent_blocked", "The agent is waiting for an answer in the terminal");
+            await noMaskedPrompt();
           };
           // followed from before the first key: the send's own message can be announced before Enter returns
           const watch = startOpenCodeWatch(pane, command, options.openCodeStateDir);
-          await revalidate();
+          await revalidate().catch((error: unknown) => { watch?.cancel(); throw error; });
           let typed = false;
           const allowed = (): boolean => {
             try { inTime(); return true; } catch (error) { refused = error; return false; }
@@ -513,32 +705,50 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
             sendKeys: (keys, guard) => io.sendKeys(keys, () => guard() && (typed = true)),
           };
           try {
-            const typing = typeWithSkills(text, skills, allowed, writes, revalidate);
-            bindCommandProcess(paneId, command, seen);
+            // the skill-accept key: the screen it was decided on (a scrolled viewport, maybe), then the live screen
+            const typing = typeWithSkills(text, skills, allowed, writes, revalidate, noMaskedPrompt);
+            bindCommandProcess(paneId, command, seen, pane);
             const { attached, missed, prompt } = await typing;
             // fixed wait: a TUI busy with the typing takes an Enter in the same chunk for a newline (SUBMIT_DELAY_MS)
             await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
             await revalidate();
             if (!allowed()) throw new HerdrError("cancelled", "The message's sender may no longer type into this pane");
+            const sentAt = Date.now();
             await paneSendKeys(paneId, ["Enter"], undefined, allowed);
             const final = recorded(skillsNotAttached(command, missed));
-            noteSubmitted(paneId, text, final);
+            noteSubmitted(paneId, text, final, sentAt);
             watch?.commit(final, prompt, attached);
             return;
           } catch (error) {
             watch?.cancel();
             if (!typed) throw refused ?? error;
+            if (error instanceof HerdrError && error.code === "submit_changed") throw error;
             throw new HerdrError("submit_partial", "Part of the message was typed into OpenCode's input, but sending was not confirmed. Your chat text stayed here. Check the terminal before sending again.");
           }
+        }
+        // the last read before herdr is written to: one of Codex's own screens gets no paste and no Enter
+        // and what a person typed into the agent's own box, which the paste would join (Claude's and Hermes' were read
+        // above): for Codex both on the same last read
+        // an OmO herdr labels `claude` (its Claude SDK child) is found by the process holding its session, as for what is typed
+        const boxAgent = pane && labelledClaude && !claude ? resolveAgent(pane, typingRoots(labelledClaude)).agent : agent;
+        if (pane && !claude && !hermes && readsTypedDraft(boxAgent)) {
+          await freeAgentInput(paneId, boxAgent, identity ?? undefined, boxAgent === "codex");
+          inTime();
+        } else if (agent === "codex") await freeCodexInput(paneId);
+        // and a picker of its own that has an agent's input while herdr reports it at rest (agents no reader knows)
+        if (agent && !SCREEN_READ_AGENTS.has(agent)) {
+          pickerAgent = agent;
+          await freeAgentPicker(paneId, agent);
         }
         const watch = pane ? startOpenCodeWatch(pane, command, options.openCodeStateDir) : null;
         try {
           inTime();
+          const sentAt = Date.now();
           const delivery = agentPrompt(paneId, closeMention(sent), undefined, mayType);
           // which agent process got it, read alongside the delivery for the outcome's row, never before it
-          bindCommandProcess(paneId, command, seen);
+          bindCommandProcess(paneId, command, seen, pane);
           await delivery;
-          noteSubmitted(paneId, sent, recorded(command));
+          noteSubmitted(paneId, sent, recorded(command), sentAt);
           if (command) watch?.commit(command, [{ pasted: closeMention(sent) }], []);
           return;
         } catch (error) {
@@ -546,7 +756,10 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           if (refused !== undefined) throw refused;
           if (!(error instanceof HerdrError)) throw error;
           if (clearDraft !== undefined || sendAnyway) throw error;
-          const queuedOnly = error.code === "agent_blocked" && await blockedOnlyByCodexQueue(paneId);
+          // a message for an agent alone (#511) is never typed into what is there once the agent has gone
+          if (agentOnly && (error.code === "agent_not_found" || error.code === "agent_not_ready")) throw new HerdrError("agent_not_ready", NO_AGENT_MESSAGE);
+          // nor typed past a collapsed queue: herdr cannot type only if the agent still runs, and Codex may exit first
+          const queuedOnly = !agentOnly && error.code === "agent_blocked" && await blockedOnlyByCodexQueue(paneId);
           if (error.code !== "agent_not_found" && error.code !== "agent_not_ready" && !queuedOnly) throw error;
         }
       }
@@ -555,8 +768,9 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
       if (fromTerminal && !sentText.includes("\n") && sentText.length > TYPED_LINE_MAX) {
         try {
           inTime();
+          const sentAt = Date.now();
           await agentPrompt(paneId, closeMention(sentText), undefined, mayType);
-          noteSubmitted(paneId, sentText, recorded(command));
+          noteSubmitted(paneId, sentText, recorded(command), sentAt);
           return;
         } catch (error) {
           if (refused !== undefined) throw refused;
@@ -568,14 +782,17 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
       // a mirrored pane's browser never learned the program's paste mode, so `payload` came as bare
       // lines: several of them are shaped here as the same block typed into the mirror is. herdr is
       // asked only for such a block, so a one-line message never waits on it.
-      const shaped = await mirrorInput(closeMention(sentText === text ? payload : sentText), async () => await terminalAttach() ? null : await paneAgentOf(paneId));
+      const shaped = await mirrorInput(closeMention(payload), async () => await terminalAttach() ? null : await paneAgentOf(paneId));
+      // agent.prompt was refused, and its picker may have come up since the read before it: read once more, last
+      if (pickerAgent !== undefined) await freeAgentPicker(paneId, pickerAgent);
       inTime();
       await paneSendText(paneId, shaped, undefined, mayType).catch(refusal);
       // fixed wait: a TUI busy with the paste takes an Enter in the same chunk for a newline (SUBMIT_DELAY_MS)
       await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
       authorize();
+      const sentAt = Date.now();
       await paneSendKeys(paneId, ["Enter"], undefined, mayType).catch(refusal);
-      noteSubmitted(paneId, sentText, recorded(command));
+      noteSubmitted(paneId, sentText, recorded(command), sentAt);
     } catch (error) {
       if (clearedDraft) {
         throw new HerdrError("submit_partial", "Claude Code's terminal draft was cleared or may have changed, but sending was not confirmed. Your chat text stayed here. Check the terminal before sending again.");

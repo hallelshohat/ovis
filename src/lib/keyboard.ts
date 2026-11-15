@@ -13,7 +13,9 @@ export function keyboardUp(): boolean {
   return typeof document !== "undefined" && document.documentElement.hasAttribute("data-keyboard");
 }
 
-/** Reference height for keyboard occlusion, retaining the unobstructed viewport unless the window resized. */
+/**
+ * Reference height for keyboard occlusion, retaining the unobstructed viewport unless the window resized.
+ */
 export function keyboardViewportReference(
   height: number,
   large: number,
@@ -40,6 +42,18 @@ export function keyboardViewportReference(
  */
 export function keyboardHoldsGrid(keyboard: boolean, width: number, fittedWidth: number | null): boolean {
   return keyboard && (fittedWidth === null || width === fittedWidth);
+}
+
+/**
+ * The fields a focused element may have the soft keyboard for, as lib/viewport.ts's measurement
+ * reads them (syncKeyboard), and the keyboard control needs the same words: a blur that leaves no
+ * such field focused anywhere is the keyboard going, where a blind measurement (a zoomed page, a
+ * floating keyboard) is not. xterm's automatically focused helper only counts in direct typing.
+ */
+export function keyboardTypingField(element: Element | null): boolean {
+  return (element instanceof HTMLTextAreaElement && (!element.classList.contains("xterm-helper-textarea") || element.closest("[data-direct-typing]") !== null))
+    || (element instanceof HTMLInputElement && !["button", "checkbox", "radio", "range", "submit", "reset", "file", "color"].includes(element.type))
+    || (element instanceof HTMLElement && element.isContentEditable);
 }
 
 function dismissKeyboard(): void {

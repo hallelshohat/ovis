@@ -60,7 +60,7 @@ describe("Pages deployment gate", () => {
     expect(validate).toContain("uses: ./.github/workflows/ci.yml");
     expect(validate).toContain("if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'");
     expect(build).not.toContain("needs:");
-    expect(deploy).toMatch(/needs:\s*\[validate, build\]/);
+    expect(deploy).toMatch(/needs:\s*\[validate, build, current\]/);
   });
 
   it("only runs on main, pins checkout to the triggering SHA, and serializes without canceling deployments", () => {
@@ -143,6 +143,25 @@ describe("Pages deployment gate", () => {
     expect(deploy.indexOf("Verify deployment SHA is current")).toBeLessThan(deploy.indexOf("actions/deploy-pages@"));
   });
 
+  it("skips the deploy job, not the run, when main moved on while it built", () => {
+    type Job = { if?: string; needs?: string[]; environment?: unknown; permissions?: Record<string, string>; outputs?: Record<string, string>; "continue-on-error"?: unknown; steps?: { "continue-on-error"?: unknown }[] };
+    const { jobs } = Bun.YAML.parse(pages) as { jobs: Record<string, Job> };
+    const { current, deploy, build } = jobs as Record<"current" | "deploy" | "build", Job>;
+    // the check runs where no deployment is recorded: only the deploy job names the environment
+    expect(current.environment).toBeUndefined();
+    expect(current.permissions).toEqual({ contents: "read" });
+    expect(current.needs).toEqual(["validate", "build"]);
+    expect(current.outputs?.stale).toBe("${{ steps.current.outputs.stale }}");
+    expect(deploy.needs).toEqual(["validate", "build", "current"]);
+    expect(deploy.if).toContain("needs.current.result == 'success' && needs.current.outputs.stale == 'false'");
+    expect(deploy.environment).toBeDefined();
+    // a broken site build still fails the run: both jobs wait for it and nothing lets the build pass on an error
+    expect(current.if).toContain("needs.build.result == 'success'");
+    expect(deploy.if).toContain("needs.build.result == 'success'");
+    expect(build["continue-on-error"]).toBeUndefined();
+    expect(build.steps?.some((step) => step["continue-on-error"] !== undefined)).toBe(false);
+  });
+
   it("summarizes the validated, built, and deployed source SHAs", () => {
     const deploy = pageJob("deploy");
     expect(deploy).toContain("Validated SHA:");
@@ -166,14 +185,27 @@ describe("Pages deployment gate", () => {
     expect(integration).toContain("if: always()");
     expect(integration).toContain(".ci/**/*.log");
     expect(integration).toContain(".ci/config/herdr/sessions/*/test-server.log");
-    for (const name of ["browser-main", "browser-other"]) {
-      const job = ciJob(name);
-      expect(job).toContain("if: always()");
-      expect(job).toContain(".ci/browser-logs/**");
-      expect(job).toContain(".ci/browser-evidence/**/*.png");
-      expect(job).toContain(".ci/browser-evidence/**/*.json");
-      expect(job).toContain(".ci/browser-evidence/**/*.zip");
+    const main = ciJob("browser-main");
+    expect(main).toContain("if: always()");
+    expect(main).toContain(".ci/browser-logs/**");
+    expect(main).toContain(".ci/browser-evidence/**/*.png");
+    expect(main).toContain(".ci/browser-evidence/**/*.json");
+    expect(main).toContain(".ci/browser-evidence/**/*.zip");
+  });
+
+  it("keeps browser-other's logs on every outcome and its screenshots only when it failed or was cancelled", () => {
+    const uploads = ciJob("browser-other").split(/^      - name: /m).filter((step) => step.includes("actions/upload-artifact@"));
+    const onSuccess = uploads.find((step) => /^        if: success\(\)$/m.test(step));
+    const otherwise = uploads.find((step) => /^        if: failure\(\) \|\| cancelled\(\)$/m.test(step));
+    expect(uploads).toHaveLength(2);
+    for (const step of [onSuccess, otherwise]) {
+      expect(step).toContain(".ci/report.json");
+      expect(step).toContain(".ci/browser-logs/**");
     }
+    expect(onSuccess).not.toContain(".ci/browser-evidence/");
+    expect(otherwise).toContain(".ci/browser-evidence/**/*.png");
+    expect(otherwise).toContain(".ci/browser-evidence/**/*.json");
+    expect(otherwise).toContain(".ci/browser-evidence/**/*.zip");
   });
 });
 
@@ -187,6 +219,7 @@ describe("Browser lane script lists", () => {
     expect(serial).toEqual(runs);
     expect(serial).toContain("scripts/ui-regression.ts");
     expect(serial).toContain("scripts/ui-contexts-regression.ts");
+    expect(serial).toContain("scripts/ui-contexts-layout-regression.ts");
     expect(serial).toContain("scripts/sidebar-spacing-demo-regression.ts");
     expect(new Set(serial).size).toBe(serial.length);
   });
@@ -231,11 +264,11 @@ describe("Browser lane script lists", () => {
   it("runs both isolated UI flows in browser-main and keeps the local UI command complete", () => {
     const main = ciJob("browser-main");
     expect(selectBrowserScripts(serial, env(main, "BROWSER_SCRIPTS"))).toEqual([
-      "scripts/ui-regression.ts", "scripts/ui-contexts-regression.ts",
+      "scripts/ui-regression.ts", "scripts/ui-contexts-regression.ts", "scripts/ui-contexts-layout-regression.ts",
     ]);
     expect(env(main, "BROWSER_WORKERS")).toBe("2");
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-    for (const script of ["ui-regression.ts", "ui-contexts-regression.ts", "sticky-modifiers-regression.ts"]) {
+    for (const script of ["ui-regression.ts", "ui-contexts-regression.ts", "ui-contexts-layout-regression.ts", "sticky-modifiers-regression.ts"]) {
       expect(pkg.scripts["test:ui"]).toContain(`bun scripts/${script}`);
     }
   });
@@ -244,7 +277,8 @@ describe("Browser lane script lists", () => {
     expect(env(ciJob("integration"), "HERDR_TEST_SHARDS"))
       .toBe("${{ runner.environment == 'self-hosted' && '4' || '1' }}");
     expect(env(ciJob("browser-other"), "BROWSER_WORKERS"))
-      .toBe("${{ runner.environment == 'self-hosted' && '6' || '4' }}");
+      .toBe("${{ runner.environment == 'self-hosted' && '6' || '3' }}");
+    expect(env(ciJob("browser-other"), "BROWSER_SHARD")).toBe("${{ matrix.shard }}/${{ strategy.job-total }}");
   });
 });
 
@@ -262,13 +296,14 @@ describe("Extracted UI checks", () => {
     expect(result.stderr).toContain("HERDR_TEST_MODE=unit");
   });
 
+  // the layout group (ui-contexts-layout-regression.ts) comes first in ui-contexts-checks.ts
   const moved = [
+    "checkSplitView", "checkBackgroundTabKeepsTerminalSize",
     "checkPushSettings", "checkWakeLock", "checkSecretInput", "checkTerminalCopy", "checkPaneFind",
     "checkUsageMeters", "checkNotificationStartup", "checkNotificationView", "checkMobileViewport",
     "checkTerminalPinch", "checkMobileTabs", "checkTabMenu", "checkDefaultView",
-    "checkComposerReconnect", "checkDroplet", "checkSplitView", "checkTakeOver", "checkAlertSound",
-    "checkChatKeepsTerminalSize", "checkPaneSwitchKeepsTerminalSize",
-    "checkBackgroundTabKeepsTerminalSize", "checkFocusedWindowReclaimsTerminalSize",
+    "checkComposerReconnect", "checkDroplet", "checkTakeOver", "checkAlertSound",
+    "checkChatKeepsTerminalSize", "checkPaneSwitchKeepsTerminalSize", "checkFocusedWindowReclaimsTerminalSize",
     "checkUpdateNotice", "checkTelemetrySettings",
   ];
   const calls = (source: string) => [...source.matchAll(/\b(check[A-Z]\w*)\(/g)].map((match) => match[1]!);
@@ -284,14 +319,14 @@ describe("Extracted UI checks", () => {
     }
   });
 
-  for (const mode of ["unit", "live"] as const) {
-    it(`refuses ${mode} execution before touching a herdr daemon`, () => {
+  for (const [script, mode] of ["ui-contexts-regression.ts", "ui-contexts-layout-regression.ts"].flatMap((script) => (["unit", "live"] as const).map((mode) => [script, mode] as const))) {
+    it(`${script} refuses ${mode} execution before touching a herdr daemon`, () => {
       const root = mkdtempSync(join(tmpdir(), "ui-context-guard-"));
       try {
         const invoked = join(root, "invoked");
         const herdr = join(root, "herdr");
         writeFileSync(herdr, '#!/bin/sh\nprintf called > "$HERDR_GUARD_LOG"\nexit 1\n', { mode: 0o700 });
-        const result = spawnSync(process.execPath, [fileURLToPath(new URL("./ui-contexts-regression.ts", import.meta.url))], {
+        const result = spawnSync(process.execPath, [fileURLToPath(new URL(`./${script}`, import.meta.url))], {
           encoding: "utf8", timeout: 5_000,
           env: {
             ...process.env, TMPDIR: root, XDG_CONFIG_HOME: root,
@@ -312,23 +347,36 @@ describe("Extracted UI checks", () => {
   }
 });
 
+const guardShell = (job: string): string => {
+  const guard = pageJob(job).match(/        run: \|\n([\s\S]*?)(?=\n      -|\n  [a-z-]+:|$)/)?.[1]
+    ?.split("\n").map((line) => line.replace(/^          /, "")).join("\n");
+  if (!guard) throw new Error(`Missing SHA guard shell in ${job}`);
+  return guard;
+};
+
 describe.skipIf(process.platform === "win32")("Pages SHA guard execution", () => {
-  const guard = pageJob("deploy").match(/        run: \|\n([\s\S]*?)(?=\n      -)/)?.[1]
-    .split("\n").map((line) => line.replace(/^          /, "")).join("\n");
-  if (!guard) throw new Error("Missing deployment guard shell");
   const sha = "a".repeat(40);
+  const newer = "b".repeat(40);
 
   for (const scenario of [
-    { name: "accepts the validated build at current main", built: sha, latest: sha, api: "0", code: 0 },
-    { name: "rejects an older rerun", built: sha, latest: "b".repeat(40), api: "0", code: 1 },
-    { name: "rejects an artifact from another commit", built: "b".repeat(40), latest: sha, api: "0", code: 1 },
-    { name: "fails closed when GitHub denies the lookup", built: sha, latest: sha, api: "1", code: 1 },
-    { name: "rejects a malformed API response", built: sha, latest: "null", api: "0", code: 1 },
+    { job: "current", name: "current: passes the validated build at main's head", built: sha, latest: sha, api: "0", code: 0, stale: "false" },
+    { job: "current", name: "current: ends a run main has moved past without failing it, with a notice that promises nothing", built: sha, latest: newer, api: "0", code: 0, stale: "true" },
+    { job: "current", name: "current: rejects an artifact from another commit", built: newer, latest: sha, api: "0", code: 1, stale: null },
+    { job: "current", name: "current: fails closed when GitHub denies the lookup", built: sha, latest: sha, api: "1", code: 1, stale: null },
+    { job: "current", name: "current: rejects a malformed API response", built: sha, latest: "null", api: "0", code: 1, stale: null },
+    // the deploy job checks again right before deploying, and main moving on after the current job read it is still red
+    { job: "deploy", name: "deploy: accepts the validated build at current main", built: sha, latest: sha, api: "0", code: 0, stale: null },
+    { job: "deploy", name: "deploy: refuses a commit main moved past after the current job", built: sha, latest: newer, api: "0", code: 1, stale: null },
+    { job: "deploy", name: "deploy: rejects an artifact from another commit", built: newer, latest: sha, api: "0", code: 1, stale: null },
+    { job: "deploy", name: "deploy: fails closed when GitHub denies the lookup", built: sha, latest: sha, api: "1", code: 1, stale: null },
   ]) {
     it(scenario.name, () => {
+      const guard = guardShell(scenario.job);
       const root = mkdtempSync(join(tmpdir(), "pages-guard-"));
       try {
         writeFileSync(join(root, "gh"), '#!/usr/bin/env bash\nif [[ "$CASE_API" != 0 ]]; then exit "$CASE_API"; fi\nprintf "%s\\n" "$CASE_LATEST"\n', { mode: 0o700 });
+        const output = join(root, "github-output");
+        writeFileSync(output, "");
         const result = spawnSync("bash", ["-c", guard], {
           encoding: "utf8",
           timeout: 5_000,
@@ -339,10 +387,17 @@ describe.skipIf(process.platform === "win32")("Pages SHA guard execution", () =>
             BUILT_SHA: scenario.built,
             CASE_API: scenario.api,
             CASE_LATEST: scenario.latest,
+            GITHUB_OUTPUT: output,
           },
         });
         expect(result.error).toBeUndefined();
         expect(result.status).toBe(scenario.code);
+        const written = readFileSync(output, "utf8").match(/^stale=(.*)$/m)?.[1] ?? null;
+        expect(written).toBe(scenario.stale);
+        const notice = result.stdout.split("\n").find((line) => line.startsWith("::notice title=Deployment skipped::"));
+        expect(notice !== undefined).toBe(scenario.stale === "true");
+        // it says what this run did, and promises nothing about another run
+        if (notice) expect(notice).toBe(`::notice title=Deployment skipped::This run built ${sha}, and main is now ${newer}, so it deploys nothing.`);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

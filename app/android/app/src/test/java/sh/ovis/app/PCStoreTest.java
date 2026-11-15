@@ -40,7 +40,7 @@ public class PCStoreTest {
     private String serve(int status, String location, byte[] bytes) throws IOException {
         String head = "HTTP/1.1 " + status + " Test\r\n" + (location == null ? "" : "Location: " + location + "\r\n")
             + "Content-Length: " + bytes.length + "\r\nConnection: close\r\n\r\n";
-        return listen(out -> {
+        return listen((line, out) -> {
             out.write(head.getBytes(StandardCharsets.UTF_8));
             out.write(bytes);
         });
@@ -48,7 +48,7 @@ public class PCStoreTest {
 
     /** A server that answers 200 and then sends its headers, or its body, one byte at a time, never finishing. */
     private String serveSlowly(boolean headers) throws IOException {
-        return listen(out -> {
+        return listen((line, out) -> {
             String head = headers ? "HTTP/1.1 200 Test\r\nX-Slow: " : "HTTP/1.1 200 Test\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n";
             out.write(head.getBytes(StandardCharsets.UTF_8));
             try {
@@ -64,7 +64,7 @@ public class PCStoreTest {
     }
 
     private interface Answer {
-        void write(OutputStream out) throws IOException;
+        void write(String requestLine, OutputStream out) throws IOException;
     }
 
     private String listen(Answer answer) throws IOException {
@@ -74,10 +74,11 @@ public class PCStoreTest {
             while (!server.isClosed()) {
                 try (Socket socket = server.accept()) {
                     BufferedReader request = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-                    requestLines.add(request.readLine());
+                    String first = request.readLine();
+                    requestLines.add(first);
                     for (String line = request.readLine(); line != null && !line.isEmpty(); line = request.readLine()) { }
                     OutputStream out = socket.getOutputStream();
-                    answer.write(out);
+                    answer.write(first, out);
                     out.flush();
                 } catch (IOException closed) {
                     if (server.isClosed()) return;
@@ -100,9 +101,110 @@ public class PCStoreTest {
         return PCStore.ovisOrigin(target, PCStore.PROBE_BUDGET_MS, new ArrayList<>());
     }
 
+    /** A server answering a GET of /api/health with `health` (200, or 404 when null) and any other path with `page`. */
+    private String servePaths(String health, String page) throws IOException {
+        return listen((line, out) -> {
+            boolean asksHealth = line != null && line.startsWith("GET /api/health");
+            String body = asksHealth ? health : page;
+            byte[] bytes = (body == null ? "" : body).getBytes(StandardCharsets.UTF_8);
+            out.write(("HTTP/1.1 " + (body == null ? "404" : "200") + " Test\r\nContent-Length: " + bytes.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            out.write(bytes);
+        });
+    }
+
+    private static PCStore.Check check(String url) {
+        return PCStore.check(url, null, PCStore.ANSWER_SECONDS * 1000L);
+    }
+
     @After
     public void stop() throws IOException {
         for (ServerSocket server : servers) server.close();
+    }
+
+    @Test
+    public void anOvisServerOfAnyVersionOrTheHostedAppIsOvis() throws IOException {
+        assertEquals("ovis", check(serve(200, null, OVIS) + "/?pair=123456").kind);
+        // before bridge_protocol (0.1): ok, herdr and auth
+        assertEquals("ovis", check(serve(200, null, "{\"ok\":true,\"herdr\":{\"version\":\"0.4\"},\"auth\":{\"required\":false,\"authenticated\":true}}") + "/").kind);
+        // app.ovis.sh answers every path with its page
+        String shell = "<!doctype html><html><head><meta name=\"ovis-shell\" content=\"relay\" /></head></html>";
+        assertEquals("ovis", check(serve(200, null, shell) + "/").kind);
+        // a copy behind Caddy answers /api/health with 404 and its scope with the page
+        requestLines.clear();
+        String copy = servePaths(null, shell);
+        assertEquals("ovis", check(copy + "/s/0123456789abcdef0123456789abcdef/#offer=abc").kind);
+        assertEquals(java.util.Arrays.asList("GET /api/health?scope=bridge HTTP/1.1", "GET /s/0123456789abcdef0123456789abcdef/ HTTP/1.1"), requestLines);
+    }
+
+    @Test
+    public void anotherWebServerIsNotOvisAndItsPageIsAskedWithoutThePairingCode() throws IOException {
+        requestLines.clear();
+        PCStore.Check page = check(servePaths("<!doctype html><title>Router</title>", "<!doctype html><title>Router</title>") + "/?pair=123456");
+        assertEquals("not-ovis", page.kind);
+        assertNull(page.detail);
+        assertEquals(java.util.Arrays.asList("GET /api/health?scope=bridge HTTP/1.1", "GET / HTTP/1.1"), requestLines);
+        PCStore.Check missing = check(servePaths(null, "<!doctype html><title>Dev server</title>") + "/");
+        assertEquals("not-ovis", missing.kind);
+        assertEquals("HTTP 404", missing.detail);
+        assertEquals("not-ovis", check(serve(200, null, "{\"ok\":true}") + "/").kind);
+    }
+
+    @Test
+    public void anAnswerThatDoesNotTellIsLeftToTheWebView() throws IOException {
+        // Ovis stopped behind tailscale serve (502), a proxy or WAF that turns the probe away, a rate limit
+        for (int status : new int[] {401, 403, 429, 500, 502, 503}) {
+            PCStore.Check found = check(serve(status, null, "") + "/");
+            assertEquals(status + "", "unsure", found.kind);
+            assertEquals("HTTP " + status, found.detail);
+            assertTrue(found.opens());
+        }
+        // no /api/health and no page either: the WebView shows that HTTP error itself
+        assertEquals("unsure", check(servePaths(null, null) + "/").kind);
+    }
+
+    @Test
+    public void aConnectionThatFailsAtOnceIsRefusedUnlessTheHostCannotBeReached() {
+        long later = System.nanoTime() + 60_000_000_000L;
+        // Android's HttpURLConnection, for a closed port: no errno in the message, no cause
+        assertEquals("refused", PCStore.failureKind(new java.net.ConnectException("Failed to connect to /192.168.0.10:7317"), later));
+        // a PC that is off on the same network
+        IOException off = new java.net.ConnectException("Failed to connect to /192.168.0.11:7317");
+        off.initCause(new java.net.NoRouteToHostException("connect failed: EHOSTUNREACH (No route to host)"));
+        assertEquals("no-answer", PCStore.failureKind(off, later));
+        assertEquals("no-answer", PCStore.failureKind(new java.net.ConnectException("connect failed: ENETUNREACH (Network is unreachable)"), later));
+        assertEquals("timeout", PCStore.failureKind(new java.net.SocketTimeoutException("timeout"), later));
+        assertEquals("unknown-host", PCStore.failureKind(new java.net.UnknownHostException("my-pc"), later));
+    }
+
+    @Test
+    public void onlyTheLatestOpenNotCancelledGoesOn() {
+        PCStore.Openings openings = new PCStore.Openings();
+        int first = openings.start();
+        int second = openings.start();
+        assertFalse(openings.current(first));
+        assertTrue(openings.current(second));
+        openings.cancel();
+        assertFalse(openings.current(second));
+        assertTrue(openings.current(openings.start()));
+    }
+
+    @Test
+    public void aRedirectIsLeftToTheWebView() throws IOException {
+        PCStore.Check signIn = check(serve(302, "https://team.cloudflareaccess.com/login", "") + "/");
+        assertEquals("in-front", signIn.kind);
+        assertTrue(signIn.opens());
+    }
+
+    @Test
+    public void saysWhyNoAnswerCame() throws IOException {
+        ServerSocket closed = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+        int port = closed.getLocalPort();
+        closed.close();
+        assertEquals("refused", check("http://127.0.0.1:" + port + "/").kind);
+        assertEquals("unknown-host", check("http://no-such-pc.invalid:7317/").kind);
+        PCStore.Check slow = PCStore.check(serveSlowly(true) + "/", null, 300);
+        assertEquals("timeout", slow.kind);
+        assertFalse(slow.opens());
     }
 
     @Test
@@ -189,6 +291,21 @@ public class PCStoreTest {
     }
 
     @Test
+    public void aSignInInFrontOfThePcIsRefusedOnlyOverInsecureHttp() {
+        List<String> probed = Collections.singletonList("https://team.cloudflareaccess.com");
+        // a sign-in in front of the PC (no Ovis at the end): judged by where the redirect itself leads
+        assertNull(PCStore.refusedHop("https://ovis.example.com", "https://team.cloudflareaccess.com/cdn-cgi/access/login", null, probed));
+        assertNull(PCStore.refusedHop("http://100.64.0.1", "http://auth.tail1234.ts.net/sign_in", null, Collections.emptyList()));
+        assertEquals("http://team.example.com", PCStore.refusedHop("https://ovis.example.com", "http://team.example.com/login", null, Collections.emptyList()));
+        assertEquals("http://auth.example.com", PCStore.refusedHop("http://100.64.0.1", "http://auth.example.com/sign_in", null, Collections.emptyList()));
+        // an address with no origin Java can read (an underscore in the host) is refused, not a crash
+        assertEquals("https://auth_server.corp.example/login", PCStore.refusedHop("https://ovis.example.com", "https://auth_server.corp.example/login", null, Collections.emptyList()));
+        // an Ovis server: judged by the whole way the probe went
+        assertNull(PCStore.refusedHop("http://100.64.0.1", "https://pc.example.com/", "https://pc.example.com", Collections.singletonList("https://pc.example.com")));
+        assertEquals("http://pc.example.com", PCStore.refusedHop("https://a.example.com", "https://b.example.com/", "http://pc.example.com", java.util.Arrays.asList("https://b.example.com", "http://pc.example.com")));
+    }
+
+    @Test
     public void publicHttpIsWhatTheConnectScreenWarnsAbout() {
         // a number in any form but a plain dotted quad is some IPv4 address to the web view, never judged private
         for (String warned : new String[] {"http://8.8.8.8", "http://172.15.0.1", "http://100.128.0.1", "http://[2001:db8::1]", "http://pc.example.com", "http://134744072:7421", "http://010.0.0.1", "http://0x8.8.8.8", "http://10.0.0.256", "http://134217729", "http://0x08000001"}) {
@@ -221,8 +338,166 @@ public class PCStoreTest {
     }
 
     @Test
+    public void aRelayPcIsKeyedByItsScopeAndAnOldOriginKeyStillWorks() {
+        String scope = "https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/";
+        String offer = scope + "#offer=eyJ2IjoxfQ";
+        assertEquals(scope, PCStore.scopeKey(scope, offer));
+        assertEquals(scope, PCStore.scopeKey(scope, scope));
+        // another origin, a scope without its slash or with more than a path, or a page outside the scope
+        assertNull(PCStore.scopeKey(scope, "https://evil.example/s/0123456789abcdef0123456789abcdef/#offer=x"));
+        assertNull(PCStore.scopeKey("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef", offer));
+        assertNull(PCStore.scopeKey(scope + "?x=1", offer));
+        assertNull(PCStore.scopeKey("https://app.ovis.sh/", offer));
+        assertNull(PCStore.scopeKey(scope, "https://app.ovis.sh/s/fedcba9876543210fedcba9876543210/"));
+
+        assertTrue(PCStore.belongs(offer, scope));
+        assertTrue(PCStore.belongs("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef", scope));
+        assertFalse(PCStore.belongs("https://app.ovis.sh/s/fedcba9876543210fedcba9876543210/", scope));
+        assertFalse(PCStore.belongs("https://app.ovis.sh/", scope));
+        // a PC saved by its origin before relay PCs: any page of that origin, as before
+        assertTrue(PCStore.belongs("https://pc.tail1234.ts.net/settings?x=1", "https://pc.tail1234.ts.net"));
+        assertFalse(PCStore.belongs("https://pc.tail1234.ts.net:8443/", "https://pc.tail1234.ts.net"));
+        assertEquals("https://pc.tail1234.ts.net", PCStore.origin("https://pc.tail1234.ts.net"));
+        assertEquals("https://app.ovis.sh", PCStore.origin(scope));
+    }
+
+    @Test
+    public void aRelayLinkThatResolvesOutsideItsScopeIsRefused() {
+        String scope = "https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/";
+        String other = "fedcba9876543210fedcba9876543210/";
+        for (String escape : new String[] {
+            scope + "../" + other,
+            scope + "../../outside/",
+            scope + "./x",
+            scope + "%2e%2e/" + other,
+            scope + "%2E%2E/" + other,
+            scope + ".%2e/" + other,
+            scope + "%252e%252e/" + other,
+            scope + "..%2f" + other,
+            scope + "x%2F..%2F..%2F" + other,
+            scope + "..%5c" + other,
+            scope + "x\\..\\..\\" + other,
+            scope + "%zz",
+        }) {
+            assertNull(escape, PCStore.scopeKey(scope, escape));
+            assertFalse(escape, PCStore.belongs(escape, scope));
+        }
+        // the scope's own segments: another PC whose id starts with this one's, and the scope without its slash
+        assertFalse(PCStore.belongs("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef0/", scope));
+        assertNull(PCStore.scopeKey("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef", scope + "#offer=x"));
+        assertNull(PCStore.scopeKey("https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/../" + other, scope));
+        // pages deeper in the scope, and a name with dots that is not a dot segment
+        assertEquals(scope, PCStore.scopeKey(scope, scope + "~render?x=1#offer=eyJ2IjoxfQ"));
+        assertTrue(PCStore.belongs(scope + "deep/er/page.v2..html", scope));
+        assertTrue(PCStore.belongs(scope + "caf%C3%A9/", scope));
+        // a PC saved by its origin is unchanged
+        assertTrue(PCStore.belongs("https://pc.tail1234.ts.net/a/../b", "https://pc.tail1234.ts.net"));
+    }
+
+    @Test
+    public void cleanPathKeepsOnlyPathsABrowserLoadsAsWritten() {
+        assertEquals("/s/a/b.c/", PCStore.cleanPath("/s/a/b.c/"));
+        assertEquals("", PCStore.cleanPath(""));
+        for (String bad : new String[] {"/..", "/.", "/a/%2e", "/a/%252E%252e/", "/a%2fb", "/a%5Cb", "/a\\b", "/a%", "/a%2", "/a%C3"}) {
+            assertNull(bad, PCStore.cleanPath(bad));
+        }
+    }
+
+    @Test
+    public void theStartPathKeepsAPairingLinkOrOfferAndElseOpensThePcsScopeOrRoot() {
+        String scope = "https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/";
+        assertEquals("/s/0123456789abcdef0123456789abcdef/#offer=eyJ2IjoxfQ", PCStore.startPath(scope + "#offer=eyJ2IjoxfQ", scope));
+        assertEquals("/s/0123456789abcdef0123456789abcdef/", PCStore.startPath(null, scope));
+        assertEquals("/", PCStore.startPath(null, "https://pc.tail1234.ts.net"));
+        assertEquals("/?pair=123456", PCStore.startPath("https://pc.tail1234.ts.net/?pair=123456", "https://pc.tail1234.ts.net"));
+        assertEquals("/", PCStore.startPath("https://other.example/?pair=123456", "https://pc.tail1234.ts.net"));
+    }
+
+    @Test
     public void theStartKeepsAPairingLinksCodeOnTheOvisOrigin() {
         assertEquals("https://pc.example.com/?pair=123456", PCStore.startOn("https://pc.example.com", "http://100.64.0.1/?pair=123456"));
         assertEquals("https://pc.example.com/", PCStore.startOn("https://pc.example.com", "http://100.64.0.1"));
+    }
+
+    @Test
+    public void takesOnlyAViewOfAPcOnTheHostedShellAsAnAppLink() {
+        String scope = "https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/";
+        String offer = scope + "#offer=eyJ2IjoxfQ";
+        for (String link : new String[] {
+            offer,
+            scope,
+            "https://APP.ovis.sh:443/s/0123456789abcdef0123456789abcdef",
+            scope + "#read=%2Fhome%2Fa.md&machine=local",
+            scope + "?pane=w1%3Ap1",
+        }) {
+            assertEquals(link, PCStore.appLink("android.intent.action.VIEW", link));
+            assertEquals(link, scope, PCStore.appScope(link));
+        }
+        assertNull(PCStore.appLink("android.intent.action.MAIN", offer));
+        assertNull(PCStore.appLink("android.intent.action.VIEW", null));
+        for (String other : new String[] {
+            "http://app.ovis.sh/s/0123456789abcdef0123456789abcdef/",
+            "https://app.ovis.sh:8443/s/0123456789abcdef0123456789abcdef/",
+            "https://app.ovis.sh.evil.example/s/0123456789abcdef0123456789abcdef/",
+            "https://app.ovis.sh/",
+            "https://app.ovis.sh/sx/",
+            "https://app.ovis.sh/s/not-a-pc",
+            "https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/sw.js",
+            "ovis://account/callback?code=1",
+            "https://app.ovis.sh/s/ bad",
+        }) assertNull(other, PCStore.appLink("android.intent.action.VIEW", other));
+    }
+
+    @Test
+    public void pairsOnlyFromAPcsScopeOrItsOfferAndOpensAnyOtherLinkAsAView() {
+        String scope = "https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/";
+        assertTrue(PCStore.pairingLink(scope));
+        assertTrue(PCStore.pairingLink(scope + "#offer=eyJ2IjoxfQ"));
+        assertFalse(PCStore.pairingLink(scope + "#read=%2Fhome%2Fa.md&machine=local"));
+        assertFalse(PCStore.pairingLink(scope + "#machine=local&pane=w1%3Ap1"));
+        assertFalse(PCStore.pairingLink(scope + "?pane=w1%3Ap1"));
+        assertFalse(PCStore.pairingLink(scope + "?pair=1#offer=eyJ2IjoxfQ"));
+    }
+
+    @Test
+    public void backIsThePagesOnlyOverAnotherPageOfTheSamePlace() {
+        String pc = "https://pc.tail1234.ts.net";
+        // a sheet's or a pane's entry over a page of the PC
+        assertTrue(PCStore.pageTakesBack(pc + "/?pane=w1%3Ap2", pc + "/?pane=w1%3Ap1", pc));
+        // the PC's first page: nothing behind it, or the sign-in that led to it
+        assertFalse(PCStore.pageTakesBack(pc + "/", null, pc));
+        assertFalse(PCStore.pageTakesBack(pc + "/", "https://login.example.com/authorize", pc));
+        // a sign-in in front of the PC, and the app's error page over a PC that did not answer
+        assertFalse(PCStore.pageTakesBack("https://login.example.com/step2", "https://login.example.com/authorize", pc));
+        assertFalse(PCStore.pageTakesBack("https://localhost/error.html", pc + "/", pc));
+        // another port on the PC's host is another place
+        assertFalse(PCStore.pageTakesBack(pc + "/", "https://pc.tail1234.ts.net:8443/", pc));
+        // a relay PC, within its scope only
+        String scope = "https://app.ovis.sh/s/0123456789abcdef0123456789abcdef/";
+        assertTrue(PCStore.pageTakesBack(scope + "?pane=a", scope, scope));
+        assertFalse(PCStore.pageTakesBack(scope, "https://app.ovis.sh/", scope));
+        // before a PC is chosen, the app's own pages: the demo over the connect screen
+        assertTrue(PCStore.pageTakesBack("https://localhost/demo/index.html", "https://localhost/", "https://localhost"));
+        assertFalse(PCStore.pageTakesBack("https://localhost/", null, "https://localhost"));
+    }
+
+    @Test
+    public void anotherPortOnThePcsHostIsAnotherOrigin() {
+        String pc = "https://pc.example.ts.net";
+        assertTrue(PCStore.sameOrigin(pc + "/files?x=1#top", pc));
+        assertTrue(PCStore.sameOrigin("HTTPS://PC.example.ts.net:443/", pc));
+        assertTrue(PCStore.sameOrigin(pc, "https://pc.example.ts.net:443"));
+        assertTrue(PCStore.sameOrigin("http://pc.example.ts.net:80/", "http://pc.example.ts.net"));
+        assertTrue(PCStore.sameOrigin("http://192.168.1.2:7317/a", "http://192.168.1.2:7317"));
+        assertTrue(PCStore.sameOrigin("http://[::1]:80/", "http://[::1]"));
+        assertFalse(PCStore.sameOrigin(pc + ":7231", pc));
+        assertFalse(PCStore.sameOrigin(pc + ":7231/", pc + ":443"));
+        assertFalse(PCStore.sameOrigin("http://192.168.1.2:3000/", "http://192.168.1.2:7317"));
+        assertFalse(PCStore.sameOrigin("http://pc.example.ts.net", pc));
+        assertFalse(PCStore.sameOrigin("https://pc.example.ts.net:80/", pc));
+        assertFalse(PCStore.sameOrigin("https://other.example.ts.net", pc));
+        assertFalse(PCStore.sameOrigin("https://pc.example.ts.net.evil.com", pc));
+        assertFalse(PCStore.sameOrigin("ovis://pc.example.ts.net", "ovis://pc.example.ts.net"));
+        assertFalse(PCStore.sameOrigin(null, pc));
     }
 }
