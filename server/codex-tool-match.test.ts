@@ -55,6 +55,16 @@ describe("Codex native command screen ownership", () => {
     expect(resolve(screen, [candidate, elsewhere])).toBe("own");
   });
 
+  it("uses the complete visible sequence when another thread shares only the earlier commands", () => {
+    const command = "bun run audit --project /work/isolated-final-check";
+    const output = "Final isolated audit verified every worker lease, removed the stale pending jobs, and reconciled the deployment inventory successfully.";
+    const final = JSON.stringify({ ...events[0], payload: { ...events[0]!.payload, item: {
+      ...events[0]!.payload.item, id: "final-command", command: ["/bin/zsh", "-lc", command], aggregated_output: output,
+    } } });
+    const shown = screen.replace("• Working", `• Ran ${command}\n  └ ${output}\n\n• Working`);
+    expect(resolve(shown, [{ ...candidate, text: candidate.text + final }, { ...candidate, path: "shared-earlier" }])).toBe("own");
+  });
+
   it("refuses copied output, mixed owners, incomplete records and pending calls", () => {
     expect(resolve(screen, [candidate, { ...candidate, path: "twin" }])).toBeNull();
     const quote = { path: "quote", text: JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: body } }) + "\n" };

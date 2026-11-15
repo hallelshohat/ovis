@@ -1162,6 +1162,22 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     finally { spy.mockRestore(); }
   });
 
+  heldIt("keeps proven native commands when their own rollout grows during lookup", async () => {
+    await resumedWithSuccessors();
+    ownThread(nativeCommands());
+    otherFolderThread();
+    await loaded(thread, other);
+    screen = toolScreen();
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const spy = spyOn(herdrClient, "paneRead").mockImplementation(async (args) => {
+      if (args.paneId === root && ++reads === 2) appendFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "token_count" } }) + "\n");
+      return read(args);
+    });
+    try { expect(await resolve()).toBe(path); expect(reads).toBeGreaterThan(1); }
+    finally { spy.mockRestore(); }
+  });
+
   heldIt("selects the rendered older conversation after a picker resume instead of stale argv", async () => {
     await resumedWithSuccessors();
     const commentary = "The older conversation is checking **its own configuration**, while the original thread remains loaded in the shared Codex daemon.";
