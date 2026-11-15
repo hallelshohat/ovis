@@ -214,6 +214,19 @@ try {
   assert.deepEqual(errors, []);
   console.log("PASS mobile layout and no browser errors");
   await page.setViewportSize({ width: 1440, height: 1000 });
+  writeFileSync(rollout, [header, ...lines.slice(start), fixture("0.169.0-interrupted.jsonl")].join("\n") + "\n");
+  await page.reload();
+  const interrupted = log.locator(".chat-turn-user").last();
+  await interrupted.getByText("Sent after interruption", { exact: true }).waitFor();
+  assert.match(await interrupted.innerText(), /STEER_ovis:/);
+  assert.equal(await interrupted.getByText("Steering · current turn", { exact: true }).count(), 0);
+  await capture("interrupted");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await interrupted.scrollIntoViewIfNeeded();
+  assert.equal(await interrupted.getByText("Sent after interruption", { exact: true }).isVisible(), true);
+  await capture("interrupted-mobile");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  console.log("PASS interrupted-and-resubmitted Codex input is not labeled steering");
   for (const source of ["error", "stream_error"]) {
     const aborted = fixture("runtime-abort.jsonl").replace('"type":"error"', `"type":"${source}"`);
     writeFileSync(rollout, [header, ...lines.slice(start), fixture("0.167.0-mixed-image.jsonl"), aborted].join("\n") + "\n");
@@ -238,19 +251,6 @@ try {
     await capture(`runtime-${source}-folded`);
   }
   console.log("PASS settled runtime warnings/errors stay visible and counted while work is folded");
-  writeFileSync(rollout, [header, ...lines.slice(start), fixture("0.169.0-interrupted.jsonl")].join("\n") + "\n");
-  await page.reload();
-  const interrupted = log.locator(".chat-turn-user").last();
-  await interrupted.getByText("Sent after interruption", { exact: true }).waitFor();
-  assert.match(await interrupted.innerText(), /STEER_ovis:/);
-  assert.equal(await interrupted.getByText("Steering · current turn", { exact: true }).count(), 0);
-  await capture("interrupted");
-  await page.setViewportSize({ width: 390, height: 844 });
-  await interrupted.scrollIntoViewIfNeeded();
-  assert.equal(await interrupted.getByText("Sent after interruption", { exact: true }).isVisible(), true);
-  await capture("interrupted-mobile");
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  console.log("PASS interrupted-and-resubmitted Codex input is not labeled steering");
   await checkTyping({ page, paneId });
   await capture("typing");
   assert.deepEqual(errors, []);

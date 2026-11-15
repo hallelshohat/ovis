@@ -201,7 +201,10 @@ export function codexCallFailed(output: string): boolean {
   return code !== null && code[1] !== "0";
 }
 
-interface CodexParseState {
+/** Input outcome carried from settled tasks into the separately parsed live task. */
+export interface CodexInputState { interrupted?: boolean }
+
+interface CodexParseState extends CodexInputState {
   turns: ConversationTurn[];
   tools: Map<string, Extract<ConversationPart, { kind: "tool" }>>;
   messages: { role: string; text: string; sources: Set<string>; ts: string; part: Extract<ConversationPart, { kind: "text" }>; turn: ConversationTurn }[];
@@ -210,7 +213,6 @@ interface CodexParseState {
   activeTurnId?: string;
   nativeItems?: Map<string, ConversationPart>;
   userTurnId?: string;
-  interrupted?: boolean;
   nativeCalls?: { at: number; end?: number; part: Extract<ConversationPart, { kind: "tool" }> }[];
 }
 
@@ -431,9 +433,11 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
   };
 }
 
-export function parseCodexTranscript(text: string, maxTurns = 100): ConversationTurn[] {
-  const parser = createCodexTranscriptParser();
+export function parseCodexTranscript(text: string, maxTurns = 100, input: CodexInputState = {}): ConversationTurn[] {
+  const state: CodexParseState = { ...input, turns: [], tools: new Map(), messages: [] };
+  const parser = createCodexTranscriptParser(state);
   parser.write(text);
+  input.interrupted = state.interrupted;
   return parser.snapshot().slice(-maxTurns);
 }
 

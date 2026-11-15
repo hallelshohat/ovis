@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createCodexTranscriptParser, parseCodexTranscript } from "./codex.ts";
 import { codexNativeItem } from "./codex-items.ts";
-import { codexToolImage, transcriptToolOutput } from "./conversation.ts";
+import { codexToolImage, forgetTranscriptState, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 import type { ConversationPart } from "../shared/protocol.ts";
 import { parseConversationMetadata } from "./conversation-metadata.ts";
 import { visibleWorkParts } from "../src/lib/workBlocks.ts";
@@ -186,6 +186,27 @@ it("distinguishes the recorded Codex 0.169 interrupt-and-resubmit from accepted 
   expect(copies[0]?.input_kind).toBe("steering");
   expect(copies[1]?.input_kind).toBe("interrupted");
   expect(copies[0]?.native_turn_id).not.toBe(copies[1]?.native_turn_id);
+});
+
+it("keeps interruption labels across cached and cold conversation pages", () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-interrupted-page-"));
+  try {
+    const path = join(root, "rollout.jsonl");
+    writeFileSync(path, readFileSync(fixture("0.169.0-interrupted"), "utf8"));
+    const live = transcriptPage("codex-transcript", path);
+    expect(live.turns.at(-1)?.input_kind).toBe("interrupted");
+    const payloads = [
+      { type: "task_complete", turn_id: live.turns.at(-1)?.native_turn_id },
+      { type: "task_started", turn_id: "next-task" }, { type: "user_message", message: "next task" },
+    ];
+    appendFileSync(path, payloads.map((payload) => JSON.stringify({ type: "event_msg", payload }) + "\n").join(""));
+    const settled = transcriptPage("codex-transcript", path);
+    expect(settled.turns.at(-2)?.input_kind).toBe("interrupted");
+    expect(settled.turns.at(-1)?.input_kind).toBeUndefined();
+    forgetTranscriptState();
+    expect(transcriptPage("codex-transcript", path).turns).toEqual(settled.turns);
+    expect(live.turns.at(-1)?.input_kind).toBe("interrupted");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 it("retrieves a native command's whole output when its timeline preview is cut", () => {
