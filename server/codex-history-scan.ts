@@ -17,16 +17,25 @@ export async function scanCodexHistory<T>({ key, segments, cache, initial, each 
   const cacheKey = JSON.stringify([key, segments.map(({ path }) => path)]);
   let pending = pendingByCache.get(cache);
   if (!pending) { pending = new Map(); pendingByCache.set(cache, pending); }
-  const shared = pending.get(cacheKey) ?? enqueue(async (signal) => {
-    const result = await scanHistory({ segments, known: cache.get(cacheKey), initial, each, signal,
-      invalidate: () => cache.delete(cacheKey) });
-    if (signal.aborted) return false;
-    if (result !== null) { cache.delete(cacheKey); cache.set(cacheKey, result); }
-    if (cache.size > KEPT) cache.delete(cache.keys().next().value!);
-    return result !== null;
-  });
-  if (shared === null) return null;
   caches.add(cache);
+  const load = async (): Promise<boolean> => {
+    const known = cache.get(cacheKey);
+    if (known && matchesRequest({ files: known.files, segments })) {
+      const current = await unchangedFiles(known.files);
+      if (cache.get(cacheKey) !== known) return false;
+      // Checked cache hits must not compete with cold scans for queue admission.
+      if (current) { cache.delete(cacheKey); cache.set(cacheKey, known); return true; }
+    }
+    return enqueue(async (signal) => {
+      const result = await scanHistory({ segments, known: cache.get(cacheKey), initial, each, signal,
+        invalidate: () => cache.delete(cacheKey) });
+      if (signal.aborted) return false;
+      if (result !== null) { cache.delete(cacheKey); cache.set(cacheKey, result); }
+      if (cache.size > KEPT) cache.delete(cache.keys().next().value!);
+      return result !== null;
+    }) ?? false;
+  };
+  const shared = pending.get(cacheKey) ?? load();
   pending.set(cacheKey, shared);
   void shared.then(() => { if (pending.get(cacheKey) === shared) pending.delete(cacheKey); });
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -37,8 +46,7 @@ export async function scanCodexHistory<T>({ key, segments, cache, initial, each 
     ]);
     const result = complete ? cache.get(cacheKey) : undefined;
     // A caller asking for an append may have joined the earlier prefix's in-flight scan.
-    if (!result || result.files.length !== segments.length
-      || result.files.some((file, at) => file.end !== segments[at]!.end)) return null;
+    if (!result || !matchesRequest({ files: result.files, segments })) return null;
     try {
       for (const [at, file] of result.files.entries()) {
         readBound([[file.path, segments[at]!.identity ?? file.stat]], () => checkBoundFile(file.path, file.stat));
@@ -74,6 +82,20 @@ const caches = new Set<{ clear(): void }>();
 const jobs = new Set<Job>();
 const queue: Job[] = [];
 let active = 0;
+
+function matchesRequest({ files, segments }: { files: readonly HistoryFile[]; segments: readonly HistorySegment[] }): boolean {
+  return files.length === segments.length && files.every((file, at) => file.path === segments[at]!.path && file.end === segments[at]!.end);
+}
+
+async function unchangedFiles(files: readonly HistoryFile[]): Promise<boolean> {
+  try {
+    for (const file of files) {
+      const now = await stat(file.path);
+      if (!now.isFile() || !sameIdentity({ left: now, right: file.stat }) || !unchanged({ left: now, right: file.stat })) return false;
+    }
+    return true;
+  } catch { return false; }
+}
 
 function enqueue(run: Job["run"]): Promise<boolean> | null {
   if (active >= ACTIVE && queue.length >= WAITING) return null;
