@@ -1,3 +1,4 @@
 ### Fixed
-- Resumed Codex chats stay available after newer conversations in the same worktree finish and
-  unload, even when tool activity has pushed their answers off screen.
+- Resumed Codex chats recover after newer conversations finish and unload when the resumed
+  thread is the only loaded conversation, even when tool activity pushes answers off screen.
+  Recovery refuses ambiguous threads after a picker resume, including older threads from other folders.

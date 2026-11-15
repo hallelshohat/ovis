@@ -1079,6 +1079,22 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     expect(await resolve()).toBe(path);
   });
 
+  for (const sameFolder of [false, true]) {
+    heldIt(`refuses stale argv after a picker resume in ${sameFolder ? "the same" : "another"} folder`, async () => {
+      await resumedWithSuccessors();
+      const active = otherFolderThread();
+      if (sameFolder) {
+        const db = new Database(join(home, "state_5.sqlite"));
+        try { db.query("UPDATE threads SET cwd = ? WHERE id = ?").run(root, other); }
+        finally { db.close(); }
+        writeFileSync(active, fs.readFileSync(active, "utf8").replace(join(root, "elsewhere"), root));
+      } else title = shortened;
+      await loaded(thread, other);
+      expect(await resolve()).toBeNull();
+      await expect(conversationModule.paneConversation(root, home)).rejects.toThrow("no_session_path");
+    });
+  }
+
   heldIt("refuses recovery when the resumed thread is no longer loaded", async () => {
     await resumedWithSuccessors();
     expect(await resolve()).toBeNull();
@@ -1121,6 +1137,22 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     let reads = 0;
     const changing = spyOn(herdrClient, "paneRead").mockImplementation(async (input) => {
       if (++reads === 2) await loaded(successors[0]!);
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+
+  heldIt("refuses recovery when an older thread loads during revalidation", async () => {
+    await resumedWithSuccessors();
+    otherFolderThread();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation(async (input) => {
+      if (++reads === 2) await loaded(other);
       return read(input);
     });
     try {
