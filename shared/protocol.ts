@@ -685,7 +685,7 @@ export interface ConversationTurn {
   ts: string | null;
   /** Codex's task spans user steering and the assistant's continuation. */
   native_turn_id?: string;
-  input_kind?: "steering" | "queued";
+  input_kind?: "steering" | "queued" | "interrupted";
   /** False while the native task runs, including segments before steering input. */
   turn_complete?: boolean;
   /** Last recorded assistant activity, never the next user's timestamp. */

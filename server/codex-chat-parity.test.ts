@@ -126,6 +126,68 @@ it("keeps repeated identical steering sends while pairing all three recording so
   expect(turns[1]).toMatchObject({ role: "user", native_turn_id: "same-task", input_kind: "steering" });
 });
 
+it.each(["same-task", "replacement-task"])("labels a message after interruption, including reused turn IDs (%s)", (nextId) => {
+  const parser = createCodexTranscriptParser();
+  const write = (payload: object) => parser.write(JSON.stringify({ type: "event_msg", timestamp: "2026-11-15T16:00:00Z", payload }) + "\n");
+  write({ type: "task_started", turn_id: "same-task" });
+  write({ type: "user_message", message: "start" });
+  write({ type: "turn_aborted", turn_id: "same-task", reason: "interrupted" });
+  write({ type: "task_started", turn_id: nextId });
+  write({ type: "user_message", message: "follow up" });
+  expect(parser.snapshot().at(-1)).toMatchObject({ role: "user", native_turn_id: nextId, input_kind: "interrupted" });
+  write({ type: "user_message", message: "steer again" });
+  expect(parser.snapshot().at(-1)?.input_kind).toBe("steering");
+});
+
+it("does not carry steering across a completed task with a reused ID", () => {
+  const payloads = [
+    { type: "task_started", turn_id: "task" }, { type: "user_message", message: "start" },
+    { type: "task_complete", turn_id: "task" }, { type: "task_started", turn_id: "task" },
+    { type: "user_message", message: "new task" },
+  ];
+  const turns = parseCodexTranscript(payloads.map((payload) => JSON.stringify({ type: "event_msg", payload })).join("\n"));
+  expect(turns.at(-1)?.input_kind).toBeUndefined();
+});
+
+it("keeps identical messages on opposite sides of an interruption separate", () => {
+  const payloads = [
+    { type: "task_started", turn_id: "first" }, { type: "user_message", message: "repeat" },
+    { type: "turn_aborted", turn_id: "first", reason: "interrupted" }, { type: "task_started", turn_id: "second" },
+    { type: "item_completed", turn_id: "second", item: { type: "UserMessage", id: "next", content: [{ type: "text", text: "repeat" }] } },
+  ];
+  const turns = parseCodexTranscript(payloads.map((payload) => JSON.stringify({ type: "event_msg", timestamp: "2026-11-15T16:00:00Z", payload })).join("\n"));
+  expect(turns.filter((turn) => turn.role === "user")).toHaveLength(2);
+  expect(turns.at(-1)?.input_kind).toBe("interrupted");
+});
+
+it("does not call an unclassified abort an interruption", () => {
+  const payloads = [
+    { type: "task_started", turn_id: "task" }, { type: "user_message", message: "start" },
+    { type: "turn_aborted", turn_id: "task" }, { type: "task_started", turn_id: "task" },
+    { type: "user_message", message: "retry" },
+  ];
+  const turns = parseCodexTranscript(payloads.map((payload) => JSON.stringify({ type: "event_msg", payload })).join("\n"));
+  expect(turns.at(-1)?.input_kind).toBeUndefined();
+});
+
+it.each(["task_complete", "turn_aborted"])("does not take another task's %s for an end to current steering", (type) => {
+  const payloads = [
+    { type: "task_started", turn_id: "current" }, { type: "user_message", message: "start" },
+    { type, turn_id: "other", reason: "interrupted" }, { type: "user_message", message: "follow up" },
+  ];
+  const turns = parseCodexTranscript(payloads.map((payload) => JSON.stringify({ type: "event_msg", payload })).join("\n"));
+  expect(turns.at(-1)).toMatchObject({ native_turn_id: "current", input_kind: "steering" });
+});
+
+it("distinguishes the recorded Codex 0.169 interrupt-and-resubmit from accepted steering", () => {
+  const turns = parseCodexTranscript(readFileSync(fixture("0.169.0-interrupted"), "utf8"));
+  const copies = turns.filter((turn) => turn.role === "user" && turn.parts.some((part) => part.kind === "text" && part.text.startsWith("STEER_ovis:")));
+  expect(copies).toHaveLength(2);
+  expect(copies[0]?.input_kind).toBe("steering");
+  expect(copies[1]?.input_kind).toBe("interrupted");
+  expect(copies[0]?.native_turn_id).not.toBe(copies[1]?.native_turn_id);
+});
+
 it("retrieves a native command's whole output when its timeline preview is cut", () => {
   const root = mkdtempSync(join(tmpdir(), "codex-long-output-"));
   try {
