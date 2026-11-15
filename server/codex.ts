@@ -24,6 +24,7 @@ import { codexStartScreenUnused } from "./start-screen.ts";
 import { codexDisplayEvent, codexNativeItem } from "./codex-items.ts";
 import { codexInputSessions } from "../shared/codex-chunks.ts";
 import { codexToolActivityConflict, hasCodexToolActivity, matchCodexToolActivity } from "./codex-tool-match.ts";
+import { resetCodexHistoryScans } from "./codex-history-scan.ts";
 import { deepStrings, stringsIn } from "../shared/json-text.ts";
 import { ENTITY, ENTITY_STEPS, throughEntities } from "../shared/entity-text.ts";
 
@@ -937,6 +938,7 @@ export function forgetCodexStateFor(path: string): void {
 
 /** Every remembered chain and question scan: the next read resolves each one again. */
 export function forgetAllCodexState(): void {
+  resetCodexHistoryScans();
   historyChains.clear();
   questionScans.clear();
   questionScansInFlight.clear();
@@ -4094,30 +4096,39 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   return loadedConversation((screen ?? await paneRead({ paneId, source: "recent", lines: 400, stripAnsi: true })).text, paths, home);
 }
 
+const TOOL_REVALIDATIONS = 3;
+
 async function loadedToolConversation({ paneId, processes, screen, home }: {
   paneId: string; processes: string; screen: string; home: string;
 }): Promise<string | null> {
   try {
-    const loaded = await loadedRollouts(home);
-    if (loaded === null) return null;
-    const files = new Map([...loaded.values()].flatMap(({ segments }) => segments.map(({ path }) => [path, statSync(path)] as const)));
-    if ([...loaded].some(([path, { segments }]) => segments.at(-1)?.end !== files.get(path)?.size)) return null;
-    const candidates = [...loaded.keys()].map((path) => ({ path, text: historyTailWithLead(path, 1024 * 1024, home).text }));
-    const found = matchCodexToolActivity({ screen, candidates });
-    if (found === null || !loaded.get(found)?.offered) return null;
-    for (const [path, { segments }] of loaded) {
-      if (path !== found && await codexToolActivityConflict({ screen, segments })) return null;
+    for (let attempt = 0; attempt < TOOL_REVALIDATIONS; attempt++) {
+      const loaded = await loadedRollouts(home);
+      if (loaded === null) return null;
+      const files = new Map([...loaded.values()].flatMap(({ segments }) => segments.map(({ path }) => [path, statSync(path)] as const)));
+      if ([...loaded].some(([path, { segments }]) => segments.at(-1)?.end !== files.get(path)?.size)) return null;
+      const candidates = [...loaded.keys()].map((path) => ({ path, text: historyTailWithLead(path, 1024 * 1024, home).text }));
+      const found = matchCodexToolActivity({ screen, candidates });
+      if (found === null || !loaded.get(found)?.offered) return null;
+      // Start every peer's bounded scan; all must prove no conflict before the pane can bind.
+      const conflicts = await Promise.all([...loaded].filter(([path]) => path !== found)
+        .map(([, { segments }]) => codexToolActivityConflict({ screen, segments })));
+      if (conflicts.some(Boolean)) return null;
+      if (!await stillAsWeighed(paneId, processes, screen, home, new Set(loaded.keys()))) return null;
+      let grew = false;
+      for (const [path, before] of files) {
+        const now = statSync(path);
+        // Completed items survive an append to their own rollout; a competitor's new records must be weighed.
+        const appended = now.size > before.size;
+        if (now.ino !== before.ino || now.dev !== before.dev || !appended
+          && (now.size !== before.size || now.mtimeMs !== before.mtimeMs || now.ctimeMs !== before.ctimeMs)) return null;
+        if (appended && path !== found) grew = true;
+      }
+      if (grew) continue;
+      const now = await loadedRollouts(home);
+      return now?.get(found)?.offered && [...now.keys()].every((path) => loaded.has(path)) ? found : null;
     }
-    if (!await stillAsWeighed(paneId, processes, screen, home, new Set(loaded.keys()))) return null;
-    for (const [path, before] of files) {
-      const now = statSync(path);
-      // Completed items survive an append to their own rollout; a competitor's new records must be weighed.
-      const appended = path === found && now.size > before.size;
-      if (now.ino !== before.ino || now.dev !== before.dev || !appended
-        && (now.size !== before.size || now.mtimeMs !== before.mtimeMs || now.ctimeMs !== before.ctimeMs)) return null;
-    }
-    const now = await loadedRollouts(home);
-    return now?.get(found)?.offered && [...now.keys()].every((path) => loaded.has(path)) ? found : null;
+    return null;
   } catch { return null; }
 }
 

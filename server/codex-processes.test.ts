@@ -1132,6 +1132,27 @@ const said = (type: "user_message" | "agent_message", message: string) => ({ typ
 /** Real locks and stores, several of them: a budget for a busy machine, not a wait. */
 const heldIt = (name: string, test: () => Promise<void>) => it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(name, test, 20_000);
 
+heldIt("retries an unwritten Codex rollout after an agent switch and ignores stale session reports", async () => {
+  const launchTmp = join(root, "launch-tmp");
+  mkdirSync(launchTmp);
+  const child = await runningCodex(false, { ...process.env, CODEX_HOME: home, TMPDIR: launchTmp });
+  foreground = [{ pid: child.pid, argv: ["codex"] }];
+  agentFolders = { cwd: root };
+  reportedSession = { agent: "claude", kind: "id", value: "previous-claude", source: "herdr:claude" };
+  rmSync(path);
+  const ask = () => conversationModule.paneConversation(root);
+  await expect(ask()).rejects.toMatchObject({ name: "ConversationReadPending" });
+  reportedSession = { agent: "codex", kind: "id", value: other, source: "herdr:codex" };
+  await expect(ask()).rejects.toMatchObject({ name: "ConversationReadPending" });
+  ownThread([said("user_message", "Read the current conversation."), said("agent_message", answer)]);
+  screen = `• ${answer}`;
+  const chat = await ask();
+  expect(chat.source).toBe("codex-transcript");
+  expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: answer });
+  reportedSession = { agent: "codex", kind: "id", value: thread, source: "herdr:codex" };
+  expect((await ask()).history_id).toBe(chat.history_id);
+});
+
 describe("a resumed Codex chat beside unloaded newer sessions", () => {
   const successors = ["01a1de4e-df32-79a0-8c2f-000000000001", "01a1de4e-df32-79a0-8c2f-000000000002"];
 
@@ -1234,7 +1255,7 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     otherFolderThread();
     await loaded(other);
     expect(await resolve()).toBeNull();
-    await expect(conversationModule.paneConversation(root, home)).rejects.toThrow("no_session_path");
+    await expect(conversationModule.paneConversation(root, home)).rejects.toMatchObject({ name: "ConversationReadPending" });
   });
 
   for (const sameFolder of [false, true]) {
@@ -1263,7 +1284,7 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     await loaded(thread, other);
     screen = toolScreen();
     expect(await resolve()).toBeNull();
-    await expect(conversationModule.paneConversation(root, home)).rejects.toThrow("no_session_path");
+    await expect(conversationModule.paneConversation(root, home)).rejects.toMatchObject({ name: "ConversationReadPending" });
   });
 
   heldIt("refuses native commands when another conversation loads during the final screen read", async () => {
@@ -1298,6 +1319,24 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     finally { spy.mockRestore(); }
   });
 
+  for (const conflicting of [false, true]) {
+    heldIt(`${conflicting ? "refuses" : "recovers"} native commands after a competitor appends ${conflicting ? "matching" : "unrelated"} records`, async () => {
+      await resumedWithSuccessors();
+      const peer = otherFolderThread();
+      await loaded(thread, other);
+      ownThread(nativeCommands());
+      screen = toolScreen();
+      const read = herdrClient.paneRead;
+      let reads = 0;
+      const spy = spyOn(herdrClient, "paneRead").mockImplementation(async (args) => {
+        if (args.paneId === root && ++reads === 2) appendFileSync(peer, (conflicting ? nativeCommands() : [{ type: "event_msg", payload: { type: "token_count" } }]).map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+        return read(args);
+      });
+      try { expect(await resolve()).toBe(conflicting ? null : path); expect(reads).toBeGreaterThan(1); }
+      finally { spy.mockRestore(); }
+    });
+  }
+
   heldIt("selects the rendered older conversation after a picker resume instead of stale argv", async () => {
     await resumedWithSuccessors();
     const commentary = "The older conversation is checking **its own configuration**, while the original thread remains loaded in the shared Codex daemon.";
@@ -1330,7 +1369,7 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
       await loaded(thread, other);
       screen = screen.replace("• Working", `• ${plain}\n\n• Working`);
       expect(await resolve()).toBeNull();
-      await expect(conversationModule.paneConversation(root, home)).rejects.toThrow("no_session_path");
+      await expect(conversationModule.paneConversation(root, home)).rejects.toMatchObject({ name: "ConversationReadPending" });
     });
   }
 
@@ -1346,7 +1385,7 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
       } else title = shortened;
       await loaded(thread, other);
       expect(await resolve()).toBeNull();
-      await expect(conversationModule.paneConversation(root, home)).rejects.toThrow("no_session_path");
+      await expect(conversationModule.paneConversation(root, home)).rejects.toMatchObject({ name: "ConversationReadPending" });
     });
   }
 

@@ -1,9 +1,7 @@
-import { createReadStream, closeSync, statSync } from "node:fs";
-import { createInterface } from "node:readline";
 import { z } from "zod";
 import { codexNativeItem } from "./codex-items.ts";
 import { codexComposer } from "./codex-steering.ts";
-import { openBound, readBound } from "./conversation-shared.ts";
+import { scanCodexHistory, type CodexHistoryScan } from "./codex-history-scan.ts";
 import type { HistorySegment } from "./codex.ts";
 import { deepStrings } from "../shared/json-text.ts";
 import { ENTITY, ENTITY_STEPS, throughEntities } from "../shared/entity-text.ts";
@@ -27,50 +25,12 @@ export const hasCodexToolActivity = (screen: string): boolean => toolPreviews(sc
 export async function codexToolActivityConflict({ screen, segments }: { screen: string; segments: readonly HistorySegment[] }): Promise<boolean> {
   const shown = toolPreviews(screen);
   if (shown.length < MIN_PAIRS) return true;
-  try {
-    const stamp = historyStamp(segments), key = `${Bun.hash(JSON.stringify(shown))}:${stamp}`;
-    const known = conflicts.get(key);
-    if (known !== undefined) return known;
-    const conflict = await scanConflict({ shown, segments });
-    if (historyStamp(segments) !== stamp) return true;
-    conflicts.set(key, conflict);
-    if (conflicts.size > MAX_CONFLICT_READS) conflicts.delete(conflicts.keys().next().value!);
-    return conflict;
-  } catch { return true; }
+  const scan = await scanCodexHistory({ key: JSON.stringify(shown), segments, cache: conflicts, initial: newEvidence,
+    each: (evidence, line) => weighLine({ line, shown, evidence }) });
+  return scan === null || scan.value.quoted.size === shown.length || scan.value.pending.size > 0;
 }
 
-const MAX_CONFLICT_READS = 64;
-const conflicts = new Map<string, boolean>();
-
-function historyStamp(segments: readonly HistorySegment[]): string {
-  return segments.map(({ path, end, identity }) => {
-    const now = statSync(path);
-    return `${path}:${end}:${identity?.dev}:${identity?.ino}:${now.dev}:${now.ino}:${now.size}:${now.mtimeMs}:${now.ctimeMs}`;
-  }).join("\0");
-}
-
-async function scanConflict({ shown, segments }: { shown: readonly Preview[]; segments: readonly HistorySegment[] }): Promise<boolean> {
-  const evidence = newEvidence();
-  for (const segment of segments) {
-    if (segment.end === 0) continue;
-    let fd: number;
-    try {
-      const identity = segment.identity ?? statSync(segment.path);
-      fd = readBound([[segment.path, identity]], () => openBound(segment.path));
-    } catch { return true; }
-    let stream: ReturnType<typeof createReadStream>;
-    try { stream = createReadStream(segment.path, { fd, end: segment.end - 1, encoding: "utf8" }); }
-    catch { closeSync(fd); return true; }
-    const lines = createInterface({ input: stream, crlfDelay: Infinity });
-    try {
-      for await (const line of lines) {
-        if (!weighLine({ line, shown, evidence }) || evidence.quoted.size === shown.length) return true;
-      }
-    } catch { return true; }
-    finally { lines.close(); stream.destroy(); }
-  }
-  return evidence.pending.size > 0;
-}
+const conflicts = new Map<string, CodexHistoryScan<Evidence>>();
 
 const MIN_PAIRS = 2;
 const MIN_OUTPUT = 64;
