@@ -1,40 +1,45 @@
 /**
- * A pane's pull requests: the PR links its chat wrote, plus every PR of each branch the chat ran
- * on (from the transcript, and the branches seen here while the chat was open), looked up with
+ * A space's pull requests: its board record, successful creations in its chat, and its current
+ * branch's PRs by the authenticated author, looked up with
  * `gh` in the pane's working directory. Merged and closed PRs never change, so they are read once;
  * open ones and the branch lists are kept OPEN_TTL_MS unless the caller asks for a fresh read.
  */
 import { byAttention, type GhStatus, type PanePullRequests, type PrEvent, type PullRequest } from "../../shared/pull-requests.ts";
-import { bunRun, ghListHead, ghRepo, ghView, GH_TIMEOUT_MS, type Run } from "./gh.ts";
+import { bunRun, ghListHead, ghRepo, ghView, ghViewer, GH_TIMEOUT_MS, type OwnedPullRequest, type Run } from "./gh.ts";
+import { runBoard, type BoardRunner } from "../board-routes.ts";
+import { boardPrContext, resetBoardPrCache } from "./board.ts";
 import { resetSourceCache, type Chat, type ChatSources } from "./sources.ts";
 
 export const OPEN_TTL_MS = 60_000;
 const REPO_TTL_MS = 10 * 60_000;
 const OBSERVED_PER_PANE = 50;
 
-export interface PrDeps { run: Run; now: () => number; currentBranch: (cwd: string) => Promise<string | null> }
+export interface PrDeps { board: BoardRunner; run: Run; now: () => number; currentBranch: (cwd: string) => Promise<string | null> }
 /** `chat`: the conversation the pane shows now (sources.ts); null for a pane with none, a shell. */
 export interface PrInput { paneId: string; cwd: string; chat: Chat | null; fresh: boolean }
 
-const prs = new Map<string, { pr: PullRequest; at: number }>();
+const prs = new Map<string, { pr: OwnedPullRequest; at: number }>();
 const lists = new Map<string, { urls: string[]; at: number }>();
 type RepoEntry = { status: GhStatus; repo: string | null; at: number; failedAt?: number };
 const repos = new Map<string, RepoEntry>();
+const viewers = new Map<string, { status: GhStatus; login: string | null; at: number }>();
 /** the branches seen in a chat while it was open, by pane and chat: a new chat in the pane starts with none */
 const observed = new Map<string, { branch: string; at: string }[]>();
 const inflight = new Map<string, Promise<PanePullRequests>>();
 
 let runner: Run = bunRun;
+let boardRunner: BoardRunner = runBoard;
 
 /** Tests answer gh and git with fixtures; returns the restore. */
-export function setPullRequestRunner(run: Run): () => void {
-  const previous = runner;
+export function setPullRequestRunner({ run, board }: Pick<PrDeps, "run" | "board">): () => void {
+  const previous = { run: runner, board: boardRunner };
   runner = run;
-  return () => { runner = previous; };
+  boardRunner = board;
+  return () => { runner = previous.run; boardRunner = previous.board; };
 }
 
 export function pullRequestDeps(): PrDeps {
-  return { run: runner, now: Date.now, currentBranch: gitBranchOf(runner) };
+  return { board: boardRunner, run: runner, now: Date.now, currentBranch: gitBranchOf(runner) };
 }
 
 /** A merged PR is read again on the next answer, not taken from the open one kept here. */
@@ -43,8 +48,9 @@ export function forgetPullRequest(url: string): void {
 }
 
 export function resetPullRequestCache(): void {
-  for (const map of [prs, lists, repos, observed, inflight]) map.clear();
+  for (const map of [prs, lists, repos, viewers, observed, inflight]) map.clear();
   resetSourceCache();
+  resetBoardPrCache();
 }
 
 export function gitBranchOf(run: Run): (cwd: string) => Promise<string | null> {
@@ -55,8 +61,13 @@ export function gitBranchOf(run: Run): (cwd: string) => Promise<string | null> {
   };
 }
 
+export async function gitCheckoutOf({ run, cwd }: { run: Run; cwd: string }): Promise<string | null> {
+  const result = await run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], cwd, GH_TIMEOUT_MS);
+  return result?.code === 0 && result.stdout.trim() ? result.stdout.trim() : null;
+}
+
 export function panePullRequests(input: PrInput, deps: PrDeps): Promise<PanePullRequests> {
-  const key = `${input.paneId}\0${input.chat?.id ?? ""}\0${input.fresh ? 1 : 0}`;
+  const key = `${input.cwd}\0${input.paneId}\0${input.chat?.id ?? ""}\0${input.fresh ? 1 : 0}`;
   const running = inflight.get(key);
   if (running) return running;
   const lookup = read(input, deps).finally(() => inflight.delete(key));
@@ -68,8 +79,13 @@ async function read(input: PrInput, deps: PrDeps): Promise<PanePullRequests> {
   const now = deps.now();
   const sources: ChatSources = input.chat ? await input.chat.read().catch(() => ({ urls: [], branches: [], started_at: null })) : { urls: [], branches: [], started_at: null };
   // a chat's branches are the chat's: resumed in another pane, it keeps them (by pane only with no chat)
-  const timeline = branchTimeline(input.chat ? `chat\0${input.chat.id}` : `pane\0${input.paneId}`, sources, await deps.currentBranch(input.cwd).catch(() => null), now);
-  const linked = sources.urls.length;
+  const current = await deps.currentBranch(input.cwd).catch(() => null);
+  const board = await boardPrContext({ cwd: input.cwd, run: deps.board, fresh: input.fresh, now });
+  const identity = board?.id ?? input.chat?.id ?? input.paneId;
+  const timeline = branchTimeline(`${input.cwd}\0${identity}`, sources, current, now);
+  const proven = new Set(sources.urls.map(({ url }) => url));
+  if (board?.pr) proven.add(board.pr);
+  let linked = proven.size;
   const branchEvents = switches(timeline);
 
   let repo: RepoEntry | undefined = repos.get(input.cwd);
@@ -87,59 +103,69 @@ async function read(input: PrInput, deps: PrDeps): Promise<PanePullRequests> {
     return { gh: repo.status, pull_requests: [], events: inWindow(branchEvents, sources.started_at), linked };
   }
 
-  const fresh = (url: string): PullRequest | null => {
+  let viewer = viewers.get(input.cwd);
+  if (!viewer || input.fresh || now - viewer.at > OPEN_TTL_MS) {
+    viewer = { ...await ghViewer({ run: deps.run, cwd: input.cwd }), at: now };
+    viewers.set(input.cwd, viewer);
+  }
+  if (viewer.login === null) return { gh: viewer.status, pull_requests: [], events: inWindow(branchEvents, sources.started_at), linked };
+  const login = viewer.login.toLowerCase();
+
+  const fresh = (url: string): OwnedPullRequest | null => {
     const hit = prs.get(url);
     if (!hit) return null;
     if (hit.pr.state === "merged" || hit.pr.state === "closed") return hit.pr;
     return input.fresh || now - hit.at > OPEN_TTL_MS ? null : hit.pr;
   };
-  const found = new Map<string, { pr: PullRequest; linked: boolean }>();
+  const found = new Map<string, { pr: OwnedPullRequest; linked: boolean }>();
   // a lookup gh could not answer keeps what was known (stale, but true); with nothing known the answer says so
   let failed = false;
 
   // branch lists only make sense in the pane's own repository
-  if (repo.repo !== null) {
-    for (const branch of new Set(timeline.map((entry) => entry.branch))) {
-      const listKey = `${input.cwd}\0${branch}`;
-      const listed = lists.get(listKey);
-      let urls = listed && !input.fresh && now - listed.at <= OPEN_TTL_MS ? listed.urls : null;
-      if (urls === null) {
-        const pulled = await ghListHead(deps.run, input.cwd, branch, repo.repo);
-        if (pulled === null) {
-          failed = true;
-          urls = listed?.urls ?? [];
-        } else {
-          // a merged or closed PR keeps what it was first read as: it is never read again
-          for (const pr of pulled) if (!ended(prs.get(pr.url)?.pr)) prs.set(pr.url, { pr, at: now });
-          urls = pulled.map((pr) => pr.url);
-          lists.set(listKey, { urls, at: now });
-        }
-      }
-      for (const url of urls) {
-        const pr = fresh(url) ?? prs.get(url)?.pr;
-        if (pr) found.set(url, { pr, linked: false });
+  if (repo.repo !== null && current !== null) {
+    const branch = current;
+    const listKey = `${input.cwd}\0${login}\0${branch}`;
+    const listed = lists.get(listKey);
+    let urls = listed && !input.fresh && now - listed.at <= OPEN_TTL_MS ? listed.urls : null;
+    if (urls === null) {
+      const pulled = await ghListHead({ run: deps.run, cwd: input.cwd, branch, ownRepo: repo.repo });
+      if (pulled === null) {
+        failed = true;
+        urls = listed?.urls ?? [];
+      } else {
+        // a merged or closed PR keeps what it was first read as: it is never read again
+        for (const pr of pulled) if (!ended(prs.get(pr.url)?.pr)) prs.set(pr.url, { pr, at: now });
+        urls = pulled.map((pr) => pr.url);
+        lists.set(listKey, { urls, at: now });
       }
     }
+    for (const url of urls) {
+      const pr = fresh(url) ?? prs.get(url)?.pr;
+      if (pr && pr.head === branch && pr.repo.toLowerCase() === repo.repo.toLowerCase()) found.set(url, { pr, linked: false });
+    }
   }
-  for (const { url } of sources.urls) {
+  for (const url of proven) {
     let pr = fresh(url);
     if (pr === null) {
-      pr = await ghView(deps.run, input.cwd, url, repo.repo);
+      pr = await ghView({ run: deps.run, cwd: input.cwd, url, ownRepo: repo.repo });
       if (pr) prs.set(url, { pr, at: now });
       else {
         failed = true;
         pr = prs.get(url)?.pr ?? null;
       }
     }
-    if (pr) found.set(url, { pr, linked: true });
+    if (pr) {
+      if (pr.author.toLowerCase() !== login) linked -= 1;
+      found.set(url, { pr, linked: true });
+    }
   }
 
-  // a branch reused for months lists PRs that ended before this chat began: only links keep those
-  const started = sources.started_at;
+  // A late close does not make an old reused-branch PR this task's work.
+  const started = board?.started_at ?? sources.started_at;
   const pull_requests = [...found.values()]
-    .filter(({ pr, linked }) => linked || started === null || (pr.merged_at ?? pr.closed_at ?? started) >= started)
+    .filter(({ pr, linked }) => pr.author.toLowerCase() === login && (linked || !ended(pr) || (started !== null && Date.parse(pr.created_at) >= Date.parse(started))))
     // the cache is every chat's: whether a PR is in this pane's own repository is said per answer
-    .map(({ pr }) => ({ ...pr, own: repo.repo !== null && pr.repo.toLowerCase() === repo.repo.toLowerCase() }))
+    .map(({ pr: { author: _author, ...pr } }) => ({ ...pr, own: repo.repo !== null && pr.repo.toLowerCase() === repo.repo.toLowerCase() }))
     .sort(byAttention);
   const events: PrEvent[] = [...branchEvents];
   for (const pr of pull_requests) {
