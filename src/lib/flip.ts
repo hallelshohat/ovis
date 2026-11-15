@@ -31,12 +31,15 @@ export function useFlip(container: RefObject<HTMLElement | null>, attr: string):
       rows.set(key, row);
       after.set(key, row.getBoundingClientRect().top - root.getBoundingClientRect().top);
     }
+    const animations: Animation[] = [];
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!reduced && typeof Element.prototype.animate === "function") {
       for (const [key, delta] of flipDeltas(tops.current, after)) {
-        rows.get(key)!.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], { duration: FLIP_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" });
+        animations.push(rows.get(key)!.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], { duration: FLIP_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" }));
       }
     }
     tops.current = after;
+    // Measure the next layout without an old transform moving a row over a focused control.
+    return () => { for (const animation of animations) animation.cancel(); };
   });
 }
