@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureCodexDelivery, CodexDeliveries } from "./codex-delivery.ts";
-
+import { captureCodexDelivery, CodexDeliveries, codexDeliveryAccepted } from "./codex-delivery.ts";
+import type { CommandTranscript } from "./conversation.ts";
+import { commandTranscriptRecords } from "./outcome.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const header = (id = "native-session") => JSON.stringify({ type: "session_meta", payload: { id } }) + "\n";
@@ -146,4 +147,37 @@ describe("Codex's native delivery records", () => {
     f.append("x".repeat(1024 * 1024));
     expect(await f.tracker.reconcile("p", f.path)).toEqual([]);
   });
+});
+
+const text = "REVIEW_UI_READY: acknowledge this marker and keep waiting.\nSecond line: 한글 👩🏽‍💻";
+const literalUser = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }) + "\n";
+const snapshot = (log: string): CommandTranscript => ({ identity: "same transcript", end: Buffer.byteLength(log), records: commandTranscriptRecords(log) });
+
+it("confirms a fresh canonical user record with exact multiline text", () => {
+  const anchor = snapshot(literalUser);
+  const current = snapshot(literalUser + literalUser);
+  expect(codexDeliveryAccepted({ anchor, current, text })).toBe(true);
+  expect(codexDeliveryAccepted({ anchor, current, text: text.replace("Second line", "Secondline") })).toBe(false);
+});
+
+it("does not reuse an identical historical record or a partial record begun before Enter", () => {
+  expect(codexDeliveryAccepted({ anchor: snapshot(literalUser), current: snapshot(literalUser), text })).toBe(false);
+  expect(codexDeliveryAccepted({ anchor: snapshot(literalUser.slice(0, 50)), current: snapshot(literalUser), text })).toBe(false);
+});
+
+it("does not take assistant acknowledgments or duplicate event echoes as user receipts", () => {
+  const event = JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: text } }) + "\n";
+  const assistant = literalUser.replace('"role":"user"', '"role":"assistant"');
+  for (const echo of [event, assistant]) {
+    expect(codexDeliveryAccepted({ anchor: snapshot(literalUser), current: snapshot(literalUser + echo), text })).toBe(false);
+  }
+});
+
+it("refuses missing, rewritten, replaced or switched transcripts", () => {
+  const anchor = snapshot(literalUser);
+  const current = snapshot(literalUser + literalUser);
+  expect(codexDeliveryAccepted({ anchor: null, current, text })).toBe(false);
+  expect(codexDeliveryAccepted({ anchor, current: null, text })).toBe(false);
+  expect(codexDeliveryAccepted({ anchor, current: { ...current, identity: "another transcript generation" }, text })).toBe(false);
+  expect(codexDeliveryAccepted({ anchor: current, current: anchor, text })).toBe(false);
 });

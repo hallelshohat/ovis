@@ -72,7 +72,7 @@ it("shows a Chat-typed gjc skill's result once its turn ends", async () => {
   spyOn(client, "sessionSnapshot").mockResolvedValue({ panes: [pane], layouts: [], agents: [], workspaces: [], tabs: [], protocol: 22, version: "fixture", focused_workspace_id: null });
   spyOn(client, "paneRead").mockResolvedValue({ ...pane, text: "", source: "detection", format: "text", truncated: false });
   let transcript = "";
-  spyOn(conversation, "readCommandTranscript").mockImplementation(async () => ({ identity: "fixture", records: commandTranscriptRecords(transcript) }));
+  spyOn(conversation, "readCommandTranscript").mockImplementation(async () => ({ identity: "fixture", end: Buffer.byteLength(transcript), records: commandTranscriptRecords(transcript) }));
   const sent = { ...send(), store: null, identity: JSON.stringify([pane.terminal_id, undefined]) };
   noteSubmitted(pane.pane_id, sent.text, sent);
   const poll = async () => {

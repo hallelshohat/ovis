@@ -1,0 +1,16 @@
+◦ Working (21s • esc to interrupt) · 1 background terminal …
+
+• Messages to be submitted after next tool call (press esc
+  to interrupt and send immediately)
+  ↳ CONFIRM_NARROW: acknowledge both lines and continue
+    waiting for the original command.
+    This second line includes enough words to wrap across a
+    …
+
+
+› Ask Codex to do anything
+
+  GPT-6-Astra high · /workspace/confirmation/
+  project ·
+  Run terminal input test
+  ← for agents · ? for shortcuts  ⚠ 3 warnings · f2 to view

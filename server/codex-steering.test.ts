@@ -1,12 +1,43 @@
 import { describe, expect, it } from "bun:test";
-import { agySteeringPending, codexSteeringPending, interruptCodexSteering, type CodexSteeringContext } from "./codex-steering.ts";
+import { readFileSync } from "node:fs";
+import { agySteeringPending, codexComposer, codexSteeringPending, interruptCodexSteering, type CodexSteeringContext } from "./codex-steering.ts";
 
 const hint = "Messages to be submitted after next tool call (press esc to interrupt and send immediately)";
 const frame = (header = hint, composer = "› Ask Codex to do anything") => `› earlier input\n• Working (2s • esc to interrupt)\n• ${header}\n  ↳ send this now\n${composer}\n  gpt-6.1 default · /workspace\n`;
 const working: CodexSteeringContext = { agent: "codex", working: true, screen: "• Working (2s • esc to interrupt)\n› send this now\n" };
 const pending = { ...working, screen: frame() };
+const recorded169 = readFileSync(new URL("./fixtures/codex-chat-parity/0.169.0-steering-wrapped-footer.txt", import.meta.url), "utf8");
+const recordedMessage = "CONFIRM_BACKGROUND: acknowledge this marker and keep waiting.";
 
 describe("Codex's live steering buffer", () => {
+  it("recognizes the recorded empty composer when the model footer wraps its thread title", () => {
+    expect(codexComposer(recorded169)?.empty).toBe(true);
+    expect(codexSteeringPending(recorded169, recordedMessage)).toBe(true);
+  });
+
+  it("ignores background command and tip rows before the native steering header", () => {
+    const screen = frame().replace(`• ${hint}`, `  └ sleep 180\n  └ Tip: Use /rename to rename your threads.\n\n• ${hint}`);
+    expect(codexSteeringPending(screen, "send this now")).toBe(true);
+    expect(codexSteeringPending(screen.replace(`\n• ${hint}`, `\n    • ${hint}`), "send this now")).toBe(false);
+  });
+
+  it("recognizes a recorded narrow pane's wrapped hint, truncated multiline input and four-row footer", () => {
+    const screen = readFileSync(new URL("./fixtures/codex-chat-parity/0.169.0-steering-narrow.txt", import.meta.url), "utf8");
+    const text = "CONFIRM_NARROW: acknowledge both lines and continue waiting for the original command.\nThis second line includes enough words to wrap across a narrow terminal, with exact punctuation: [a] (b) and c.";
+    expect(codexComposer(screen)?.empty).toBe(true);
+    expect(codexSteeringPending(screen, text)).toBe(true);
+    expect(codexSteeringPending(screen, "a different message")).toBe(false);
+  });
+
+  it("never treats a draft or a new screen as a wrapped footer", () => {
+    for (const draft of ["› unsent draft", "›\n  unsent second line", "›\n  gpt-6.1 high · a draft\n  still a draft"]) {
+      expect(codexSteeringPending(recorded169.replace("› Ask Codex to do anything", draft), recordedMessage)).toBe(false);
+    }
+    expect(codexSteeringPending(`${recorded169}\n  Select Model and Effort\n  enter select · esc back\n`, recordedMessage)).toBe(false);
+    expect(codexSteeringPending(recorded169.replace("\n  input test", "\n\n  Select Model and Effort"), recordedMessage)).toBe(false);
+    expect(codexSteeringPending(recorded169.replace("› Ask Codex to do anything\n\n", "›\n  an unsent draft\n\n"), recordedMessage)).toBe(false);
+    expect(codexSteeringPending(recorded169.replace("  input test", "  too many\n  footer\n  continuation\n  rows"), recordedMessage)).toBe(false);
+  });
   it("recognizes the native pending-steering panel beside an empty composer", () => {
     expect(codexSteeringPending(frame(), "send this now")).toBe(true);
     expect(codexSteeringPending(frame(hint, "›"), "send this now")).toBe(true);
@@ -96,6 +127,52 @@ function fixture(contexts: CodexSteeringContext[] = [pending]) {
 }
 
 describe("explicit Codex Send now", () => {
+  it("confirms an already consumed message while Codex is still working without another key", async () => {
+    const f = fixture([{ ...working, screen: frame("Queued follow-up inputs") }]);
+    const io = { ...f.io, accepted: async () => true };
+    await interruptCodexSteering(true, "send this now", working, io);
+    expect(f.effects).toEqual([]);
+  });
+
+  it("accepts a fresh receipt after a prompt guard refuses further input", async () => {
+    const f = fixture();
+    let accepted = false;
+    const io = { ...f.io, accepted: async () => accepted, read: async () => {
+      accepted = true;
+      throw new Error("agent_blocked");
+    } };
+    await interruptCodexSteering(true, "send this now", working, io);
+    expect(f.effects).toEqual([]);
+  });
+
+  it("checks the receipt once more when a slow screen read exhausts the Escape deadline", async () => {
+    const f = fixture();
+    const io = { ...f.io, accepted: async () => f.elapsed() > 1500, read: async () => {
+      f.advance(1501);
+      return working;
+    } };
+    await interruptCodexSteering(true, "send this now", working, io);
+    expect(f.effects).toEqual([]);
+  });
+
+  it("confirms consumption when a stale Escape is withheld instead of sending another key", async () => {
+    const f = fixture();
+    let accepted = false;
+    const io = { ...f.io, accepted: async () => accepted, escape: async () => {
+      accepted = true;
+      throw new Error("cancelled");
+    } };
+    await interruptCodexSteering(true, "send this now", working, io);
+    expect(f.effects).toEqual(["restart gate"]);
+  });
+
+  it("confirms the recorded wrapped-footer panel with one guarded Escape", async () => {
+    const context = { ...working, screen: recorded169 };
+    const f = fixture([context]);
+    await interruptCodexSteering(true, recordedMessage, context, f.io);
+    expect(f.effects).toEqual(["restart gate", "Escape"]);
+    expect(f.reads()).toBe(1);
+  });
   it("arms the restart gate before one Escape on a freshly checked native panel", async () => {
     const f = fixture(); await interruptCodexSteering(true, "send this now", working, f.io);
     expect(f.effects).toEqual(["restart gate", "Escape"]);
