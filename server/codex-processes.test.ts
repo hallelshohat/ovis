@@ -1234,6 +1234,19 @@ describe("Codex unmarked final answers", () => {
     expect(await resolve()).toBeNull();
   });
 
+  heldIt("retries when a competing rollout disappears during the final pane read", async () => {
+    const peer = elsewhereThread(other, records({ prompt: "Inspect a separate deployment.", answer: "Unrelated result." }));
+    const read = herdrClient.paneRead;
+    await loaded(other);
+    let reads = 0;
+    const spy = spyOn(herdrClient, "paneRead").mockImplementation(async (args) => {
+      if (args.paneId === root && ++reads === 2) rmSync(peer);
+      return read(args);
+    });
+    try { expect(await resolve()).toBeNull(); expect(reads).toBeGreaterThan(1); }
+    finally { spy.mockRestore(); }
+  });
+
   for (const samePrompt of [false, true]) {
     heldIt(`weighs an unmarked final answer when a competing prompt outside the tail is ${samePrompt ? "the same" : "different"}`, async () => {
       elsewhereThread(other, [said("user_message", samePrompt ? asked : "Inspect a separate deployment."),
