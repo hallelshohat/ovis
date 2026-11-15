@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import * as files from "node:fs/promises";
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -169,16 +170,31 @@ describe("Codex native command screen ownership", () => {
           .map(({ path }) => codexToolActivityConflict({ screen: shown, segments: [{ path, end: statSync(path).size }] })));
         return conflicts.filter((conflict) => !conflict).length;
       };
+      const slow = screenCount === 4 && total === 32 && !warmed;
+      const originalOpen = files.open;
+      const opened = spyOn(files, "open");
+      if (slow) opened.mockImplementation(async (...args) => {
+        await Bun.sleep(10); // fixed wait: model the reviewer's asynchronous filesystem latency.
+        return originalOpen(...args);
+      });
       try {
         await resetCodexHistoryScans();
         for (const entry of candidates) writeFileSync(entry.path, entry.text);
         if (warmed) for (const shown of screens) expect(await peers(shown)).toBe(total - 1);
+        opened.mockClear();
         const rounds: number[][] = [];
-        for (let round = 0; round < (screenCount > 4 ? 20 : 5); round++) rounds.push(await Promise.all(screens.map(peers)));
+        for (let round = 0; round < (slow || screenCount > 4 ? 20 : 5); round++) {
+          rounds.push(await Promise.all(screens.map(peers)));
+          if (slow) {
+            if (rounds.at(-1)!.every((count) => count === total - 1)) break;
+            await Bun.sleep(2000); // fixed wait: preserve the client's two-second retry cadence from the review probe.
+          }
+        }
         const firstComplete = screens.map((_, index) => rounds.findIndex((round) => round[index] === total - 1) + 1);
         console.log(JSON.stringify({ case: "overlapping tool lookups", screenCount, total, warmed, firstComplete, cleared: screenCount <= 4 ? rounds : undefined }));
         const complete = Array.from({ length: screenCount }, () => total - 1);
         expect(firstComplete.every((round) => round > 0)).toBe(true);
+        if (warmed) expect(opened).not.toHaveBeenCalled();
         if (screenCount <= 4) {
           expect(rounds.at(-1)).toEqual(complete);
           if (warmed) expect(rounds).toEqual(Array.from({ length: 5 }, () => complete));
@@ -190,8 +206,34 @@ describe("Codex native command screen ownership", () => {
         }
       } finally {
         await resetCodexHistoryScans();
+        opened.mockRestore();
         rmSync(root, { recursive: true, force: true });
       }
-    }, 10_000);
+    }, screenCount === 4 && total === 32 && !warmed ? 50_000 : 10_000);
   }
+
+  it("bounds retained screen projections and resets every live screen cache", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-tool-screen-cache-")), path = join(root, "peer.jsonl");
+    const shown = (index: number) => screen.replaceAll("/work/integration", `/work/cache-owner-${index}`);
+    const conflict = (index: number) => codexToolActivityConflict({ screen: shown(index), segments: [{ path, end: statSync(path).size }] });
+    const opened = spyOn(files, "open");
+    try {
+      writeFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated output." } }) + "\n");
+      for (let index = 0; index < 70; index++) expect(await conflict(index)).toBe(false);
+      opened.mockClear();
+      expect(await conflict(69)).toBe(false);
+      expect(opened).not.toHaveBeenCalled();
+      expect(await conflict(0)).toBe(false);
+      expect(opened).toHaveBeenCalledTimes(2);
+      await resetCodexHistoryScans();
+      opened.mockClear();
+      expect(await conflict(69)).toBe(false);
+      expect(await conflict(0)).toBe(false);
+      expect(opened).toHaveBeenCalledTimes(4);
+    } finally {
+      await resetCodexHistoryScans();
+      opened.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
