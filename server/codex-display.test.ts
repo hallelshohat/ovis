@@ -7,6 +7,16 @@ import { answerKeys, parseInteractivePrompt } from "./prompt.ts";
 
 const recording = (name: string) => readFileSync(join(import.meta.dir, "fixtures/codex-chat-parity", name), "utf8");
 
+it("keeps the recorded 0.169 pending message when its footer wraps and background rows precede it", () => {
+  const recorded = recording("0.169.0-steering-wrapped-footer.txt");
+  const text = "CONFIRM_BACKGROUND: acknowledge this marker and keep waiting.";
+  for (const screen of [recorded, recorded.replace("• Messages to be submitted", "  └ sleep 180\n  └ Tip: Use /rename to rename your threads.\n\n• Messages to be submitted")]) {
+    expect(readCodexDisplay({ screen })?.pending_inputs).toEqual([{ text, kind: "steering" }]);
+    expect(readCodexDisplay({ screen })?.status_lines).toEqual([]);
+    expect(codexSteeringPending(screen, text)).toBe(true);
+  }
+});
+
 it("offers the recorded plan confirmation through the prompt card, with an explicit No row", () => {
   const prompt = parseInteractivePrompt("codex", recording("0.167.0-plan.txt"));
   expect(prompt).toMatchObject({ kind: "plan", question: "Implement this plan?" });

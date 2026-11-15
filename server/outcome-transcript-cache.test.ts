@@ -28,6 +28,7 @@ it("shares unchanged snapshots and parses only verified appends within the read 
   try {
     const first = await conversation.readCommandTranscript("viewer-one");
     expect(first?.records).toHaveLength(10_000);
+    expect(first?.end).toBe(Buffer.byteLength(record("old").repeat(10_000)));
     const firstReads = reads.mock.calls.length;
     expect(firstReads).toBeGreaterThan(0);
     parses.mockClear();
@@ -41,6 +42,7 @@ it("shares unchanged snapshots and parses only verified appends within the read 
     expect(bytes).toBeLessThanOrEqual(conversation.TRANSCRIPT_WINDOW_BYTES);
     expect(parses.mock.calls.length).toBeLessThanOrEqual(5);
     expect(grown?.records).toHaveLength(10_001);
+    expect(grown?.end).toBe(first!.end + Buffer.byteLength(record("new")));
     reads.mockClear();
     parses.mockClear();
     expect(await conversation.readCommandTranscript("viewer-one")).toBe(grown);
@@ -70,10 +72,13 @@ it("invalidates rewritten and replaced transcripts and completes a torn tail onl
     const first = await conversation.readCommandTranscript("viewer");
     const next = record("new");
     fs.appendFileSync(path, next.slice(0, 20));
-    expect((await conversation.readCommandTranscript("viewer"))?.records).toHaveLength(1);
+    const partial = await conversation.readCommandTranscript("viewer");
+    expect(partial?.records).toHaveLength(1);
+    expect(partial?.end).toBe(Buffer.byteLength(record("old")) + 20);
     fs.appendFileSync(path, next.slice(20));
     const completed = await conversation.readCommandTranscript("viewer");
     expect(completed?.records.map(({ entry }) => entry.modelId)).toEqual(["old", "new"]);
+    expect(completed?.end).toBe(Buffer.byteLength(record("old") + next));
     expect(await conversation.readCommandTranscript("another-viewer")).toBe(completed);
     fs.writeFileSync(path, record("replacement"));
     const rewritten = await conversation.readCommandTranscript("viewer");

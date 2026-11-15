@@ -1,0 +1,11 @@
+• Working (26s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close
+
+• Messages to be submitted after next tool call (press esc to interrupt and send immediately)
+  ↳ CONFIRM_BACKGROUND: acknowledge this marker and keep waiting.
+
+
+› Ask Codex to do anything
+
+  GPT-6-Astra high · /workspace/confirmation/project · Run terminal
+  input test
+  ← for agents · ? for shortcuts                                                              ⚠ 3 warnings · f2 to view

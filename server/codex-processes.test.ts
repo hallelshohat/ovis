@@ -8,6 +8,7 @@ import { asCodexTitle, codexOpenRollout, codexTranscriptPath, limitCodexHistoryF
 import * as codexModule from "./codex.ts";
 import * as conversationModule from "./conversation.ts";
 import * as processStart from "./process-start.ts";
+import * as herdrClient from "./herdr/client.ts";
 import { processStartedAt } from "./process-start.ts";
 import * as kiro from "./kiro-terminal.ts";
 import { paneTranscript } from "./conversation.ts";
@@ -1130,6 +1131,219 @@ const said = (type: "user_message" | "agent_message", message: string) => ({ typ
 
 /** Real locks and stores, several of them: a budget for a busy machine, not a wait. */
 const heldIt = (name: string, test: () => Promise<void>) => it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(name, test, 20_000);
+
+describe("a resumed Codex chat beside unloaded newer sessions", () => {
+  const successors = ["01a1de4e-df32-79a0-8c2f-000000000001", "01a1de4e-df32-79a0-8c2f-000000000002"];
+
+  async function resumedWithSuccessors(): Promise<string[]> {
+    const child = await runningCodex(true);
+    foreground = [{ pid: child.pid, argv: ["codex", "resume", thread] }];
+    screen = "• Ran bun test\n  └ 12 tests passed\n\n• Working (8m 29s • esc to interrupt)\n› \nGPT-6-Astra high · /project\n? for shortcuts";
+    const folder = join(home, "sessions", "2026", "11", "15");
+    mkdirSync(folder, { recursive: true });
+    const db = new Database(join(home, "state_5.sqlite"));
+    try {
+      return successors.map((id) => {
+        const rollout = join(folder, `rollout-2026-11-15T10-24-33-${id}.jsonl`);
+        writeFileSync(rollout, [
+          { type: "session_meta", payload: { id, session_id: id, cwd: root, source: "cli", thread_source: "user", cli_version: "0.169.0" } },
+          said("user_message", "Review the finished change."),
+          said("agent_message", "The independent review is complete."),
+        ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+        db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, ?, ?, 'cli')")
+          .run(id, rollout, root, Math.ceil(Date.now() / 1000), Math.ceil(Date.now() / 1000));
+        return rollout;
+      });
+    } finally { db.close(); }
+  }
+
+  heldIt("recovers the resumed chat after newer sessions unload, but refuses an active replacement", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    expect(await resolve()).toBe(path);
+    const replacement = await loaded(successors[0]!);
+    expect(await resolve()).toBeNull();
+    replacement.kill();
+    await replacement.exited;
+    expect(await resolve()).toBe(path);
+  });
+
+  heldIt("finds a working chat by rendered commentary despite other loaded conversations", async () => {
+    await resumedWithSuccessors();
+    otherFolderThread();
+    await loaded(thread, other);
+    const commentary = "The preparation jobs passed, including independent cleanup and inventory. The measured speedup remains **1.34×** while the remaining checks continue.";
+    appendFileSync(path, `\n${JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: commentary }] } })}\n`);
+    screen = screen.replace("• Working", `• ${commentary.replaceAll("**", "")}\n\n• Working`);
+    expect(await resolve()).toBe(path);
+    const chat = await conversationModule.paneConversation(root, home);
+    expect(chat.source).toBe("codex-transcript");
+    expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: commentary, phase: "commentary" });
+  });
+
+  heldIt("selects the rendered older conversation after a picker resume instead of stale argv", async () => {
+    await resumedWithSuccessors();
+    const commentary = "The older conversation is checking **its own configuration**, while the original thread remains loaded in the shared Codex daemon.";
+    const active = otherFolderThread([{ type: "agent_message", message: commentary }]);
+    title = shortened;
+    await loaded(thread, other);
+    screen = screen.replace("• Working", `• ${commentary.replaceAll("**", "")}\n\n• Working`);
+    expect(await resolve()).toBe(active);
+    const chat = await conversationModule.paneConversation(root, home);
+    expect(chat.source).toBe("codex-transcript");
+    expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: commentary });
+    expect(chat.turns.flatMap((turn) => turn.parts)).not.toContainEqual({ kind: "text", text: answer });
+  });
+
+  for (const entity of ["&amp;", "&#38;", "&#x26;"]) {
+    heldIt(`refuses rendered entity twins using ${entity}`, async () => {
+      await resumedWithSuccessors();
+      const plain = "The preparation jobs passed, including independent cleanup & inventory. The measured speedup remains 1.34× while the remaining checks continue.";
+      const formatted = plain.replace("1.34×", "**1.34×**");
+      ownThread([said("user_message", "Check this project's preparation jobs."), said("agent_message", formatted.replace("&", entity))]);
+      const twin = otherFolderThread([
+        { type: "user_message", message: "Check another project's preparation jobs." },
+        { type: "agent_message", message: "This is the unrelated conversation's earlier answer." },
+        { type: "agent_message", message: formatted },
+      ]);
+      const db = new Database(join(home, "state_5.sqlite"));
+      try { db.query("UPDATE threads SET cwd = ? WHERE id = ?").run(root, other); }
+      finally { db.close(); }
+      writeFileSync(twin, fs.readFileSync(twin, "utf8").replace(join(root, "elsewhere"), root));
+      await loaded(thread, other);
+      screen = screen.replace("• Working", `• ${plain}\n\n• Working`);
+      expect(await resolve()).toBeNull();
+      await expect(conversationModule.paneConversation(root, home)).rejects.toThrow("no_session_path");
+    });
+  }
+
+  for (const sameFolder of [false, true]) {
+    heldIt(`refuses stale argv after a picker resume in ${sameFolder ? "the same" : "another"} folder`, async () => {
+      await resumedWithSuccessors();
+      const active = otherFolderThread();
+      if (sameFolder) {
+        const db = new Database(join(home, "state_5.sqlite"));
+        try { db.query("UPDATE threads SET cwd = ? WHERE id = ?").run(root, other); }
+        finally { db.close(); }
+        writeFileSync(active, fs.readFileSync(active, "utf8").replace(join(root, "elsewhere"), root));
+      } else title = shortened;
+      await loaded(thread, other);
+      expect(await resolve()).toBeNull();
+      await expect(conversationModule.paneConversation(root, home)).rejects.toThrow("no_session_path");
+    });
+  }
+
+  heldIt("refuses recovery when the resumed thread is no longer loaded", async () => {
+    await resumedWithSuccessors();
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("refuses recovery when a newer rollout is missing or invalid", async () => {
+    const [newer] = await resumedWithSuccessors();
+    await loaded(thread);
+    writeFileSync(newer!, "not a rollout\n");
+    expect(await resolve()).toBeNull();
+    rmSync(newer!);
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("refuses recovery when a loaded thread has no readable store entry", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread, "01a1de4e-df32-79a0-8c2f-000000000003");
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("refuses recovery when the Codex process changes during revalidation", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) foreground = [{ pid: 2147483647, argv: ["codex", "resume", thread] }];
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+
+  heldIt("refuses recovery when a successor loads during revalidation", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation(async (input) => {
+      if (++reads === 2) await loaded(successors[0]!);
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+
+  heldIt("refuses recovery when an older thread loads during revalidation", async () => {
+    await resumedWithSuccessors();
+    otherFolderThread();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation(async (input) => {
+      if (++reads === 2) await loaded(other);
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+
+  heldIt("recovers the chat while Codex's working clock advances", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const ticking = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) screen = screen.replace("8m 29s", "8m 30s");
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBe(path);
+      expect(reads).toBe(2);
+    } finally { ticking.mockRestore(); }
+  });
+
+  heldIt("refuses recovery when the screen changes beyond the working clock", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) screen = "OpenAI Codex (v0.169.0)\n› \nGPT-6-Astra high · /project\n? for shortcuts";
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+
+  heldIt("refuses recovery when the resumed conversation unloads during revalidation", async () => {
+    await resumedWithSuccessors();
+    const holder = await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation(async (input) => {
+      if (++reads === 2) { holder.kill(); await holder.exited; }
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+});
 
 describe("a thread of another folder Codex has loaded, as a resume through the picker leaves it (#896)", () => {
   heldIt("is matched on screen while its answer shows there, with Codex's default title, and never remembered", async () => {
