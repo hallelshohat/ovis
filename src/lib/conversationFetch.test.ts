@@ -669,9 +669,9 @@ describe("conversation invalidation refresh", () => {
       const seen: ConversationResponse[] = [];
       const failures: unknown[] = [];
       let written = false;
-      const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => written
+      const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => written
         ? Response.json({ source: "codex-transcript", history_id: "codex-written", turns: [] })
-        : Response.json({ error: { code: "conversation_read_pending", message: "retry" } }, { status: 503 }));
+        : Response.json({ error: { code: "conversation_read_pending", message: "retry" } }, { status: 503 }), { preconnect: realFetch.preconnect }));
       refresh.setRead(async () => {
         try { seen.push(await fetchPaneConversation(pane)); }
         catch (error) { failures.push(error); }
