@@ -776,9 +776,25 @@ describe("Codex rollout resolution", () => {
       expect(matchCodexTranscript(working("").replace("› Ask Codex to do anything", `› ${wrapped}`), [candidate])).toBeNull();
     });
 
-    it("requires a recognized working composer for the rendered-message match", () => {
+    it("matches idle commentary despite another conversation sharing boilerplate", () => {
+      const other = { path: "other", text: jsonl(message("assistant", raw.split("\n\n")[0]! + "\n\nAn unrelated result from another task.", "commentary")) };
+      const screen = working(`› Finish the verification and report…\n\n• ${wrapped}\n\n• Done.`).replace("• Working (8m 29s • esc to interrupt)", "");
+      expect(matchCodexTranscript(screen, [candidate, other])).toBe(candidate.path);
+      expect(matchCodexTranscript(screen, [other, candidate])).toBe(candidate.path);
+    });
+
+    it("matches an idle table above the turn footer with a clipped prompt", () => {
+      const text = "Adopted in `bcf3808`. The verification measurements are complete.\n\n| Measure | Result |\n|---|---:|\n| Completion time | **5.19× faster** |\n| Actual test CPU | **30.9% less** |\n\nChecks passed; closing note saved. These are measured averages, not per-run guarantees.";
+      const own = { path: "table", text: jsonl(message("assistant", text, "final_answer"), event({ type: "task_complete", last_agent_message: text })) };
+      const shown = "Adopted in bcf3808. The verification measurements are complete.\n\n  Measure          Result\n  Completion time  5.19× faster\n  Actual test CPU  30.9% less\n\n  Checks passed; closing note saved. These are measured averages, not per-run guarantees.";
+      const screen = working(`› Finish the verification and report…\n\n• ${shown}\n\n  Worked for 43m 54s • 12:16`).replace("• Working (8m 29s • esc to interrupt)", "");
+      expect(matchCodexTranscript(screen, [own])).toBe(own.path);
+      expect(matchCodexTranscript(screen, [own, { ...own, path: "twin" }])).toBeNull();
+    });
+
+    it("requires a recognized composer for the rendered-message match", () => {
       const screen = working(`• ${wrapped}`);
-      expect(matchCodexTranscript(screen.replace("• Working (8m 29s • esc to interrupt)", ""), [candidate])).toBeNull();
+      expect(matchCodexTranscript(screen.replace("• Working (8m 29s • esc to interrupt)", ""), [candidate])).toBe(candidate.path);
       expect(matchCodexTranscript(screen.replace("GPT-6-Astra high · /project", "unrecognized footer"), [candidate])).toBeNull();
     });
   });

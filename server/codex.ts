@@ -22,6 +22,9 @@ import { codexComposer, FOOTER } from "./codex-steering.ts";
 import { codexStartScreenUnused } from "./start-screen.ts";
 import { codexDisplayEvent, codexNativeItem } from "./codex-items.ts";
 import { codexInputSessions } from "../shared/codex-chunks.ts";
+import { codexToolActivityConflict, hasCodexToolActivity, matchCodexToolActivity } from "./codex-tool-match.ts";
+import { deepStrings, stringsIn } from "../shared/json-text.ts";
+import { ENTITY, ENTITY_STEPS, throughEntities } from "../shared/entity-text.ts";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
@@ -1394,7 +1397,11 @@ function shownForms(text: string): string[] {
  * show): Codex draws some answers so that no stretch of the screen is in their record, its words in another order
  * or said again (a table's rows as records, its cells wrapped side by side, a named entity as a letter).
  */
-function saidAnywhere(rollout: string, letters: string, bare: string, words: readonly string[] | null = null): boolean {
+function saidAnywhere({ rollout, letters, bare, words = null, whole = false }: {
+  rollout: string; letters: string; bare: string; words?: readonly string[] | null; whole?: boolean;
+}): boolean {
+  // each record's text as readSaid keeps one (its pieces between link targets, whole where it has a link, its named
+  // entities as ENTITY, but for those that are signs), and where each record ends in it
   let said = "";
   const ends: number[] = [];
   let stripped = "";
@@ -1413,7 +1420,9 @@ function saidAnywhere(rollout: string, letters: string, bare: string, words: rea
     else if (line.trim() !== "") for (const text of new Set([line, unescaped(line), unescaped(unescaped(line))])) weigh(text);
     if (said.length > (ends.at(-1) ?? 0)) ends.push(said.length);
   }
-  return holdsStretch(said, letters) || holdsStretch(stripped, bare) || words !== null && mayShowWords(words, { text: said, ends });
+  const held = whole ? letters !== "" && said.includes(letters) || bare !== "" && stripped.includes(bare)
+    : holdsStretch(said, letters) || holdsStretch(stripped, bare);
+  return held || words !== null && mayShowWords(words, { text: said, ends });
 }
 
 /**
@@ -1484,12 +1493,14 @@ function toldOf(candidate: Candidate): Told {
 
 const underWay = (candidate: Candidate, whole: (path: string) => boolean): boolean => turnOf(candidate) ?? !whole(candidate.path);
 
-function saidBy(candidate: Candidate, letters: string, bare: string, words: readonly string[] | null): boolean {
+function saidBy({ candidate, letters, bare, words, whole = false }: {
+  candidate: Candidate; letters: string; bare: string; words: readonly string[] | null; whole?: boolean;
+}): boolean {
   const { said } = factsOf(candidate);
-  const asked = `${letters}\0${bare}\0${words === null ? "" : words.join(" ")}`;
+  const asked = `${whole}\0${letters}\0${bare}\0${words === null ? "" : words.join(" ")}`;
   let known = said.get(asked);
   if (known === undefined) {
-    known = saidAnywhere(candidate.text, letters, bare, words);
+    known = saidAnywhere({ rollout: candidate.text, letters, bare, words, whole });
     said.set(asked, known);
     if (said.size > 8) said.delete(said.keys().next().value!);
   }
@@ -1499,7 +1510,8 @@ function saidBy(candidate: Candidate, letters: string, bare: string, words: read
 const saidInLeads = new Map<string, boolean>();
 function saidInLead(lead: string, letters: string, bare: string, words: readonly string[] | null): boolean {
   const asked = `${lead.length}:${Bun.hash(lead)}\0${letters}\0${bare}\0${words === null ? "" : words.join(" ")}`;
-  const known = saidInLeads.get(asked) ?? saidAnywhere(lead, letters, bare, words);
+  const known = saidInLeads.get(asked) ?? saidAnywhere({ rollout: lead, letters, bare, words });
+  // the most recently asked last, the oldest dropped
   saidInLeads.delete(asked);
   saidInLeads.set(asked, known);
   if (saidInLeads.size > 256) saidInLeads.delete(saidInLeads.keys().next().value!);
@@ -1554,7 +1566,7 @@ export function footedTailTranscript(screen: string, candidates: { path: string;
   // (its letters alone, outside parentheses, as `bare` is read: a list Codex numbers itself shows figures its record
   // does not hold, and what Codex draws in parentheses after a link may be in no record, a "mailto:")
   const words = footed === null ? wordsEnding(withoutParens(drawn), anchor.length, /[^\p{L}]+/u) : null;
-  if (candidates.some((candidate) => candidate.path !== own.path && saidBy(candidate, anchor, bare, words))) return null;
+  if (candidates.some((candidate) => candidate.path !== own.path && saidBy({ candidate, letters: anchor, bare, words }))) return null;
   return leads().some((lead) => lead.path !== own.path && saidInLead(lead.text, anchor, bare, words)) ? null : own.path;
 }
 
@@ -1764,9 +1776,8 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       : codexScreenParts(lastHeader >= 0 ? text.slice(lastHeader) : text).filter((part) => !part.prompt && !part.tool).map((part) => part.text);
   };
   const answerParts = partsOf(screen);
-  // Working commentary has no finished-turn footer; its complete rendered block can still match.
+  // Complete commentary also remains visible after the composer becomes idle.
   const composer = codexComposer(screen);
-  const working = composer !== null && composer.status >= 0;
   const texts = blocks ? answerParts : [answerParts.join("\n")];
   const displays = texts.map(normalizeDisplay);
   const wholeBlocks = answerParts.flatMap(shownBlocks);
@@ -1791,12 +1802,14 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       if (found === null || !displays.some((display) => display.includes(found.anchor))) return [];
       if (wholeBlocks.some((block) => found.whole.test(markedDisplay(block)))
         || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) return [found];
-      if (!working) return [];
-      const rendered = wholeBlocks.find((block) => completedAnswerMatches(text, block));
+      if (composer === null) return [];
+      const clippedFooter = footed !== null && footed.rows.some((row) => row.trimEnd().endsWith("…"))
+        && (footerOwners === null || footerOwners.has(candidate.path)) && endedOn(candidate) === text && completedAnswerMatches(text, footed.text);
+      const rendered = wholeBlocks.find((block) => completedAnswerMatches(text, block)) ?? (clippedFooter ? footed!.text : undefined);
       if (rendered === undefined) return [];
       // A raw anchor can miss an equivalent entity spelling; it must still compete with a rendered match.
-      const letters = normalizeDisplay(rendered), bare = bareLetters(rendered), words = wordsEnding(rendered, found.anchor.length);
-      if (candidates.some((other) => other.path !== candidate.path && saidBy(other, letters, bare, words))) open = true;
+      const letters = normalizeDisplay(rendered), bare = bareLetters(rendered), words = wordsEnding(rendered, letters.length);
+      if (candidates.some((other) => other.path !== candidate.path && saidBy({ candidate: other, letters, bare, words, whole: true }))) open = true;
       return [found];
     });
     if (anchors.length === 0) continue;
@@ -1860,34 +1873,7 @@ function mayShowWords(words: readonly string[], { text, ends }: Said): boolean {
       const said = text.slice(record > 0 ? ends[record - 1]! : 0, ends[record]!);
       weighed += said.length;
       if (weighedRecords.size > WORD_CHECKS || weighed > WORD_BUDGET) return true;
-      if (longest.every((word) => said.includes(word) || (said.includes(ENTITY) && throughEntities(said, word, steps)))) return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Where a record's text has a named entity (`&eacute;`), the form readSaid keeps of it has this in
- * its place: Codex shows it as up to a few letters (a ligature, an accented letter) or none.
- */
-const ENTITY = "\uE000";
-
-const ENTITY_STEPS = 1 << 20;
-
-function throughEntities(text: string, word: string, steps: { left: number }): boolean {
-  for (let entity = text.indexOf(ENTITY); entity >= 0; entity = text.indexOf(ENTITY, entity + 1)) {
-    for (let start = Math.max(0, entity - word.length); start <= entity; start++) {
-      let reached = new Set([0]);
-      for (let at = start; at < text.length && reached.size > 0 && at - start <= 4 * word.length; at++) {
-        if (--steps.left < 0) return true;
-        const next = new Set<number>();
-        for (const done of reached) {
-          if (text[at] === ENTITY) for (let more = 0; more <= 3 && done + more <= word.length; more++) next.add(done + more);
-          else if (word[done] === text[at]) next.add(done + 1);
-        }
-        if (next.has(word.length)) return true;
-        reached = next;
-      }
+      if (longest.every((word) => said.includes(word) || (said.includes(ENTITY) && throughEntities({ text: said, word, steps })))) return true;
     }
   }
   return false;
@@ -2446,21 +2432,11 @@ interface SaidScan {
 }
 const saidScans = new Map<string, SaidScan>();
 
-const stringsIn = (value: unknown): string[] => typeof value === "string" ? [value]
-  : value !== null && typeof value === "object" ? Object.values(value).flatMap(stringsIn) : [];
-
 function tailSaid(text: string): string {
   return text.split("\n").flatMap((line) => deepStrings(parseJson(line)).flatMap(saidText)).join("");
 }
 
 const parseJson = (json: string): unknown => { try { return JSON.parse(json); } catch { return undefined; } };
-
-/**
- * Every string in a value, however deep, and those of JSON a string holds: a tool call's arguments
- * are JSON in a string, whose escapes (a "\n") would read as letters.
- */
-const deepStrings = (value: unknown): string[] => stringsIn(value)
-  .flatMap((string) => /^\s*[[{]/.test(string) ? [string, ...deepStrings(parseJson(string))] : [string]);
 
 /** What a completed item holds of its output, which a screen shows below an indented "\u2514 " if at all. */
 const ITEM_OUTPUTS = new Set(["aggregated_output", "formatted_output", "output", "result", "stdout", "stderr", "model_context"]);
@@ -3556,6 +3532,14 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
       return tied.found;
     }
   }
+  if (screen !== null && !agent.nestedTerminal && !agent.unlabelled && open.size === 0
+    && !codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))
+    && hasCodexToolActivity(screen.text)) {
+    const found = await loadedToolConversation({ paneId, processes, screen: screen.text, home });
+    // Tool evidence is never remembered; a picker resume can leave the previous thread loaded.
+    boundRollouts.delete(paneId);
+    return found;
+  }
   const unsure = [...new Set([...boundNewer, ...(resumedPath !== null ? resumedNewer : [])])];
   if (unsure.length > 0) {
     const own = [boundHere?.path, resumedPath].filter((path): path is string => typeof path === "string");
@@ -3597,6 +3581,30 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   if (codexProcesses.length === 0 || open.size > 0
     || codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) return null;
   return loadedConversation((screen ?? await paneRead({ paneId, source: "recent", lines: 400, stripAnsi: true })).text, paths, home);
+}
+
+async function loadedToolConversation({ paneId, processes, screen, home }: {
+  paneId: string; processes: string; screen: string; home: string;
+}): Promise<string | null> {
+  try {
+    const loaded = await loadedRollouts(home);
+    if (loaded === null) return null;
+    const files = new Map([...loaded.values()].flatMap(({ segments }) => segments.map(({ path }) => [path, statSync(path)] as const)));
+    if ([...loaded].some(([path, { segments }]) => segments.at(-1)?.end !== files.get(path)?.size)) return null;
+    const candidates = [...loaded.keys()].map((path) => ({ path, text: historyTailWithLead(path, 1024 * 1024, home).text }));
+    const found = matchCodexToolActivity({ screen, candidates });
+    if (found === null || !loaded.get(found)?.offered) return null;
+    for (const [path, { segments }] of loaded) {
+      if (path !== found && await codexToolActivityConflict({ screen, segments })) return null;
+    }
+    if (!await stillAsWeighed(paneId, processes, screen, home, new Set(loaded.keys()))) return null;
+    for (const [path, before] of files) {
+      const now = statSync(path);
+      if (now.ino !== before.ino || now.dev !== before.dev || now.size !== before.size || now.mtimeMs !== before.mtimeMs || now.ctimeMs !== before.ctimeMs) return null;
+    }
+    const now = await loadedRollouts(home);
+    return now?.get(found)?.offered && [...now.keys()].every((path) => loaded.has(path)) ? found : null;
+  } catch { return null; }
 }
 
 /** A picker resume can leave the argv thread loaded beside an older thread from any folder. */
