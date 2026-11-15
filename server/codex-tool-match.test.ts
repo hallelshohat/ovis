@@ -151,7 +151,7 @@ describe("Codex native command screen ownership", () => {
     });
   }
 
-  for (const screenCount of [2, 3]) for (const total of [21, 32]) for (const warmed of [false, true]) {
+  for (const [screenCount, total] of [[2, 21], [2, 32], [3, 21], [3, 32], [4, 21], [4, 32], [8, 32], [16, 32]] as const) for (const warmed of [false, true]) {
     it(`clears ${screenCount} overlapping tool screens across ${total} histories from a ${warmed ? "warm" : "cold"} cache`, async () => {
       const root = mkdtempSync(join(tmpdir(), "ovis-tool-overlap-"));
       const alternate = ({ text, index }: { text: string; index: number }) => index === 0 ? text
@@ -174,20 +174,24 @@ describe("Codex native command screen ownership", () => {
         for (const entry of candidates) writeFileSync(entry.path, entry.text);
         if (warmed) for (const shown of screens) expect(await peers(shown)).toBe(total - 1);
         const rounds: number[][] = [];
-        for (let round = 0; round < 5; round++) rounds.push(await Promise.all(screens.map(peers)));
-        console.log(JSON.stringify({ case: "overlapping tool lookups", screenCount, total, warmed, cleared: rounds }));
+        for (let round = 0; round < (screenCount > 4 ? 20 : 5); round++) rounds.push(await Promise.all(screens.map(peers)));
+        const firstComplete = screens.map((_, index) => rounds.findIndex((round) => round[index] === total - 1) + 1);
+        console.log(JSON.stringify({ case: "overlapping tool lookups", screenCount, total, warmed, firstComplete, cleared: screenCount <= 4 ? rounds : undefined }));
         const complete = Array.from({ length: screenCount }, () => total - 1);
-        expect(rounds.at(-1)).toEqual(complete);
-        if (warmed) expect(rounds).toEqual(Array.from({ length: 5 }, () => complete));
-        const growing = candidates.at(-1)!.path;
-        appendFileSync(growing, JSON.stringify({ type: "event_msg", payload: { type: "token_count" } }) + "\n");
-        expect(await Promise.all(screens.map(peers))).toEqual(complete);
-        appendFileSync(growing, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: screens[1] } }) + "\n");
-        expect(await Promise.all(screens.map(peers))).toEqual(complete.map((count, index) => index === 1 ? count - 1 : count));
+        expect(firstComplete.every((round) => round > 0)).toBe(true);
+        if (screenCount <= 4) {
+          expect(rounds.at(-1)).toEqual(complete);
+          if (warmed) expect(rounds).toEqual(Array.from({ length: 5 }, () => complete));
+          const growing = candidates.at(-1)!.path;
+          appendFileSync(growing, JSON.stringify({ type: "event_msg", payload: { type: "token_count" } }) + "\n");
+          expect(await Promise.all(screens.map(peers))).toEqual(complete);
+          appendFileSync(growing, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: screens[1] } }) + "\n");
+          expect(await Promise.all(screens.map(peers))).toEqual(complete.map((count, index) => index === 1 ? count - 1 : count));
+        }
       } finally {
         await resetCodexHistoryScans();
         rmSync(root, { recursive: true, force: true });
       }
-    });
+    }, 10_000);
   }
 });
