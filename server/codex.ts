@@ -1774,6 +1774,9 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       : codexScreenParts(lastHeader >= 0 ? text.slice(lastHeader) : text).filter((part) => !part.prompt && !part.tool).map((part) => part.text);
   };
   const answerParts = partsOf(screen);
+  // Working commentary has no finished-turn footer; its complete rendered block can still match.
+  const composer = codexComposer(screen);
+  const working = composer !== null && composer.status >= 0;
   const texts = blocks ? answerParts : [answerParts.join("\n")];
   const displays = texts.map(normalizeDisplay);
   const screenBlocks = answerParts.flatMap(shownBlocks);
@@ -1800,7 +1803,7 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
     const anchors = answersOf(parsed[index]!.slice(-100)).slice(-8).flatMap((text) => {
       const found = answerAnchor(text);
       return found !== null && displays.some((display) => display.includes(found.anchor))
-        && (wholeBlocks.some((block) => found.whole.test(block))
+        && (wholeBlocks.some((block) => found.whole.test(markedDisplay(block)) || working && completedAnswerMatches(text, block))
           // Commentary may contain Markdown while tools are still running, so no
           // completed-turn footer exists yet. A whole rendered message is the
           // same substantial evidence as a whole plain one, never just a suffix.
