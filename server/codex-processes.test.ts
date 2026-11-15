@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
+import * as asyncFiles from "node:fs/promises";
 import { appendFileSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { asCodexTitle, codexOpenRollout, codexTranscriptPath, limitCodexHistoryForTests } from "./codex.ts";
 import * as codexModule from "./codex.ts";
 import * as conversationModule from "./conversation.ts";
@@ -1062,6 +1064,188 @@ heldIt("retries an unwritten Codex rollout after an agent switch and ignores sta
   expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: answer });
   reportedSession = { agent: "codex", kind: "id", value: thread, source: "herdr:codex" };
   expect((await ask()).history_id).toBe(chat.history_id);
+});
+
+describe("Codex unmarked final answers", () => {
+  const asked = "Describe the migration steps and their acceptance checks.";
+  const reply = "A **complete** plan; see [guide](/work/guide.md).\n\n1. **Carry the baseline.**\n\n   Rebuild all access rules before the final checks.\n\n2. Verify the result.\n\n   Compare every region and record the outcome.\n\nAll consumers keep the current behavior until these steps pass.";
+  const rendered = reply.replaceAll("**", "").replace("[guide](/work/guide.md)", "guide (/work/guide.md)");
+  const records = ({ prompt, answer }: { prompt: string; answer: string }) => [said("user_message", prompt), said("agent_message", answer),
+    { type: "event_msg", payload: { type: "item_completed", turn_id: "turn-1", item: { type: "UserMessage", content: [{ type: "input_text", text: prompt }] } } },
+    { type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: answer } }];
+
+  async function recovered(): Promise<string | null> {
+    const deadline = performance.now() + 5000;
+    while (performance.now() < deadline) {
+      const found = await resolve();
+      if (found !== null) return found;
+      await setImmediate();
+    }
+    return null;
+  }
+
+  beforeEach(() => {
+    foreground = [{ pid: 2147483400, argv: ["codex"] }];
+    ownThread(records({ prompt: asked, answer: reply }));
+    screen = `› ${asked}\n${rendered.split("\n").map((row) => `  ${row}`).join("\n")}\n\n  Worked for 7m 18s • 15:15\n\n› Ask Codex to do anything\n  GPT-6-Astra high · /work\n  ← for agents · ? for shortcuts`;
+  });
+
+  heldIt("recovers an unmarked final answer on a fresh lookup and after soft wrapping", async () => {
+    expect(await resolve()).toBe(path);
+    screen = screen.replace("acceptance checks.", "acceptance\n  checks.").replace("current behavior", "current be\n  havior");
+    expect(await resolve()).toBe(path);
+    const chat = await conversationModule.paneConversation(root, home);
+    expect(chat.source).toBe("codex-transcript");
+    expect(chat.turns.flatMap((turn) => turn.parts).some((part) => part.kind === "text" && part.text === reply)).toBe(true);
+  });
+
+  heldIt("recovers an unmarked final answer whose leading heading Codex omits", async () => {
+    ownThread(records({ prompt: asked, answer: `## Plan\n\n${reply.replace("(/work/guide.md)", "(</work/guide.md>)")}` }));
+    expect(await resolve()).toBe(path);
+    elsewhereThread(other, records({ prompt: asked, answer: `## Another plan\n\n${reply}` }));
+    await loaded(other);
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("refuses an unmarked answer when a loaded prompt quotes the whole apparent exchange", async () => {
+    elsewhereThread(other, records({ prompt: `${asked}\n${rendered}`, answer: "A different answer." }));
+    await loaded(other);
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("refuses an unmarked answer with a competing prompt or equivalent rendered reply", async () => {
+    elsewhereThread(other, records({ prompt: asked, answer: reply.replace("complete", "compl&#101;te") }));
+    await loaded(other);
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("recovers a clipped unmarked answer under a pinned prompt", async () => {
+    screen = screen.replace("  A complete plan; see guide (/work/guide.md).", "  guide (/work/guide.md).");
+    expect(await resolve()).toBe(path);
+    screen = screen.replace("current behavior", "current be\n  havior");
+    expect(await resolve()).toBe(path);
+    elsewhereThread(other, records({ prompt: asked, answer: `A different introduction.\n\n${reply.slice(reply.indexOf("1."))}` }));
+    await loaded(other);
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("preserves operators and the exact end of a clipped unmarked reply", async () => {
+    ownThread(records({ prompt: asked, answer: `${reply}\n\nRun a && b to verify both checks.` }));
+    screen = screen.replace("  A complete plan; see guide (/work/guide.md).", "  guide (/work/guide.md).")
+      .replace("\n\n  Worked", "\n  Run a || b to verify both checks.\n\n  Worked");
+    expect(await resolve()).toBeNull();
+    screen = screen.replace("a || b", "a && b");
+    expect(await resolve()).toBe(path);
+    screen = screen.replace("verify both checks.", "verify both checks");
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("recovers its own prompt before the tail window and rechecks after reset", async () => {
+    const exchange = records({ prompt: asked, answer: reply });
+    ownThread([...exchange.slice(0, -1), { type: "event_msg", payload: { type: "token_count", padding: "x".repeat(2 * 1024 * 1024) } }, exchange.at(-1)!]);
+    expect(await resolve()).toBe(path);
+    codexModule.forgetAllCodexState();
+    expect(await resolve()).toBe(path);
+  });
+
+  heldIt("recovers after more than sixteen MiB of older prompts without retaining superseded turns", async () => {
+    const old = Array.from({ length: 5 }, (_, at) => records({ prompt: "Historical requirements. " + "x".repeat(2 * 1024 * 1024), answer: "Earlier work finished." })
+      .map((entry) => ({ ...entry, payload: { ...entry.payload, turn_id: `old-${at}` } }))).flat();
+    ownThread([...old, ...records({ prompt: asked, answer: reply })]);
+    expect(statSync(path).size).toBeGreaterThan(16 * 1024 * 1024);
+    expect(await recovered()).toBe(path);
+  });
+
+  heldIt("does not let a verified brand-new peer hide an unmarked final conversation", async () => {
+    const peer = elsewhereThread(other, [{ type: "event_msg", payload: { type: "token_count", padding: "x".repeat(2 * 1024 * 1024) } }]);
+    await loaded(other);
+    expect(await resolve()).toBe(path);
+    appendFileSync(peer, JSON.stringify(said("user_message", asked)) + "\n");
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("reads the pinned prompt from an inherited rollout and refuses a missing parent", async () => {
+    const exchange = records({ prompt: asked, answer: reply });
+    const earlier = elsewhereThread(other, exchange.slice(0, -1));
+    const folder = join(home, "sessions", "2026", "11", "15");
+    mkdirSync(folder, { recursive: true });
+    const parent = join(folder, `rollout-${other}.jsonl`);
+    fs.renameSync(earlier, parent);
+    writeFileSync(path, [
+      { type: "session_meta", payload: { id: thread, cwd: root, history_base: { thread_id: other, end_ordinal_exclusive: 4, end_byte_offset: statSync(parent).size } } },
+      { type: "event_msg", payload: { type: "token_count", padding: "x".repeat(2 * 1024 * 1024) } }, exchange.at(-1)!,
+    ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+    expect(await resolve()).toBe(path);
+    rmSync(parent);
+    codexModule.forgetAllCodexState();
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("retries the unchanged screen after bounded scans warm every peer", async () => {
+    const peer = elsewhereThread(other, records({ prompt: "Inspect a separate deployment.", answer: "Unrelated result." }));
+    await loaded(other);
+    const gate = Promise.withResolvers<void>();
+    const opened = new Set<string>();
+    const original = asyncFiles.open;
+    const spy = spyOn(asyncFiles, "open").mockImplementation(async (...args) => {
+      if (args[0] === peer || args[0] === path) { opened.add(args[0]); await gate.promise; }
+      return original(...args);
+    });
+    try {
+      const started = performance.now();
+      expect(await resolve()).toBeNull();
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect(opened).toEqual(new Set([path, peer]));
+      gate.resolve();
+      expect(await recovered()).toBe(path);
+    } finally { gate.resolve(); spy.mockRestore(); }
+  });
+
+  heldIt("waits for a partially appended peer record and reuses the completed prompt evidence", async () => {
+    const peer = elsewhereThread(other, records({ prompt: "Inspect a separate deployment.", answer: "Unrelated result." }));
+    await loaded(other);
+    expect(await resolve()).toBe(path);
+    appendFileSync(peer, '\n{"type":"event_msg","payload":');
+    expect(await resolve()).toBeNull();
+    appendFileSync(peer, '{"type":"token_count"}}\n');
+    expect(await resolve()).toBe(path);
+    appendFileSync(peer, JSON.stringify(said("user_message", asked)) + "\n");
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("rejects a matching peer prompt appended during the final pane read", async () => {
+    const peer = elsewhereThread(other, records({ prompt: "Inspect a separate deployment.", answer: "Unrelated result." }));
+    await loaded(other);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const spy = spyOn(herdrClient, "paneRead").mockImplementation(async (args) => {
+      if (args.paneId === root && ++reads === 2) appendFileSync(peer, JSON.stringify(said("user_message", asked)) + "\n");
+      return read(args);
+    });
+    try { expect(await resolve()).toBeNull(); expect(reads).toBeGreaterThan(1); }
+    finally { spy.mockRestore(); }
+    expect(await resolve()).toBeNull();
+  });
+
+  for (const samePrompt of [false, true]) {
+    heldIt(`weighs an unmarked final answer when a competing prompt outside the tail is ${samePrompt ? "the same" : "different"}`, async () => {
+      elsewhereThread(other, [said("user_message", samePrompt ? asked : "Inspect a separate deployment."),
+        { type: "event_msg", payload: { type: "token_count", padding: "x".repeat(2 * 1024 * 1024) } }]);
+      await loaded(other);
+      expect(await resolve()).toBe(samePrompt ? null : path);
+    });
+  }
+
+  heldIt("refuses unmarked final evidence after the pane resumes or its screen changes", async () => {
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const spy = spyOn(herdrClient, "paneRead").mockImplementation(async (args) => {
+      if (args.paneId === root && ++reads === 2) screen = screen.replace("Ask Codex to do anything", "A different session");
+      return read(args);
+    });
+    try { expect(await resolve()).toBeNull(); expect(reads).toBeGreaterThan(1); }
+    finally { spy.mockRestore(); }
+  });
 });
 
 describe("a resumed Codex chat beside unloaded newer sessions", () => {
