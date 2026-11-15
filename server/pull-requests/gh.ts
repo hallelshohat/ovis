@@ -3,11 +3,13 @@
  * `Run`, so tests answer with fixtures and never reach GitHub. `null` from a run means the program
  * is not installed.
  */
+import { z } from "zod";
 import type { GhStatus, PrCheck, PrChecks, PrReview, PrState, PullRequest } from "../../shared/pull-requests.ts";
 
 export type Run = (argv: string[], cwd: string, timeoutMs: number) => Promise<{ code: number; stdout: string; stderr: string } | null>;
 
-export const GH_FIELDS = "number,url,title,state,isDraft,reviewDecision,reviewRequests,headRefName,baseRefName,additions,deletions,createdAt,mergedAt,closedAt,updatedAt,statusCheckRollup";
+export const GH_FIELDS = "number,url,title,state,isDraft,reviewDecision,reviewRequests,headRefName,baseRefName,additions,deletions,createdAt,mergedAt,closedAt,updatedAt,statusCheckRollup,author";
+export type OwnedPullRequest = PullRequest & { author: string };
 export const GH_TIMEOUT_MS = 10_000;
 const MAX_OUTPUT = 4 * 1024 * 1024;
 
@@ -107,11 +109,24 @@ export async function ghRepo(run: Run, cwd: string): Promise<{ status: GhStatus;
   return repo ? { status: "ok", repo } : { status: "error", repo: null };
 }
 
-export async function ghView(run: Run, cwd: string, url: string, ownRepo: string | null): Promise<PullRequest | null> {
+const authorSchema = z.object({ login: z.string().min(1) });
+const ownershipSchema = z.looseObject({
+  author: authorSchema, headRefName: z.string().min(1), createdAt: z.iso.datetime({ offset: true }),
+  url: z.string().regex(/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*$/),
+});
+
+export async function ghViewer({ run, cwd }: { run: Run; cwd: string }): Promise<{ status: GhStatus; login: string | null }> {
+  const result = await run(["gh", "api", "user"], cwd, GH_TIMEOUT_MS);
+  if (!result || result.code !== 0) return { status: failure(result), login: null };
+  const parsed = authorSchema.safeParse(safeJson(result.stdout));
+  return parsed.success ? { status: "ok", login: parsed.data.login } : { status: "error", login: null };
+}
+
+export async function ghView({ run, cwd, url, ownRepo }: { run: Run; cwd: string; url: string; ownRepo: string | null }): Promise<OwnedPullRequest | null> {
   const result = await run(["gh", "pr", "view", url, "--json", GH_FIELDS], cwd, GH_TIMEOUT_MS);
   if (result === null || result.code !== 0) return null;
-  const raw = safeJson(result.stdout);
-  return raw === null ? null : toPullRequest(raw, ownRepo);
+  const parsed = ownershipSchema.safeParse(safeJson(result.stdout));
+  return parsed.success && parsed.data.url === url ? { ...toPullRequest(parsed.data, ownRepo), author: parsed.data.author.login } : null;
 }
 
 export const LIST_LIMIT = 50;
@@ -122,13 +137,13 @@ export const LIST_LIMIT_MAX = 1000;
  * again for four times as many, up to LIST_LIMIT_MAX. null when gh could not say (an empty list
  * means it has none).
  */
-export async function ghListHead(run: Run, cwd: string, branch: string, ownRepo: string | null): Promise<PullRequest[] | null> {
+export async function ghListHead({ run, cwd, branch, ownRepo }: { run: Run; cwd: string; branch: string; ownRepo: string | null }): Promise<OwnedPullRequest[] | null> {
   for (let limit = LIST_LIMIT; ; limit = Math.min(limit * 4, LIST_LIMIT_MAX)) {
-    const result = await run(["gh", "pr", "list", "--head", branch, "--state", "all", "--limit", String(limit), "--json", GH_FIELDS], cwd, GH_TIMEOUT_MS);
+    const result = await run(["gh", "pr", "list", "--head", branch, "--author", "@me", "--state", "all", "--limit", String(limit), "--json", GH_FIELDS], cwd, GH_TIMEOUT_MS);
     if (result === null || result.code !== 0) return null;
-    const raw = safeJson(result.stdout);
-    if (!Array.isArray(raw)) return null;
-    if (raw.length < limit || limit >= LIST_LIMIT_MAX) return raw.map((item) => toPullRequest(item, ownRepo));
+    const parsed = z.array(ownershipSchema).safeParse(safeJson(result.stdout));
+    if (!parsed.success) return null;
+    if (parsed.data.length < limit || limit >= LIST_LIMIT_MAX) return parsed.data.map((item) => ({ ...toPullRequest(item, ownRepo), author: item.author.login }));
   }
 }
 
