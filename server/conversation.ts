@@ -2524,7 +2524,12 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
           const fresh = await codexFreshSession(paneId, [pane.cwd ?? "", pane.foreground_cwd ?? ""], codexHome, text);
           if (fresh !== null) return await notBegun("codex-transcript", fresh, screen);
         }
-        if (screen.model !== null) throw new ConversationUnavailable(error.message, screen);
+        if (screen.model !== null && error.message !== "no_session_path" && error.message !== "no_session_id") throw new ConversationUnavailable(error.message, screen);
+      }
+      // A missing binding can recover on the next lookup; only the proven fresh session above is empty.
+      if (pane.agent === "codex" && (error.message === "no_session_path" || error.message === "no_session_id")) {
+        if (page.before !== undefined || page.since !== undefined || page.from !== undefined) throw new HistoryChanged();
+        throw new ConversationReadPending();
       }
       if (pane.agent === "agy" && error.message === "no_session_path" && page.before === undefined && page.since === undefined && page.from === undefined && pane.agent_status !== "working" && pane.agent_status !== "blocked") {
         const fresh = await agyFreshSession(pane, await bottomViewport(paneId));

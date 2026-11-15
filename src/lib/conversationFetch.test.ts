@@ -660,6 +660,36 @@ function pushedRefresh(): ConversationRefresh {
 }
 
 describe("conversation invalidation refresh", () => {
+  for (const pushes of [false, true]) {
+    it(`retries an initially missing Codex conversation with pushes ${pushes ? "enabled" : "disabled"}`, async () => {
+      const clock = refreshClock();
+      const refresh = new ConversationRefresh();
+      refresh.setPushes(pushes);
+      const pane = `codex-delayed:${pushes}`;
+      const seen: ConversationResponse[] = [];
+      const failures: unknown[] = [];
+      let written = false;
+      const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => written
+        ? Response.json({ source: "codex-transcript", history_id: "codex-written", turns: [] })
+        : Response.json({ error: { code: "conversation_read_pending", message: "retry" } }, { status: 503 }), { preconnect: realFetch.preconnect }));
+      refresh.setRead(async () => {
+        try { seen.push(await fetchPaneConversation(pane)); }
+        catch (error) { failures.push(error); }
+      });
+      try {
+        refresh.refresh();
+        await settleRefresh();
+        expect(failures).toHaveLength(1);
+        expect(peekPaneConversation(pane)).toBeUndefined();
+        written = true;
+        clock.advance(pushes ? 10_000 : 2000);
+        await settleRefresh();
+        expect(seen).toMatchObject([{ source: "codex-transcript", history_id: "codex-written" }]);
+        expect(fetch).toHaveBeenCalledTimes(2);
+      } finally { refresh.stop(); fetch.mockRestore(); }
+    });
+  }
+
   it("coalesces pushes at exactly 1000ms and keeps the 10s backstop, ETag and 304 identity", async () => {
     const clock = refreshClock();
     const refresh = pushedRefresh();

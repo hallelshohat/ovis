@@ -178,13 +178,23 @@ async function checkChatLoading(): Promise<void> {
           await page.getByText("Waiting for the PC…", { exact: true }).waitFor();
           assert.equal(await page.locator(".chat-loading-placeholder").count(), 1, "a slow first read keeps its skeleton");
           await page.unroute(conversationRoute);
-          await page.route(conversationRoute, route => route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Synthetic read failure" } } }));
+          let pendingReads = 0;
+          await page.route(conversationRoute, route => {
+            pendingReads++;
+            return route.fulfill({ status: 503, json: { error: { code: "conversation_read_pending", message: "The conversation could not be read; try again shortly." } } });
+          });
           await page.goto(url);
           await page.getByRole("button", { name: "Try again", exact: true }).click({ trial: true });
           assert.equal(await page.locator(".chat-loading-placeholder").count(), 0, "a failed read exposes its retry");
+          await page.waitForResponse(() => pendingReads >= 2, { timeout: 15_000 });
+          await page.getByRole("button", { name: "Try again", exact: true }).click({ trial: true });
+          assert.equal(await page.locator(".chat-loading-placeholder").count(), 0, "repeated pending responses never restore an indefinite loading state");
+          assert.equal(await page.getByText("Loading conversation…", { exact: true }).count(), 0);
+          assert.equal(await page.locator(".chat-unavailable-reason").count(), 0, "pending lookup does not claim a new, unwritten session");
+          if (evidence) await page.screenshot({ path: join(evidence, `pending-retry-${viewport.width}.png`) });
           await page.unroute(conversationRoute);
-          await page.getByRole("button", { name: "Try again", exact: true }).click();
           await latestVisible(page);
+          console.log(`PASS repeated Codex pending reads show a finite retry state and recover automatically at ${viewport.width}px`);
         }
         assert.deepEqual(errors, [], "no browser errors");
         console.log(`PASS chat loading, composer stability, latest-first rendering, short and working chats at ${viewport.width}px`);
