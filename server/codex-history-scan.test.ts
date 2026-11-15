@@ -141,6 +141,53 @@ it("bounds active and queued scans, and reset prevents late work from publishing
   } finally { gate.resolve(); open.mockRestore(); }
 });
 
+it("reuses only unchanged cached snapshots while the scan queue is full", async () => {
+  expect((await scan())?.value).toEqual([1]);
+  const gate = Promise.withResolvers<void>();
+  const original = files.open;
+  const open = spyOn(files, "open").mockImplementation(async (...args) => { await gate.promise; return original(...args); });
+  try {
+    const blocked = Array.from({ length: 40 }, (_, index) => scanCodexHistory({ key: String(index), segments: [{ path, end: 8 }], cache, initial: () => [], each }));
+    expect((await scan())?.value).toEqual([1]);
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(lines).toBe(1);
+    const elsewhere = join(root, "elsewhere.jsonl");
+    writeFileSync(elsewhere, '{"n":9}\n');
+    expect(await scanCodexHistory({ key: "numbers", segments: [{ path, end: 8, identity: statSync(elsewhere) }], cache, initial: () => [], each })).toBeNull();
+    appendFileSync(path, '{"n":2}\n');
+    expect(await scan()).toBeNull();
+    expect(await scanCodexHistory({ key: "numbers", segments: [{ path, end: 8 }], cache, initial: () => [], each })).toBeNull();
+    expect((await Promise.all(blocked)).every((result) => result === null)).toBe(true);
+  } finally {
+    const stopped = resetCodexHistoryScans();
+    gate.resolve();
+    await stopped;
+    open.mockRestore();
+  }
+});
+
+it("bounds cached validation and reset prevents it from starting later work", async () => {
+  expect((await scan())?.value).toEqual([1]);
+  const open = spyOn(files, "open");
+  const gate = Promise.withResolvers<void>(), checked = Promise.withResolvers<void>();
+  const original = files.stat;
+  const stat = spyOn(files, "stat").mockReturnValueOnce(gate.promise.then(() => original(path)).finally(() => checked.resolve()));
+  try {
+    const start = performance.now();
+    expect(await scan()).toBeNull();
+    expect(performance.now() - start).toBeLessThan(500);
+    appendFileSync(path, '{"n":2}\n');
+    const stopped = resetCodexHistoryScans();
+    expect(cache.size).toBe(0);
+    gate.resolve();
+    await checked.promise;
+    await stopped;
+    await setImmediate();
+    expect(cache.size).toBe(0);
+    expect(open).not.toHaveBeenCalled();
+  } finally { gate.resolve(); stat.mockRestore(); open.mockRestore(); }
+});
+
 it("does not return a completed earlier snapshot for a request for a longer history", async () => {
   const gate = Promise.withResolvers<void>();
   const original = files.open;
