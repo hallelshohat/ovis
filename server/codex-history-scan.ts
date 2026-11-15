@@ -16,8 +16,12 @@ export async function scanCodexHistory<T>({ key, segments, cache, initial, each 
 }): Promise<CodexHistoryScan<T> | null> {
   const cacheKey = JSON.stringify([key, segments.map(({ path }) => path)]);
   let pending = pendingByCache.get(cache);
-  if (!pending) { pending = new Map(); pendingByCache.set(cache, pending); }
-  caches.add(cache);
+  if (!pending) {
+    pending = new Map();
+    pendingByCache.set(cache, pending);
+    for (const tracked of caches) if (!tracked.deref()) caches.delete(tracked);
+    caches.add(new WeakRef(cache));
+  }
   const load = async (): Promise<boolean> => {
     const epoch = resetEpoch, until = performance.now() + WAIT_MS;
     const known = cache.get(cacheKey);
@@ -63,7 +67,7 @@ export async function resetCodexHistoryScans(): Promise<void> {
   const stopped = [...jobs];
   for (const job of stopped) job.abort.abort();
   for (const job of queue.splice(0)) { jobs.delete(job); job.done(false); }
-  for (const cache of caches) cache.clear();
+  for (const cache of caches) cache.deref()?.clear();
   caches.clear();
   pendingByCache = new WeakMap();
   notifyCapacity();
@@ -81,7 +85,8 @@ const KEPT = 64;
 interface HistoryFile { path: string; end: number; stat: Stats; header: string; delimited: boolean }
 interface Job { abort: AbortController; run: (signal: AbortSignal) => Promise<boolean>; promise: Promise<boolean>; done: (success: boolean) => void }
 let pendingByCache = new WeakMap<object, Map<string, Promise<boolean>>>();
-const caches = new Set<{ clear(): void }>();
+// Reset reaches live caches without retaining projections evicted by their owner.
+const caches = new Set<WeakRef<{ clear(): void }>>();
 const jobs = new Set<Job>();
 const queue: Job[] = [];
 let active = 0;
