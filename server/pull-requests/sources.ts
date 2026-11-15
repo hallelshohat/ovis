@@ -1,6 +1,5 @@
 /**
- * What a chat's own transcript says about its pull requests: every GitHub PR link it wrote (an
- * agent's `gh pr create`, a pasted URL) and every branch it ran on. Claude Code stamps
+ * What a chat's own transcript proves it created, and every branch it ran on. Claude Code stamps
  * `gitBranch` on each message; Codex names the branch once, in its session meta.
  *
  * A transcript that is one append-only file is read whole once, a chunk at a time, and after that
@@ -9,7 +8,9 @@
  * chat's own conversation pages: back to its beginning once, then its newest page.
  */
 import { statSync } from "node:fs";
+import { z } from "zod";
 import type { ConversationTurn } from "../../shared/protocol.ts";
+import { createdPrUrls, creationRecordUrls, type CreationCalls } from "./creation.ts";
 
 export interface ChatSources {
   urls: { url: string; at: string | null }[];
@@ -22,14 +23,13 @@ export interface Chat { id: string; read(): Promise<ChatSources> }
 
 export const PER_CHAT_FILES = new Set(["claude-transcript", "codex-transcript", "pi-transcript", "omp-transcript", "omo-transcript", "gjc-transcript", "cmd-transcript", "grok-transcript"]);
 export const MAX_PAGES = 500;
-const PR_URL = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g;
 
 const empty = (): ChatSources => ({ urls: [], branches: [], started_at: null });
 
 /** How many bytes the file reader has read, all files together: tests see that an append reads only the append. */
 export let fileBytesRead = 0;
 
-const files = new Map<string, { ino: number; offset: number; carry: string; sources: ChatSources }>();
+const files = new Map<string, { ino: number; offset: number; carry: string; sources: ChatSources; calls: CreationCalls }>();
 const pages = new Map<string, { sources: ChatSources; seen: Set<string> }>();
 
 export function resetSourceCache(): void {
@@ -43,7 +43,7 @@ export async function fileSources(path: string): Promise<ChatSources> {
   try { stat = statSync(path); } catch { return empty(); }
   let state = files.get(path);
   if (!state || state.ino !== stat.ino || stat.size < state.offset) {
-    state = { ino: stat.ino, offset: 0, carry: "", sources: empty() };
+    state = { ino: stat.ino, offset: 0, carry: "", sources: empty(), calls: new Map() };
     files.set(path, state);
   }
   if (stat.size > state.offset) {
@@ -53,7 +53,7 @@ export async function fileSources(path: string): Promise<ChatSources> {
       fileBytesRead += chunk.byteLength;
       const lines = (carry + decoder.decode(chunk, { stream: true })).split("\n");
       carry = lines.pop() ?? "";
-      for (const line of lines) if (line.length > 0) scanLine(line, state.sources);
+      for (const line of lines) if (line.length > 0) scanLine({ line, into: state.sources, calls: state.calls });
     }
     carry += decoder.decode();
     state.carry = carry;
@@ -62,7 +62,7 @@ export async function fileSources(path: string): Promise<ChatSources> {
   // a last line not yet ended is read now and again once it is: a link there is found either way, once
   if (state.carry.length > 0) {
     const peek = structuredClone(state.sources);
-    scanLine(state.carry, peek);
+    scanLine({ line: state.carry, into: peek, calls: structuredClone(state.calls) });
     return peek;
   }
   return structuredClone(state.sources);
@@ -101,28 +101,32 @@ function turnKey(turn: ConversationTurn): string {
 function scanTurns(turns: readonly ConversationTurn[], into: ChatSources): void {
   for (const turn of turns) {
     if (turn.ts !== null && (into.started_at === null || turn.ts < into.started_at)) into.started_at = turn.ts;
-    collectUrls(JSON.stringify(turn.parts), turn.ts, into);
+    if (turn.role === "assistant") for (const part of turn.parts) {
+      if (part.kind === "tool") collectUrls({ urls: createdPrUrls({ part }), at: turn.ts, into });
+    }
   }
   into.urls.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""));
 }
 
-export function scanLine(line: string, into: ChatSources): void {
-  let record: unknown = null;
-  try { record = JSON.parse(line); } catch { /* still scanned for links */ }
-  const fields = typeof record === "object" && record !== null ? record as Record<string, unknown> : {};
-  const at = typeof fields["timestamp"] === "string" ? fields["timestamp"] : null;
-  if (at !== null && into.started_at === null) into.started_at = at;
-  const payload = fields["payload"];
-  const codexGit = fields["type"] === "session_meta" && typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>)["git"] : undefined;
-  const branch = typeof fields["gitBranch"] === "string" ? fields["gitBranch"]
-    : typeof codexGit === "object" && codexGit !== null && typeof (codexGit as Record<string, unknown>)["branch"] === "string" ? (codexGit as Record<string, string>)["branch"] : null;
+const lineSchema = z.object({ timestamp: z.iso.datetime({ offset: true }).optional(), gitBranch: z.string().optional(), type: z.string().optional(), payload: z.unknown().optional() });
+const metaSchema = z.object({ git: z.object({ branch: z.string() }).optional() });
+
+function scanLine({ line, into, calls }: { line: string; into: ChatSources; calls: CreationCalls }): void {
+  let value: unknown;
+  try { value = JSON.parse(line); } catch { return; }
+  const parsed = lineSchema.safeParse(value);
+  if (!parsed.success) return;
+  const fields = parsed.data;
+  const at = fields.timestamp ?? null;
+  if (at !== null && (into.started_at === null || at < into.started_at)) into.started_at = at;
+  const meta = fields.type === "session_meta" ? metaSchema.safeParse(fields.payload) : null;
+  const branch = fields.gitBranch ?? (meta?.success ? meta.data.git?.branch : null);
   if (branch && into.branches.at(-1)?.branch !== branch) into.branches.push({ branch, at });
-  collectUrls(line, at, into);
+  collectUrls({ urls: creationRecordUrls({ value, calls }), at, into });
 }
 
-function collectUrls(text: string, at: string | null, into: ChatSources): void {
-  for (const match of text.matchAll(PR_URL)) {
-    const url = `https://github.com/${match[1]}/${match[2]}/pull/${match[3]}`;
+function collectUrls({ urls, at, into }: { urls: string[]; at: string | null; into: ChatSources }): void {
+  for (const url of urls) {
     const seen = into.urls.find((known) => known.url === url);
     if (!seen) into.urls.push({ url, at });
     else if (at !== null && (seen.at === null || at < seen.at)) seen.at = at;

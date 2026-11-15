@@ -3875,17 +3875,19 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   content opens as a side sheet, and on a phone as a bottom sheet, from the header.
 
 ### Pull requests (`.pull-badge`, `.pr-card`, `.pr-event`)
-- A chat holds a list of pull requests, never one (T3 Code's threads keep a list too; Conductor's
-  one workspace, one PR, and the Codex app's one PR per task, do not fit an agent that switches
-  branches in one worktree). The server (`server/pull-requests/`) collects the GitHub PR links the
-  chat's transcript wrote and the PRs of every branch the chat ran on (Claude Code's per-message
-  `gitBranch`, Codex's session-start branch, else the branch seen while the chat was open), and asks
-  `gh` in the pane's folder. A PR found only through a branch that ended before the chat began is
-  left out; one the chat links stays. The branches seen are the chat's: resumed in another pane
-  (session history), it keeps them. A reviewer asked for and not yet answered is a review requested,
-  whatever GitHub's decision field says. A lookup `gh` cannot answer keeps the last good answer and
-  is asked again after `60s`, or at once on a fresh read. Open PRs are read again after the chat has been quiet `10s`
-  past a change and every `60s` while the page is seen; merged and closed ones are read once.
+- A space holds a list of its agent's pull requests. Ownership follows the Codex app's task and
+  Conductor's workspace, while retaining T3 Code's list for agents that open several PRs. The
+  server (`server/pull-requests/`) uses the board task's recorded PR, successful `gh pr create`
+  results in the chat, and PRs whose head is exactly the workspace's current branch. Every PR
+  must belong to the authenticated GitHub author. Copied links, branch prefixes, matching bases
+  and previously visited branches do not establish ownership. A completed branch PR must have
+  been created since the task or chat began; a board record or creation result preserves older
+  finished work, even after a branch switch. A board record also survives a replacement chat.
+  Branch history remains in the thread's switch events. A reviewer asked for and not yet answered
+  is a review requested, whatever GitHub's decision field says. A lookup `gh` cannot answer keeps
+  the last good answer and is asked again after `60s`, or at once on a fresh read. Open PRs are
+  read again after the chat has been quiet `10s` past a change and every `60s` while the page is
+  seen; merged and closed ones are read once.
 - One leads: the one that needs the person first (failing checks, requested changes, a requested
   review, running checks, ready to merge, draft, merged, closed). Its badge is a glyph in the
   state's colour (`--pr-*`, aliases of the agent states', so every palette draws it) beside its
@@ -3903,10 +3905,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - The thread tells the story where it happened: one line per PR opened, merged or closed, edged in
   its state's colour, and a quieter line for a branch switch, each placed before the first turn that
   began after it.
-- No `gh` or a signed-out `gh` draws nothing on the rows. When the chat wrote PR links that `gh`
+- No `gh` or a signed-out `gh` draws nothing on the rows. When the board or chat has creation links that `gh`
   cannot read, the header shows the PR glyph alone, dim, named with the reason; it opens the
-  inspector, which says the one sentence for it (GitHub CLI not found, signed out). A chat with no
-  PR links says nothing: the resting screen stays calm.
+  inspector, which says the one sentence for it (GitHub CLI not found, signed out). A space with no
+  creation links says nothing: the resting screen stays calm.
 
 ### Work block (`.work-block`, `.work-row`)
 - A turn reads in the order it was written, as Claude Code's terminal draws it: the agent's words
