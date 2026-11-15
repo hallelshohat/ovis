@@ -2798,7 +2798,7 @@ function sameOverlap(before: { start: number; end: number; digests: BigUint64Arr
   }
   return true;
 }
-const commandTranscripts = new Map<string, {
+type CommandTranscriptRead = {
   signature: string; file: string; start: number; end: number; digests: BigUint64Array;
   partialStart: number; records: CommandTranscriptRecord[]; identity: string;
   /** pi: the active branch's name and its last node, which an append that runs on from it keeps */
@@ -2806,11 +2806,14 @@ const commandTranscripts = new Map<string, {
   /** pi: the last node each recent branch was read at (id and byte offset), newest last, so a session that comes back
    * to one keeps its name */
   branches: Map<string, { id: string; offset: number }>;
-}>();
+};
+const commandTranscripts = new Map<string, CommandTranscriptRead>();
+// In-flight receipts retain their validation even when other panes evict the shared read cache.
+const commandTranscriptReads = new WeakMap<CommandTranscript, { path: string; read: CommandTranscriptRead }>();
 const REMEMBERED_BRANCHES = 8;
 
 /** `look`: the snapshot and herdr's `pane.process_info` the caller's poll already read, so neither is asked again. */
-export async function readCommandTranscript(paneId: string, codexHome?: string, look: { snapshot?: SessionSnapshot; processes?: KnownProcesses } = {}): Promise<CommandTranscript | null> {
+export async function readCommandTranscript(paneId: string, codexHome?: string, look: { snapshot?: SessionSnapshot; processes?: KnownProcesses; after?: CommandTranscript } = {}): Promise<CommandTranscript | null> { // no-smell: Preserve the existing reader API; receipt validation extends its options object.
   const resolved = await paneTranscript(paneId, codexHome, look.snapshot, undefined, undefined, undefined, undefined, undefined, look.processes);
   const { source, path } = resolved;
   if (source !== "claude-transcript" && source !== "codex-transcript" && source !== "pi-transcript"
@@ -2829,7 +2832,9 @@ export async function readCommandTranscript(paneId: string, codexHome?: string, 
   const stat = { dev: exact.dev, ino: exact.ino, size: Number(exact.size), mtimeMs: Number(exact.mtimeNs) / 1e6 };
   const file = `${source}:${stat.dev}:${stat.ino}`;
   const signature = `${source}\0${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-  const cached = commandTranscripts.get(path);
+  const retained = look.after ? commandTranscriptReads.get(look.after) : undefined;
+  if (look.after && (!retained || retained.path !== path)) return null;
+  const cached = retained?.read ?? commandTranscripts.get(path);
   rememberPaneRead(paneId, path);
   if (cached?.signature === signature) return cached.answer;
   // Do not call transcriptStream here: building a cold pi index can read the entire file.
@@ -2909,7 +2914,9 @@ export async function readCommandTranscript(paneId: string, codexHome?: string, 
   const cleared = current.reduce((last, { entry }, index) => isContextClear(entry, source) ? index : last, 0);
   const answer = branch === "unresolved" ? null
     : { identity: `${identity}\0${branch}`, end: stat.size, records: cleared > 0 ? current.slice(cleared) : current };
-  remember(commandTranscripts, path, { signature, file, start, end: stat.size, digests, partialStart, records, identity, branch, leaf, answer, branches }, 4);
+  const read = { signature, file, start, end: stat.size, digests, partialStart, records, identity, branch, leaf, answer, branches };
+  if (!retained) remember(commandTranscripts, path, read, 4);
+  if (answer) commandTranscriptReads.set(answer, { path, read });
   return answer;
 }
 

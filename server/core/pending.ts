@@ -880,7 +880,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       const beforeCapturePid = beforeEnter.identity.processPid;
       const piAnchor = piTracked ? await preparePiReceipt(paneId, beforeEnter.identity).catch(() => null) : undefined;
       const codexAnchor: CodexDeliveryAnchor | null | undefined = interruptWorkingCodex && beforeEnter.identity.agent === "codex" && beforeEnter.working
-        ? await readCommandTranscript(paneId, options.codexHome).then((read) => read && { identity: read.identity, end: read.end }).catch(() => null) : undefined;
+        ? await readCommandTranscript(paneId, options.codexHome).catch(() => null) : undefined;
       if (piAnchor !== undefined || codexAnchor !== undefined) {
         beforeEnter = await pendingContext(owner, paneId, lease, identity, true, agentOnly).catch(enterRefused);
         if (automatic && (beforeEnter.working || queueHeld(paneId, false))) enterRefused(new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed"));
@@ -921,7 +921,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       let statusAtRead = pending.current(paneId);
       await interruptCodexSteering(interruptWorkingCodex, closeMention(text), { agent: beforeEnter.identity.agent, working: beforeEnter.working, screen: beforeEnter.screen }, {
         accepted: codexAnchor ? async () => codexDeliveryAccepted({ anchor: codexAnchor,
-          current: await readCommandTranscript(paneId, options.codexHome).catch(() => null), text: closeMention(sent) }) : undefined,
+          current: await readCommandTranscript(paneId, options.codexHome, { after: codexAnchor }).catch(() => null), text: closeMention(sent) }) : undefined,
         read: async () => {
           // the status from before the screen was read: one that changed during the reads after it stales the Escape
           const status = pending.current(paneId);
