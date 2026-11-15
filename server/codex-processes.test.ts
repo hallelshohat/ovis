@@ -1168,6 +1168,33 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     expect(await resolve()).toBe(path);
   });
 
+  heldIt("finds a working chat by rendered commentary despite other loaded conversations", async () => {
+    await resumedWithSuccessors();
+    otherFolderThread();
+    await loaded(thread, other);
+    const commentary = "The preparation jobs passed, including independent cleanup and inventory. The measured speedup remains **1.34×** while the remaining checks continue.";
+    appendFileSync(path, `\n${JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: commentary }] } })}\n`);
+    screen = screen.replace("• Working", `• ${commentary.replaceAll("**", "")}\n\n• Working`);
+    expect(await resolve()).toBe(path);
+    const chat = await conversationModule.paneConversation(root, home);
+    expect(chat.source).toBe("codex-transcript");
+    expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: commentary, phase: "commentary" });
+  });
+
+  heldIt("selects the rendered older conversation after a picker resume instead of stale argv", async () => {
+    await resumedWithSuccessors();
+    const commentary = "The older conversation is checking **its own configuration**, while the original thread remains loaded in the shared Codex daemon.";
+    const active = otherFolderThread([{ type: "agent_message", message: commentary }]);
+    title = shortened;
+    await loaded(thread, other);
+    screen = screen.replace("• Working", `• ${commentary.replaceAll("**", "")}\n\n• Working`);
+    expect(await resolve()).toBe(active);
+    const chat = await conversationModule.paneConversation(root, home);
+    expect(chat.source).toBe("codex-transcript");
+    expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: commentary });
+    expect(chat.turns.flatMap((turn) => turn.parts)).not.toContainEqual({ kind: "text", text: answer });
+  });
+
   for (const sameFolder of [false, true]) {
     heldIt(`refuses stale argv after a picker resume in ${sameFolder ? "the same" : "another"} folder`, async () => {
       await resumedWithSuccessors();

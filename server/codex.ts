@@ -1845,7 +1845,7 @@ function shownBlocks(text: string): string[] {
     else if (open && /^(?:\s|$)/.test(line)) blocks[blocks.length - 1] += `\n${line}`;
     else if (line.trim() !== "") { blocks.push(line.replace(/^[\u2022\u25e6]\s?/, "")); open = true; }
   }
-  return blocks.map(markedDisplay);
+  return blocks;
 }
 
 /** `marked`: the anchor as markedDisplay reads it, symbols included, for a screen to show as well. */
@@ -1968,6 +1968,9 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       : codexScreenParts(lastHeader >= 0 ? text.slice(lastHeader) : text).filter((part) => !part.prompt && !part.tool).map((part) => part.text);
   };
   const answerParts = partsOf(screen);
+  // Working commentary has no finished-turn footer; its complete rendered block can still match.
+  const composer = codexComposer(screen);
+  const working = composer !== null && composer.status >= 0;
   const texts = blocks ? answerParts : [answerParts.join("\n")];
   const displays = texts.map(normalizeDisplay);
   // an answer counts only shown whole, both ends, in one block: one more character either side is another answer
@@ -1995,7 +1998,7 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
     const anchors = answersOf(parsed[index]!.slice(-100)).slice(-8).flatMap((text) => {
       const found = answerAnchor(text);
       return found !== null && displays.some((display) => display.includes(found.anchor))
-        && (wholeBlocks.some((block) => found.whole.test(block))
+        && (wholeBlocks.some((block) => found.whole.test(markedDisplay(block)) || working && completedAnswerMatches(text, block))
           || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) ? [found] : [];
     });
     if (anchors.length === 0) continue;
