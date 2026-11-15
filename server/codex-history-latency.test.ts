@@ -23,6 +23,9 @@ it("keeps cold Chat and health responsive while a large competing history warms,
   const filler = JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated archive: abcdefghijklmnopqrstuvwxyz 0123456789. ".repeat(18_000) } }) + "\n";
   writeFileSync(peer, "");
   for (let record = 0; record < 256; record++) appendFileSync(peer, filler);
+  appendFileSync(peer, JSON.stringify({ type: "response_item", payload: {
+    type: "function_call_output", call_id: "unrelated", output: "x".repeat(9 * 1024 * 1024),
+  } }) + "\n");
   const screen = [
     "• Ran bun run verify --project /work/integration",
     "  └ Verification receipts: integration suite completed successfully with thirty seven isolated workers and zero leaked processes.",

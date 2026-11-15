@@ -66,8 +66,6 @@ const HEADER_BYTES = 4096;
 const ACTIVE = 2;
 const WAITING = 32;
 const KEPT = 64;
-// A single record must not defeat the reader's memory and scheduling bounds.
-const RECORD_BYTES = 8 * 1024 * 1024;
 
 interface HistoryFile { path: string; end: number; stat: Stats; header: string; delimited: boolean }
 interface Job { abort: AbortController; run: (signal: AbortSignal) => Promise<boolean>; promise: Promise<boolean>; done: (success: boolean) => void }
@@ -163,7 +161,6 @@ async function scanLines({ file, from, each, signal }: {
     const buffer = Buffer.alloc(CHUNK_BYTES);
     let pieces: Buffer[] = [], length = 0, slice = performance.now();
     const weigh = (piece: Buffer): boolean => {
-      if (length + piece.length > RECORD_BYTES) return false;
       const line = pieces.length === 0 ? piece.toString("utf8") : Buffer.concat([...pieces, piece], length + piece.length).toString("utf8");
       pieces = []; length = 0;
       return line.trim() === "" || each(line);
@@ -186,7 +183,6 @@ async function scanLines({ file, from, each, signal }: {
       if (start < bytesRead) {
         pieces.push(Buffer.from(buffer.subarray(start, bytesRead)));
         length += bytesRead - start;
-        if (length > RECORD_BYTES) return false;
       }
     }
     return length === 0 || weigh(Buffer.alloc(0));
