@@ -19,7 +19,7 @@ import type { AgentInfo } from "../shared/herdr-api.generated.ts";
 import { agentGet, HerdrError, paneGet, paneProcessInfo, paneRead, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { kiroCodexProcess, kiroNested, kiroWrapper } from "./kiro-terminal.ts";
 import { resolveAgent } from "./pane-context.ts";
-import { FOOTER } from "./codex-steering.ts";
+import { codexComposer, FOOTER } from "./codex-steering.ts";
 import { codexStartScreenUnused } from "./start-screen.ts";
 import { codexDisplayEvent, codexNativeItem } from "./codex-items.ts";
 import { codexInputSessions } from "../shared/codex-chunks.ts";
@@ -1845,7 +1845,7 @@ function shownBlocks(text: string): string[] {
     else if (open && /^(?:\s|$)/.test(line)) blocks[blocks.length - 1] += `\n${line}`;
     else if (line.trim() !== "") { blocks.push(line.replace(/^[\u2022\u25e6]\s?/, "")); open = true; }
   }
-  return blocks.map(markedDisplay);
+  return blocks;
 }
 
 /** `marked`: the anchor as markedDisplay reads it, symbols included, for a screen to show as well. */
@@ -1968,6 +1968,9 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       : codexScreenParts(lastHeader >= 0 ? text.slice(lastHeader) : text).filter((part) => !part.prompt && !part.tool).map((part) => part.text);
   };
   const answerParts = partsOf(screen);
+  // Working commentary has no finished-turn footer; its complete rendered block can still match.
+  const composer = codexComposer(screen);
+  const working = composer !== null && composer.status >= 0;
   const texts = blocks ? answerParts : [answerParts.join("\n")];
   const displays = texts.map(normalizeDisplay);
   // an answer counts only shown whole, both ends, in one block: one more character either side is another answer
@@ -1994,9 +1997,16 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
     })) matching.add(candidate.path);
     const anchors = answersOf(parsed[index]!.slice(-100)).slice(-8).flatMap((text) => {
       const found = answerAnchor(text);
-      return found !== null && displays.some((display) => display.includes(found.anchor))
-        && (wholeBlocks.some((block) => found.whole.test(block))
-          || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) ? [found] : [];
+      if (found === null || !displays.some((display) => display.includes(found.anchor))) return [];
+      if (wholeBlocks.some((block) => found.whole.test(markedDisplay(block)))
+        || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) return [found];
+      if (!working) return [];
+      const rendered = wholeBlocks.find((block) => completedAnswerMatches(text, block));
+      if (rendered === undefined) return [];
+      // A raw anchor can miss an equivalent entity spelling; it must still compete with a rendered match.
+      const letters = normalizeDisplay(rendered), bare = bareLetters(rendered), words = wordsEnding(rendered, found.anchor.length);
+      if (candidates.some((other) => other.path !== candidate.path && saidBy(other, letters, bare, words))) open = true;
+      return [found];
     });
     if (anchors.length === 0) continue;
     if (!scrutinized.has(candidate.path) || anchors.some((anchor) => !givenElsewhere(index, anchor))) matching.add(candidate.path);
@@ -3051,6 +3061,11 @@ const boundRollouts = new Map<string, { processes: string; path: string; at: num
  * pane's width cuts), and so are line breaks and indents, which only the width moves.
  */
 function shownScreen(screen: string): string {
+  const live = codexComposer(screen);
+  if (live !== null && live.status >= 0) {
+    // The working clock and spinner advance without changing the conversation.
+    return live.rows.slice(0, live.composer + 1).map((row, index) => index === live.status ? "• Working" : row.text).join("").replace(/\s+/g, "");
+  }
   const lines = screen.split("\n");
   let composer = -1;
   for (let at = lines.length - 1; at >= 0; at--) if (lines[at]!.startsWith("\u203a")) { composer = at; break; }
@@ -4064,7 +4079,12 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   // a nested pane's peers may carry no label either, so freshReportedThread cannot rule them out
   if (resumed === null && reported !== null && !agent.nestedTerminal && !agent.unlabelled
     && await freshReportedThread(paneId, cwd, home, reported, codexProcesses, panes)) return reported;
-  if (resumed !== null) return resumedNewer.length === 0 ? resumedPath : null;
+  if (resumed !== null) {
+    if (resumedNewer.length === 0) return resumedPath;
+    if (resumedPath === null || screen === null || agent.nestedTerminal || agent.unlabelled
+      || codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) return null;
+    return soleLoadedResume({ paneId, processes, screen: screen.text, home, resumedPath, newer: resumedNewer });
+  }
   // Other nested terminals, and the peers of an unlabelled pane, may have no agent labels either, so the weaker
   // exchange/peer heuristics cannot establish ownership. Only a substantial screen match (or its binding) can.
   if (agent.nestedTerminal || agent.unlabelled) return null;
@@ -4097,4 +4117,19 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   if (codexProcesses.length === 0 || open.size > 0
     || codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) return null;
   return loadedConversation((screen ?? await paneRead({ paneId, source: "recent", lines: 400, stripAnsi: true })).text, paths, home);
+}
+
+/** A picker resume can leave the argv thread loaded beside an older thread from any folder. */
+async function soleLoadedResume({ paneId, processes, screen, home, resumedPath, newer }: {
+  paneId: string; processes: string; screen: string; home: string; resumedPath: string; newer: readonly string[];
+}): Promise<string | null> {
+  try {
+    if (newer.some((path) => codexRolloutPath(path, home) === null)) return null;
+    const loaded = await loadedRollouts(home);
+    if (loaded?.size !== 1 || !loaded.get(resumedPath)?.offered) return null;
+    if (!await stillAsWeighed(paneId, processes, screen, home, new Set(loaded.keys()))) return null;
+    // The last screen read may precede an unload or a replacement; keep the resumed thread held too.
+    const now = await loadedRollouts(home);
+    return now?.size === 1 && now.get(resumedPath)?.offered ? resumedPath : null;
+  } catch { return null; }
 }
