@@ -112,6 +112,7 @@ function readEvidence({ text, shown }: { text: string; shown: readonly Preview[]
 }
 
 const envelope = z.object({ type: z.string(), payload: z.looseObject({ type: z.string().optional() }) });
+const commandEnvelope = z.looseObject({ type: z.literal("CommandExecution") });
 
 function weighLine({ line, shown, evidence }: { line: string; shown: readonly Preview[]; evidence: Evidence }): boolean {
   if (!line.trim()) return true;
@@ -126,14 +127,18 @@ function weighLine({ line, shown, evidence }: { line: string; shown: readonly Pr
   });
   const native = entry.type === "event_msg" ? codexNativeItem(payload["item"])?.display : null;
   const part = native?.part;
+  const command = entry.type === "event_msg" ? commandEnvelope.safeParse(payload["item"]) : null;
+  if (command?.success && (native == null || payload.type === "item_completed" && command.data["aggregated_output"] === undefined)) return false;
   if (part?.kind === "tool" && part.name === "exec_command") {
     evidence.pending.delete(native!.id);
     shown.forEach((preview, index) => {
       if (!commandMatches({ preview, command: part.summary })) return;
-      if (payload.type === "item_completed" && (part.state === "ok" || part.state === "error")
-        && index > ([...evidence.matches].at(-1) ?? -1) && !evidence.calls.has(native!.id) && compact(part.output).includes(preview.output)) {
-        evidence.matches.add(index);
-        evidence.calls.add(native!.id);
+      if (payload.type === "item_completed" && (part.state === "ok" || part.state === "error") && compact(part.output).includes(preview.output)) {
+        evidence.quoted.add(index);
+        if (index > ([...evidence.matches].at(-1) ?? -1) && !evidence.calls.has(native!.id)) {
+          evidence.matches.add(index);
+          evidence.calls.add(native!.id);
+        }
       }
       if (part.state === "pending") evidence.pending.add(native!.id);
     });
@@ -154,11 +159,12 @@ function commandMatches({ preview, command }: { preview: Preview; command: strin
 
 function mayQuoteOutput({ text, shown }: { text: string; shown: readonly Preview[] }): boolean {
   const plain = letters(text);
-  if (shown.some((preview) => plain.includes(letters(preview.output)))) return true;
+  if (shown.some((preview) => plain.includes(`Ran${letters(preview.command)}`) && plain.includes(letters(preview.output)))) return true;
   const pieces = text.split(/&(?:#\d+|#[xX][\da-fA-F]+|[A-Za-z][A-Za-z0-9]+);/);
   if (pieces.length === 1) return false;
   // Reuse the message matcher's bounded entity comparison for Markdown quoting tool rows.
   const encoded = pieces.map(letters).join(ENTITY), steps = { left: ENTITY_STEPS };
-  return shown.some((preview) => preview.words.every((word) => encoded.includes(word) || throughEntities({ text: encoded, word, steps })));
+  return shown.some((preview) => [`Ran${letters(preview.command)}`, ...preview.words]
+    .every((word) => encoded.includes(word) || throughEntities({ text: encoded, word, steps })));
 }
 

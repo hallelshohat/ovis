@@ -48,6 +48,13 @@ describe("Codex native command screen ownership", () => {
     expect(resolve(screen.replace(commands[1]!, commands[0]!), [{ ...candidate, text: single }])).toBeNull();
   });
 
+  it("does not treat snippets in another command's output as matching command/output pairs", () => {
+    const elsewhere = { path: "elsewhere", text: JSON.stringify({ ...events[0], payload: { ...events[0]!.payload, item: {
+      ...events[0]!.payload.item, command: ["/bin/zsh", "-lc", "cat unrelated-source.ts"], aggregated_output: outputs.join("\n"),
+    } } }) };
+    expect(resolve(screen, [candidate, elsewhere])).toBe("own");
+  });
+
   it("refuses copied output, mixed owners, incomplete records and pending calls", () => {
     expect(resolve(screen, [candidate, { ...candidate, path: "twin" }])).toBeNull();
     const quote = { path: "quote", text: JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: body } }) + "\n" };
@@ -63,6 +70,8 @@ describe("Codex native command screen ownership", () => {
     expect(resolve(screen, [candidate, singleQuote])).toBe("own");
     expect(resolve(screen, events.map((event, index) => ({ path: String(index), text: JSON.stringify(event) + "\n" })))).toBeNull();
     expect(resolve(screen, [candidate, { path: "cut", text: '{"type":"event_msg"' }])).toBeNull();
+    const unsupported = { path: "old-format", text: JSON.stringify({ type: "event_msg", payload: { type: "item_completed", item: { type: "CommandExecution", command: commands[0] } } }) };
+    expect(resolve(screen, [candidate, unsupported])).toBeNull();
     const pending = { path: "pending", text: JSON.stringify({ ...events[0], payload: { type: "item_started", item: {
       ...events[0]!.payload.item, status: "in_progress", aggregated_output: "",
     } } }) + "\n" };
