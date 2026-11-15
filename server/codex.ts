@@ -19,7 +19,7 @@ import type { AgentInfo } from "../shared/herdr-api.generated.ts";
 import { agentGet, HerdrError, paneGet, paneProcessInfo, paneRead, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { kiroCodexProcess, kiroNested, kiroWrapper } from "./kiro-terminal.ts";
 import { resolveAgent } from "./pane-context.ts";
-import { FOOTER } from "./codex-steering.ts";
+import { codexComposer, FOOTER } from "./codex-steering.ts";
 import { codexStartScreenUnused } from "./start-screen.ts";
 import { codexDisplayEvent, codexNativeItem } from "./codex-items.ts";
 import { codexInputSessions } from "../shared/codex-chunks.ts";
@@ -3051,6 +3051,11 @@ const boundRollouts = new Map<string, { processes: string; path: string; at: num
  * pane's width cuts), and so are line breaks and indents, which only the width moves.
  */
 function shownScreen(screen: string): string {
+  const live = codexComposer(screen);
+  if (live !== null && live.status >= 0) {
+    // The working clock and spinner advance without changing the conversation.
+    return live.rows.slice(0, live.composer + 1).map((row, index) => index === live.status ? "• Working" : row.text).join("").replace(/\s+/g, "");
+  }
   const lines = screen.split("\n");
   let composer = -1;
   for (let at = lines.length - 1; at >= 0; at--) if (lines[at]!.startsWith("\u203a")) { composer = at; break; }
@@ -4064,7 +4069,12 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   // a nested pane's peers may carry no label either, so freshReportedThread cannot rule them out
   if (resumed === null && reported !== null && !agent.nestedTerminal && !agent.unlabelled
     && await freshReportedThread(paneId, cwd, home, reported, codexProcesses, panes)) return reported;
-  if (resumed !== null) return resumedNewer.length === 0 ? resumedPath : null;
+  if (resumed !== null) {
+    if (resumedNewer.length === 0) return resumedPath;
+    if (resumedPath === null || screen === null || agent.nestedTerminal || agent.unlabelled
+      || codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) return null;
+    return resumedWithoutLoadedSuccessors({ paneId, processes, screen: screen.text, home, resumedPath, newer: resumedNewer });
+  }
   // Other nested terminals, and the peers of an unlabelled pane, may have no agent labels either, so the weaker
   // exchange/peer heuristics cannot establish ownership. Only a substantial screen match (or its binding) can.
   if (agent.nestedTerminal || agent.unlabelled) return null;
@@ -4097,4 +4107,19 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   if (codexProcesses.length === 0 || open.size > 0
     || codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) return null;
   return loadedConversation((screen ?? await paneRead({ paneId, source: "recent", lines: 400, stripAnsi: true })).text, paths, home);
+}
+
+/** Completed reviews in the same worktree cannot replace a still-loaded resume once their threads unload. */
+async function resumedWithoutLoadedSuccessors({ paneId, processes, screen, home, resumedPath, newer }: {
+  paneId: string; processes: string; screen: string; home: string; resumedPath: string; newer: readonly string[];
+}): Promise<string | null> {
+  try {
+    if (newer.some((path) => codexRolloutPath(path, home) === null)) return null;
+    const loaded = await loadedRollouts(home);
+    if (!loaded?.get(resumedPath)?.offered || newer.some((path) => loaded.has(path))) return null;
+    if (!await stillAsWeighed(paneId, processes, screen, home, new Set(loaded.keys()))) return null;
+    // The last screen read may precede an unload or a replacement; keep the resumed thread held too.
+    const now = await loadedRollouts(home);
+    return now?.get(resumedPath)?.offered && [...now.keys()].every((path) => loaded.has(path)) ? resumedPath : null;
+  } catch { return null; }
 }
