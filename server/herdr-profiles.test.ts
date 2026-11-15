@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseHerdrProfiles, readHerdrProfiles, sameSshSession } from "./herdr-profiles.ts";
+import { herdrRenameArgs, parseHerdrProfiles, readHerdrProfiles, renameHerdrProfile, sameSshSession } from "./herdr-profiles.ts";
 
 const row = (target = "BuildBox", session = "work", enabled = true) => ({ id: "profile-1", label: "Build machine", target, session, enabled, selected: false });
 const parse = (target: string, session = "work") => parseHerdrProfiles(JSON.stringify([row(target, session)]))[0]!;
@@ -35,6 +35,8 @@ describe("saved herdr machine profiles", () => {
     expect(sameSshSession({ destination: "host" }, { destination: "host", port: 22 })).toBe(false);
     expect(sameSshSession({ destination: "Host" }, { destination: "host" })).toBe(false);
     expect(sameSshSession({ destination: "host", port: 2222 }, { destination: "host", port: 2222 })).toBe(true);
+    // a port is its number: "022" (a hand-edited saved target) is 22
+    expect(sameSshSession({ destination: "host", port: "022" as unknown as number }, { destination: "host", port: 22 })).toBe(true);
   });
   it("runs only the read-only CLI command, honoring the configured binary and environment", async () => {
     const bin = join(root, "fake-herdr");
@@ -53,6 +55,29 @@ describe("saved herdr machine profiles", () => {
     } finally {
       if (previous === undefined) delete process.env.OVIS_HERDR_BIN; else process.env.OVIS_HERDR_BIN = previous;
       if (config === undefined) delete process.env.HERDR_CONFIG_PATH; else process.env.HERDR_CONFIG_PATH = config;
+    }
+  });
+
+  it("renames with the profile id before the label, as herdr's parser takes it", async () => {
+    expect(herdrRenameArgs("profile-1", "-lab box")).toEqual(["machine", "rename", "profile-1", "--label=-lab box"]);
+    // a stand-in that parses as herdr 0.9 does: the id first, then the label; anything else is its usage line and exit 2
+    const bin = join(root, "herdr-rename");
+    const args = join(root, "rename-args.json");
+    writeFileSync(bin, `#!${process.execPath}
+const [machine, rename, id, label] = process.argv.slice(2);
+if (machine !== "machine" || rename !== "rename" || !id || id.startsWith("-") || !label?.startsWith("--label")) { console.error("usage: herdr machine rename <profile-id> --label <label>"); process.exit(2); }
+await Bun.write(${JSON.stringify(args)}, JSON.stringify(process.argv.slice(2)));
+console.log("Renamed SSH machine " + id + ".");`);
+    chmodSync(bin, 0o700);
+    const previous = process.env.OVIS_HERDR_BIN;
+    process.env.OVIS_HERDR_BIN = bin;
+    try {
+      await renameHerdrProfile("profile-1", "-lab box");
+      expect(JSON.parse(readFileSync(args, "utf8"))).toEqual(["machine", "rename", "profile-1", "--label=-lab box"]);
+      writeFileSync(bin, `#!${process.execPath}\nconsole.error("private path or diagnostic"); process.exit(2);`);
+      await expect(renameHerdrProfile("profile-1", "Lab")).rejects.toThrow("herdr could not rename this machine");
+    } finally {
+      if (previous === undefined) delete process.env.OVIS_HERDR_BIN; else process.env.OVIS_HERDR_BIN = previous;
     }
   });
 });

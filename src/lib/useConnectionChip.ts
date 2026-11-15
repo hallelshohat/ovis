@@ -1,5 +1,6 @@
 import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
 import type { ServerMessage } from "../../shared/protocol.ts";
+import { pullRequestsChanged } from "./usePanePullRequests.ts";
 
 /** Keeps the active terminal connection-chip state. */
 export function useConnectionChip() {
@@ -10,13 +11,18 @@ export function useConnectionChip() {
   // the active slot's pane could not be drawn: no terminal is attached there to say so itself
   const paneLost = useCallback(() => setConnected(false), []);
   const [outputStopped, setOutputStopped] = useState(false);
-  return { connected, setConnected, connectedBefore, setConnectedBefore, paneLost, outputStopped, setOutputStopped };
+  /** the split half and PC (`slot:machineId`) whose terminal last reported the state above: the header's
+   *  connection line ignores state another half left behind (lib/headerConnection.ts) */
+  const [reportedBy, setReportedBy] = useState<string | null>(null);
+  return { connected, setConnected, connectedBefore, setConnectedBefore, paneLost, outputStopped, setOutputStopped, reportedBy, setReportedBy };
 }
 
 /** Creates the callback for server messages affecting the connection chip. */
-export function useServerMessageHandler(setOutputStopped: Dispatch<SetStateAction<boolean>>) {
+export function useServerMessageHandler(setOutputStopped: Dispatch<SetStateAction<boolean>>, machineId: string) {
   const handleServerMessage = useCallback((message: ServerMessage) => {
     if (message.type === "error" && message.code === "output_stalled") setOutputStopped(true);
-  }, []);
+    // a turn ended or a push went out: the chat's pull requests are read again once it is quiet
+    if (message.type === "conversation-changed") pullRequestsChanged(machineId, message.pane_id);
+  }, [machineId]);
   return handleServerMessage;
 }

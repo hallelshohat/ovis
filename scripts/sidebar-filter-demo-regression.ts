@@ -85,6 +85,14 @@ const patch = `(() => {
         const message = JSON.parse(event.data);
         if (message.type === "machines") { last = message.machines; message.machines = roster(last); }
         this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(message) }));
+        // the build PC is the laptop's roster under other names: a pane's own status change reaches both, as a roster does,
+        // and stays in the roster this fixture sends again after an edit
+        if (message.machine_id === "local" && message.message?.type === "pane-status") {
+          const { pane_id, agent_status, finish_id } = message.message;
+          const snap = last?.find((item) => item.id === "local")?.snapshot;
+          for (const entry of [...(snap?.panes ?? []), ...(snap?.agents ?? [])]) if (entry.pane_id === pane_id) Object.assign(entry, { agent_status, ...(finish_id === undefined ? {} : { finish_id }) });
+          this.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ ...message, machine_id: "build" }) }));
+        }
       };
       this.inner.onerror = (event) => this.onerror?.(event);
       this.inner.onopen = (event) => this.onopen?.(event);
@@ -171,9 +179,14 @@ async function rosterView(page: Page) {
   });
 }
 
-/** Everything this page keeps: folds, pins and the rest, to prove a filter writes none of it and the query is nowhere. */
+/**
+ * Everything this page keeps: folds, pins and the rest, to prove a filter writes none of it and the query is nowhere.
+ * Two records are left out, since they follow the page's own life and not the filter: where each chat is scrolled to,
+ * and when each agent's state began (lib/agentStateSince.ts), written whenever a roster this script sends moves a state.
+ */
 const storageView = (page: Page) => page.evaluate(() => {
-  const read = (store: Storage) => Object.fromEntries(Object.keys(store).sort().map((key) => [key, store.getItem(key)]));
+  const apart = new Set(["ovis:chat-positions", "ovis:agent-state-since"]);
+  const read = (store: Storage) => Object.fromEntries(Object.keys(store).filter((key) => !apart.has(key)).sort().map((key) => [key, store.getItem(key)]));
   return { local: read(localStorage), session: read(sessionStorage) };
 });
 
@@ -220,6 +233,16 @@ async function waitWorkspaceIds(page: Page, predicate: string): Promise<void> {
 }
 
 interface Scene { phone: boolean; theme: Theme; language: Language }
+/**
+ * The demo ends the api pane's turn 4.5 s after each load (site/demo/transport.ts), on both PCs' rows (the fixture
+ * passes its status to the build PC's copy too) or already in the first roster when that comes later, and both rows
+ * leave for the resting part. Every roster a step compares with another is taken after that, never across it.
+ */
+async function turnEnded(page: Page): Promise<void> {
+  await page.waitForFunction((api) => ["local", "build"].every((machine) =>
+    document.querySelector(`.agents-sidebar .agent-item[data-machine="${machine}"][data-pane="${api}"] [data-status="done"]`) !== null), panes.api);
+}
+
 async function newPage(browser: Browser, scene: Scene, search: string, stored: Record<string, string> = {}): Promise<{ context: BrowserContext; page: Page; errors: string[] }> {
   const context = await browser.newContext(scene.phone
     ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, locale: scene.language === "ko" ? "ko-KR" : "en-US", colorScheme: scene.theme }
@@ -227,7 +250,8 @@ async function newPage(browser: Browser, scene: Scene, search: string, stored: R
   await context.addInitScript(({ settings, stored }) => {
     localStorage.setItem("ovis:settings", JSON.stringify(settings));
     for (const [key, value] of Object.entries(stored)) localStorage.setItem(key, value);
-  }, { settings: { language: scene.language, theme: scene.theme, defaultView: "chat" }, stored });
+    // the Filter field is off until chosen (Settings → Sidebar filter); this check is of the field itself
+  }, { settings: { language: scene.language, theme: scene.theme, defaultView: "chat" }, stored: { "ovis:sidebar-filter-shown": "true", ...stored } });
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -236,6 +260,7 @@ async function newPage(browser: Browser, scene: Scene, search: string, stored: R
   if (scene.phone) await openDrawer(page, scene.language);
   await agentRows(page).first().waitFor({ state: "attached" });
   await page.waitForFunction(() => document.querySelectorAll(".machine-list .machine-group").length >= 2);
+  await turnEnded(page);
   await page.evaluate(() => document.fonts.ready);
   return { context, page, errors };
 }
@@ -313,8 +338,14 @@ async function measure(page: Page): Promise<Record<string, unknown>> {
     const inputBox = input.getBoundingClientRect(), clearBox = clear?.getBoundingClientRect();
     const svg = clear?.querySelector("svg") ?? null;
     return {
-      input: { ...text(input), placeholder: input.value === "" ? text(input, () => getComputedStyle(input, "::placeholder").color) : null, accessibleName: input.getAttribute("aria-label") ?? input.labels?.[0]?.textContent ?? null, type: input.type, width: inputBox.width, height: inputBox.height, suggestions: input.list?.options.length ?? 0 },
-      label: text(document.querySelector(".sidebar-filter-label")),
+      input: { ...text(input), placeholder: input.value === "" ? text(input, () => getComputedStyle(input, "::placeholder").color) : null, accessibleName: input.getAttribute("aria-label") ?? input.labels?.[0]?.textContent ?? null, placeholderText: input.placeholder, type: input.type, width: inputBox.width, height: inputBox.height, suggestions: input.list?.options.length ?? 0 },
+      // the glass in the field's leading cell stands for its word: no label beside the field
+      glass: (() => {
+        const glass = document.querySelector(".sidebar-filter-glass");
+        if (!glass) return null;
+        const box = glass.getBoundingClientRect();
+        return { width: box.width, insideField: box.left >= inputBox.left && box.right <= inputBox.right && box.top >= inputBox.top && box.bottom <= inputBox.bottom, label: document.querySelector(".sidebar-filter label") !== null };
+      })(),
       clear: clear ? { accessibleName: clear.getAttribute("aria-label"), width: clearBox!.width, height: clearBox!.height, glyphContrast: svg ? contrast(over(rgba(getComputedStyle(svg).color), background(clear)), background(clear)) : null } : null,
       selectedNote: [...document.querySelectorAll(".sidebar-filter-note")].map((el) => text(el)),
       contextWorkspace: [...document.querySelectorAll(".workspace-group.is-filter-context > .workspace-header .workspace-name")].slice(0, 3).map((el) => text(el)),
@@ -365,14 +396,16 @@ async function pickerArrowDrawn(page: Page): Promise<boolean> {
 
 /** AA for the filter's own words (4.5:1 for text, 3:1 for the clear's glyph) and a finger's 44 px clear on a phone */
 function assertMeasured(m: Record<string, any>, phone: boolean, name: string): void {
-  const texts = [m["input"], m["input"]?.placeholder, m["label"], ...m["selectedNote"], ...m["contextWorkspace"], ...m["contextAgent"], m["noMatch"]].filter(Boolean);
+  const texts = [m["input"], m["input"]?.placeholder, ...m["selectedNote"], ...m["contextWorkspace"], ...m["contextAgent"], m["noMatch"]].filter(Boolean);
   for (const t of texts) assert.ok(t.contrast >= 4.5, `${name}: "${t.text}" has contrast ${t.contrast}, below 4.5:1`);
   if (m["clear"]) {
     assert.ok(m["clear"].glyphContrast >= 3, `${name}: the clear's glyph has contrast ${m["clear"].glyphContrast}, below 3:1`);
     if (phone) assert.ok(m["clear"].width >= 44 && m["clear"].height >= 44, `${name}: the clear is ${m["clear"].width}x${m["clear"].height}, under 44 px`);
   }
   assert.ok(m["input"].accessibleName, `${name}: the field has an accessible name`);
-  assert.ok(m["label"]?.text && m["input"].accessibleName.includes(m["label"].text), `${name}: the field's visible label is in its name`);
+  assert.ok(m["glass"]?.insideField && m["glass"].width > 0, `${name}: the field's glass sits inside it`);
+  assert.equal(m["glass"].label, false, `${name}: no word labels the field beside it`);
+  assert.equal(m["input"].placeholderText, m["input"].accessibleName, `${name}: the placeholder says what the field's name does`);
   assert.ok(m["input"].suggestions > 0, `${name}: the field offers the rows' names as suggestions`);
   for (const gap of m["agentNoteGap"]) assert.ok(gap >= 4, `${name}: an agent row's Selected tag stands ${gap} px from its title`);
 }
@@ -574,6 +607,7 @@ async function selectedNonMatch(browser: Browser, scene: Scene): Promise<void> {
     if (scene.phone) await openDrawer(page, scene.language);
     await agentRows(page).first().waitFor({ state: "attached" });
     await page.waitForFunction(() => document.querySelectorAll(".machine-list .machine-group").length >= 2);
+    await turnEnded(page);
     assert.equal(await filterInput(page).inputValue(), "", `${name}: a reload starts with an empty filter`);
     assert.equal(await page.locator(".sidebar-filter-empty").count(), 0, `${name}: nothing says no match after a reload`);
     assert.deepEqual(await rosterView(page), before, `${name}: the roster is back after a reload`);
@@ -867,8 +901,7 @@ async function koreanShots(browser: Browser): Promise<void> {
       await capture(page, current, "rest");
       report(`measurements-rest-390-${theme}-ko`, await measure(page));
       const input = filterInput(page);
-      assert.equal(await input.getAttribute("placeholder"), "워크스페이스와 에이전트", "the field says what it filters in Korean");
-      assert.equal(await page.locator(".sidebar-filter-label").textContent(), "필터", "the field's label is in Korean");
+      assert.equal(await input.getAttribute("placeholder"), "워크스페이스와 에이전트 필터", "the field says what it filters in Korean");
       await input.click();
       await input.pressSequentially("flag");
       await waitWorkspaceIds(page, 'ids.includes("w1K") && ids.length < 11');

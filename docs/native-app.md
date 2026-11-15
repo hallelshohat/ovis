@@ -185,6 +185,34 @@ What is there:
   to every page, the client included.
 - A PC joins the list of PCs only once a page of it has loaded, so an address that never
   answered, or answered with an HTTP error, is not kept.
+- On Android an address typed, scanned or picked from the list is first asked whether it is Ovis
+  (`PCStore.check`, through the `check` option of `HerdrShell.open`): its
+  `/api/health?scope=bridge`, which every Ovis since 0.1 answers with `ok` and `auth`, or the
+  hosted app's `<meta name="ovis-shell">` on that answer or on its page. It is "not Ovis" only when
+  its page loads while its `/api/health` answers 200 or 404 with something else. A redirect (a
+  sign-in in front of the PC) and an answer that does not tell (401, 403 or 429 from a proxy or WAF,
+  502 from `tailscale serve` while Ovis is stopped) are left to the WebView, as before. For up to 20 seconds the connect screen says what it
+  opens, with Cancel; an address that is not Ovis, refuses, is not found or does not answer stays
+  on the connect screen with why (`openFailure()` in `shell.js`). A relay link and the account's
+  front page open without it. The iOS app opens at once, as before.
+- A PC paired over the Ovis relay opens from its pairing link, scanned or pasted:
+  `https://app.ovis.sh/s/<server_id>/#offer=...` (`relayLink()` in `shell.js`). Only the hosted
+  shell's origin may carry an offer: one on any other origin is refused on the connect screen,
+  as is an offer that names another PC than its path. The app opens the link as the WebView's
+  first page, like any PC (the offer stays in the fragment through
+  `instanceDescriptor().serverURL` on iOS, a 2026-10-30 Simulator spike, and through the start
+  path on Android), and the hosted shell pairs from there. Every relay PC shares that origin, so
+  the app saves it by its scope (`https://app.ovis.sh/s/<server_id>/`) and labels it with the
+  offer's `name`; a PC opened at its own address is still saved by its origin, and lists saved
+  before keep their entries as they are. The allowed host (iOS) and the bridge's origin
+  (Android) follow the PC opened, so a relay PC gets the shell's origin and nothing else.
+  A page belongs to a relay PC only within its scope as a browser would load it: a path with a
+  `.` or `..` segment (plain or percent-encoded), an encoded `/` or a `\` is refused, so
+  `<scope>../<other server_id>/` cannot pass for this PC (`PCStore.cleanPath` on Android,
+  `ScopePath.swift` on iOS; on a Mac, `swiftc app/ios/App/App/ScopePath.swift
+  app/ios/ScopePathCheck/main.swift -o /tmp/check && /tmp/check` runs its checks).
+  `error.html` says when the relay could not be reached. A test build points at another shell
+  with `OVIS_APP_URL=https://<host> bun run build:web`.
 - Both apps allow plain http to any host, as Android cannot limit cleartext to address ranges.
   Before opening plain http to an address outside a tailnet, a home network and the phone (one not
   in the list of PCs yet), the connect screen warns that the pairing code and everything typed
@@ -201,12 +229,20 @@ What is there:
   PC's whole host stay in the app and shows `error.html` when the first load fails. Until the
   PC answers, a native cover says which PC is opening and offers Change PC; when a PC
   sends no answer within 20 seconds, the cover itself says so, with Try again and Change PC, and
-  for a Tailscale address that Tailscale may be off on the phone (WebKit alone waits a minute or
+  for a Tailscale address that Tailscale may be off on the phone, or for a public server that it
+  may be down or out of the phone's reach (WebKit alone waits a minute or
   more, which is what a phone with Tailscale off sees for a `.ts.net` address, and while that
-  connection hangs it did not paint the error page either). When a Tailscale address fails to
+  connection hangs it did not paint the error page either). A PC that answered is never cut off
+  (`OpeningWatch`): the cover stays until the client is up (its root no longer holds index.html's
+  loading spinner), with a bar filled from the web view's `estimatedProgress` (it never goes back
+  and stops at 95 %); after 5 s it says the connection is slow, with Try again. iOS has no count
+  of the bytes received, and `estimatedProgress` holds still while one large file arrives (about
+  40 % through the client's script at 10 KB/s), so iOS never claims a stall as Android does, and a
+  TLS handshake still under way at 20 s counts as no answer. When a Tailscale address fails to
   load, `error.html` (on Android too) adds the same note. A redirect of the address being opened
   to another origin is handled as on Android (see [The Android app](#the-android-app)), where
-  Capacitor would send another host to Safari.
+  Capacitor would send another host to Safari, except a sign-in in front of the PC: on iOS one
+  that does not answer as Ovis still ends on the error page.
   WebKit has no public mark for a redirect, so until the first page commits,
   `NavigationFailureProxy` takes any main-frame action to another origin that comes while the
   main frame's navigation has not committed for one. Its question to `/api/health` is a
@@ -218,6 +254,11 @@ What is there:
   one goes with its web view. `@capacitor/barcode-scanner` kept every old one alive (its scanner
   manager holds the view controller, which holds the bridge and the plugin), so
   `app/patches` makes that manager for each scan instead of keeping it.
+  `HerdrBridgeViewController` also hides WebKit's form accessory bar (the up and down arrows and the check mark over the
+  keyboard), as `@capacitor/keyboard`'s `hideFormAccessoryBar` would, without that plugin or its
+  patch of WebKit's private content view: its web view is a `WKWebView` subclass whose
+  `inputAccessoryView` is nil, which WebKit asks for since iOS 13. The client has its own key bar,
+  and a page cannot remove WebKit's.
 - In the client, `src/lib/nativeApp.ts` notices the app through `window.Capacitor`, as the app
   injects it; the browser build carries no Capacitor code. Inside the app:
   - Settings → Phone & devices has a Change PC row, and so does the pairing screen (a PC that
@@ -351,11 +392,50 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
 - `MainActivity` builds Capacitor's config at runtime when a PC is chosen. It sets
   `setServerUrl` to the PC's bare origin (a pairing link's path and query come in through
   `setStartPath`) and `setErrorPath("error.html")`. It sets no `allowNavigation`: Capacitor turns
-  each entry into another origin for its bridge, and the PC's own links stay in the WebView anyway.
+  each entry into another origin for its bridge, and the PC's own pages stay in the WebView anyway.
+  A main-frame link to any other origin (scheme, host and port; the default port counts as none)
+  opens in the phone's browser, even on the PC's own host: Capacitor compares scheme and host only,
+  so another server on that host (a dev server's port) would otherwise replace Ovis in the WebView
+  (`PCStore.sameOrigin`). A sign-in's steps and the redirects of the first load are judged before it.
   Opening or leaving a PC starts the activity again, so the next page is a first load and the
   old WebView goes with the old activity.
+- Until the PC's page shows, a native cover over the WebView says which PC is opening and offers
+  Change PC, as on iOS. When the PC's page has not answered after 20 seconds (`PCStore.ANSWER_SECONDS`,
+  counted from Open on the connect screen when it checked the address first, with at least 5 s left
+  for the page) the app stops the load and shows `error.html`, which says the PC did not answer:
+  for a home network or tailnet address, that such an address does not open over mobile data or
+  another Wi-Fi; for a public server, that it may be down or out of the phone's reach. Chromium
+  alone waits about two minutes. Bytes still arriving before that answer (a slow TLS handshake)
+  put the limit off until 5 s pass with none, for at most 60 s, so a server that completes its
+  handshake and never responds still gets the error page ("accepted the connection but sent no
+  page"). A PC whose page has answered is never cut off (`OpeningWatch`, from the WebView's
+  committed response and the app's received bytes, `TrafficStats`): after 5 s the cover says the
+  connection is slow and how much has arrived, and after 20 s with nothing more it offers Keep
+  waiting and Try again. Once the PC has answered, the cover stays until the client is up (its
+  root no longer holds index.html's loading spinner; a page with no root, such as a sign-in, lifts
+  it when shown) and shows a bar: filled by the bytes received against the sizes of the page and
+  the files it starts with (a HEAD of each from the page, so with the page's own encoding and
+  cookies), indeterminate when any of them gives no Content-Length; it never goes back and stops at
+  95 % until the client is up. The page's files are content-hashed and cached a year, so once an
+  open has finished a second one fetches only index.html (1.6 s at 10 KB/s, against 126 s for the
+  first); a new release names new files, and each PC's origin keeps its own copy. On a 10 KB/s link the first paint needs
+  about 90 KB and a usable client about 1.1 MB (measured on main, 2026-11-14). The first page
+  of a PC saved by its origin is checked once more (`PCStore.check`, with the WebView's cookies):
+  one that answers but not as Ovis is not kept and gives way to `error.html`, which has Change PC,
+  so a PC saved before that check (or one whose port another server took) never traps the app.
 - `onPause` flushes WebView cookies. Without it, a pairing made a moment before the app was
   swiped away was lost: the next start asked for pairing again.
+- Back goes to the page first. The page keeps a history entry for everything open over it (a
+  sheet, a dialog, a menu, the workspace list: `src/lib/sheetHistory.ts`) and for each pane it
+  moved to, so `MainActivity` keeps an `OnBackPressedCallback` on while the WebView's history has
+  an entry of the same place behind the page shown (the PC's pages, or the app's own before a PC
+  is chosen: `PCStore.pageTakesBack`, told again on every `doUpdateVisitedHistory`), and its Back
+  is `goBack()`: the page closes what is open, or shows the pane before, and the demo goes back to
+  the connect screen. With no such entry (the first page with nothing open, a sign-in in front of
+  the PC, `error.html`) the callback is off and Back is the system's: it leaves the app, with
+  Android's own predictive-back animation, and no second press is asked for. Before this every
+  Back left the app, whatever was open. The iOS app has no Back: the edge swipe is the page's (it
+  opens the workspace list), and WKWebView's back-forward swipe stays off.
 - `HerdrShellPlugin` and `PCStore` (SharedPreferences) mirror the iOS plugin and store. As on
   iOS, a pairing link stays in memory until a PC page loads.
 - Capacitor injects its bridge only into the PC's origin, so `error.html`, served from the app
@@ -363,6 +443,26 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
   for Try again and Change PC. For the same reason `error.html` carries its own style and
   script, which `app/scripts/build-web.ts` inlines.
 - The manifest allows cleartext http to any host (see the connect screen's warning above).
+- The WebView has no download handler and no Web Share, so a download link does nothing there.
+  Download in the chat's image viewer hands the picture's bytes, read by the page (relay pictures
+  through the relay), to `SaveImagePlugin` (`OvisSave`), which writes them to Downloads through
+  MediaStore with no storage permission, as Chrome saves a download. Android 8 and 9 give an app
+  that without the storage permission, so there it opens the share sheet with the picture instead.
+  An app built before the plugin makes the viewer say it couldn't save.
+- A PC's link on the hosted shell tapped outside the app (a message, the camera app reading the
+  PC's QR code) opens in the app: the manifest's `autoVerify` intent-filter takes
+  `https://app.ovis.sh/s/`, which Android verifies against
+  `https://app.ovis.sh/.well-known/assetlinks.json` (written by `scripts/shell-build.ts` with Play's
+  app signing certificate and the upload certificate, so it is live once a release deploys the
+  hosted shell). `MainActivity` takes only a link to a PC's scope (`PCStore.appLink`); one to
+  another page of the hosted shell leaves the open page alone. A view of a PC (a file's `#read=`, a
+  pane's `#pane=` or an older `?pane=`) opens that PC at that view when the app has it saved, and
+  otherwise leaves the open page alone too. A link to pair from (the scope alone or with its
+  `#offer=`) is kept in memory (`PCStore.link`) for the connect screen, which takes it once (`HerdrShellPlugin.takeLink`, which an activity showing a PC never answers, as its
+  page has the bridge too) and opens it as a scanned QR code, so `relayLink()` checks the offer the
+  same way. A link handed back when the app is restored or started from Recents is not opened again. Until the link is verified, Android opens such links in the
+  browser as before. The hosted shell also serves `apple-app-site-association` for the iOS app,
+  which still needs the Associated Domains capability (`applinks:app.ovis.sh`) and a handler.
   `minSdkVersion` is 26 (Android 8), which the QR scanner's library needs. The merged manifest
   asks for INTERNET, ACCESS_NETWORK_STATE, CAMERA (the QR scanner) and androidx's own
   `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`.
@@ -405,9 +505,22 @@ pieces are the Java twins of the iOS ones, in `app/android/app/src/main/java/sh/
   lookup, which Android cannot cut short, can add a few). An origin that answers as Ovis
   (http to https, an IP address to the PC's name, another port) becomes the PC and opens again as
   the first page, with the bridge: it gets nothing the address's own page would not have had.
-  Anything else, such as a sign-in page, another site or a loop, gets no bridge and is not saved,
-  and the error page names where the address led. After five PCs in a row made this way, the next
-  redirect ends on the error page too. Once the first page shows, Capacitor decides on redirects
+  Anything else is taken for a sign-in in front of the PC, such as Cloudflare Access or another
+  authenticating proxy: it loads in the WebView without the bridge, is never saved and never
+  becomes the PC. Until a page of the PC loads, `MainActivity` keeps main-frame http and https
+  navigations (the sign-in's pages, its identity provider's, the way back to the PC) in the
+  WebView rather than the browser, so the sign-in's cookie lands in the WebView's store, which
+  `onPause` flushes. A redirect over public plain http or from https to http
+  (`PCStore.refusedHop`), there or at any later step of the sign-in, ends on the error page,
+  which names where it led; the way back to the PC's own address is never refused. This check is
+  best effort: a form's POST to such an address is held in `shouldInterceptRequest` before it is
+  sent, but a 307 or 308 redirect of a POST is followed by the WebView without asking either
+  callback, so a sign-in server that redirects its POST to plain http is not caught. So does a sign-in on a
+  WebView without `WEB_MESSAGE_LISTENER`, where Capacitor's bridge is a JavaScript interface any
+  page could call. An identity provider that refuses embedded web views (Google sign-in answers
+  `disallowed_useragent`) still fails there, and a sign-in kept in a session cookie (one with no
+  expiry) is asked for again whenever the app starts over, as Capacitor's cookie plugin clears
+  session cookies then; Cloudflare Access's cookie has an expiry. After five PCs in a row made this way, the next redirect ends on the error page too. Once the first page shows, Capacitor decides on redirects
   as before: one could then come from a link to a page that is not the PC's (another port on its
   host), which must not choose the PC.
 - `file_paths.xml` shares only the app's external Pictures folder, where Capacitor puts a photo
@@ -457,6 +570,43 @@ were read through the WebView's DevTools socket (`webview_devtools_remote_<pid>`
 Still open on Android:
 
 - QR scanning and IME were not tried in the emulator; a physical phone should check them.
+
+## Through the Ovis relay
+
+A PC can also be reached through the [Ovis relay](relay.md), which is off by default and end-to-end
+encrypted ([how to use it](guide.md#through-the-ovis-relay)). Its pairing QR code holds a link to
+the hosted app, `https://app.ovis.sh/s/<server_id>/#offer=…`, not the PC's own address. Scanned or
+pasted into the connect screen, that link opens the hosted app's pairing screen in the app; an
+offer on any other origin is refused there. Each relay PC is saved by its scope URL, older entries
+saved by origin keep working, and a page counts as that PC's only inside its scope ([The app
+(app/)](#the-app-app) has the details). Scanned with the phone's camera instead, the code opens the
+hosted app in the phone's browser.
+
+Files load as in a browser without a service worker ([relay files](relay.md#files)), since the
+app's web view has none ([Spike results](#spike-results-2026-10-19)): each picture, PDF or video
+loads whole, up to 64 MiB, before it shows, so a video can't skip ahead while it loads.
+
+### Direct on the same network
+
+A page on https cannot open the PC's plain `ws://` direct carrier ([relay.md](relay.md#direct-on-the-same-network)),
+so the apps' `OvisDirect` plugin opens it for the hosted app (`app/ios/App/App/OvisDirectPlugin.swift`,
+`app/android/app/src/main/java/sh/ovis/app/OvisDirectPlugin.java`, `src/lib/relay/directSocket.ts`):
+
+- It answers only the main frame of `https://app.ovis.sh`: on iOS `DirectCallGate` stands in front of
+  Capacitor's message handler, which lets any frame call; on Android Capacitor's own origin rule and
+  main-frame check apply, and the plugin refuses without the WebView's message listener.
+- It opens only `ws://<10/8, 172.16/12, 192.168/16, 169.254/16 or Tailscale's 100.64/10 address>:<port>/v1/ws?v=1`,
+  at most two at once, and closes them when a new page loads. Noise inside the channel proves the PC.
+  Its `features` call answers `{ tailnet: true }`, so the page asks the PC for its Tailscale address
+  only in an app that opens it; an app built before that has no `features` and stays on home-network
+  addresses. A Tailscale address needs no Local Network permission (Tailscale is a VPN on the phone).
+- Frames cross the bridge as `{ id, kind, data }` (binary as base64), in order; the page acknowledges
+  what it took, and a socket with more than 4 MiB or 16,384 messages unacknowledged is closed (1009).
+- iOS asks for Local Network access the first time (`NSLocalNetworkUsageDescription`); declined, the
+  app stays on the relay. The simulator does not model that prompt: check it on a real iPhone.
+  Android needs no permission while `targetSdkVersion` is below 37; at 37 add
+  `ACCESS_LOCAL_NETWORK`. Android has no WebSocket library, so `DirectSocket.java` is a small
+  `ws://` client of its own.
 
 ## Risks and open questions
 

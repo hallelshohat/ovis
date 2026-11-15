@@ -1,0 +1,27 @@
+/* A status in words (StatusTip.tsx), a popover placed under its badge from script; it lets the
+   pointer through so the badge underneath keeps its hover and its click. */
+.status-tip {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  max-width: min(20rem, calc(100vw - 32px));
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: normal;
+  line-height: 1.4;
+  text-align: start;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.status-tip:popover-open { display: flex; }
+.status-tip strong { color: var(--text-strong); font-weight: 600; }

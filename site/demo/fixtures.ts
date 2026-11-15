@@ -5,6 +5,7 @@
  * code, so the browser bundle can take it.
  */
 import type { ConversationTurn, InteractivePrompt, SessionHistoryAgent, SessionHistoryRow, SlashCommand } from "../../shared/protocol.ts";
+import { AGENT_CATALOG, catalogRow, meetsMinVersion, type AgentCatalogResponse } from "../../shared/agent-catalog.ts";
 
 export interface DemoSpec {
   key: string;
@@ -20,6 +21,20 @@ export interface DemoSpec {
   /** a second tab, labelled `label`, in this spec's workspace instead of a workspace of its own */
   tabOf?: string;
 }
+
+/** The demo PC's versions of the agents its panes run; every other catalog agent is not installed there. */
+const DEMO_INSTALLED: Readonly<Record<string, string>> = { claude: "2.1.311", codex: "0.163.0", omp: "18.8.7", pi: "0.73.1", hermes: "0.22.5" };
+
+/** GET /api/agent-catalog on the demo PC, a Linux one: the real catalog, with the agents above installed. */
+export const DEMO_AGENT_CATALOG: AgentCatalogResponse = {
+  platform: "linux",
+  agents: AGENT_CATALOG.map((entry) => {
+    const version = DEMO_INSTALLED[entry.id];
+    return catalogRow(entry, "linux", version === undefined
+      ? { installed: false, binary: null, on_path: null, version: null, version_error: null, meets_min_version: null }
+      : { installed: true, binary: entry.detect.binaries[0]!, on_path: true, version, version_error: null, meets_min_version: entry.min_version === null ? null : meetsMinVersion(version, entry.min_version.version) });
+  }),
+};
 
 // The sidebar reads as two repositories, each with its own agent and two agent worktrees under it.
 export const SPECS: DemoSpec[] = [
@@ -40,6 +55,37 @@ const RESUME_FLAGS: Record<SessionHistoryAgent, string[]> = {
   omo: ["--session-id"], opencode: ["--session"], hermes: ["--resume"], grok: ["--resume"], agy: ["--conversation"], devin: ["--resume"],
 };
 export const SESSION_HISTORY_AGENTS = Object.keys(RESUME_FLAGS) as SessionHistoryAgent[];
+
+/**
+ * The session a launch's arguments resume: the agent's own resume flags, then the id, as its history
+ * rows give them (`claude --resume <id>`, `codex resume <id>`); any other arguments resume none.
+ */
+export function resumedSession(agent: string | null, args: unknown): string | null {
+  if (agent === null || !(SESSION_HISTORY_AGENTS as string[]).includes(agent) || !Array.isArray(args)) return null;
+  const flags = RESUME_FLAGS[agent as SessionHistoryAgent];
+  const id: unknown = args[flags.length];
+  return args.length === flags.length + 1 && flags.every((flag, index) => args[index] === flag) && typeof id === "string" ? id : null;
+}
+
+/**
+ * Web push on the demo: the fictional workstation's key, and two subscriptions its push service has
+ * already answered for, so the alerts notice has something to show. The public demo has no
+ * PushManager, so only a browser script that lends it one (scripts/push-health-demo-regression.ts)
+ * ever hands these over; nothing here reaches a real push service.
+ */
+export const DEMO_PUSH = {
+  publicKey: "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+  /** retired by its push service after one alert got through: the tombstone that says why alerts stopped */
+  retired: {
+    subscription: { endpoint: "https://push.example.test/demo/retired", keys: { p256dh: "CzBVep_E6Q4zWH2ix-wRNluApcrvFDleg6jN8hc8YYar0PUaP2SJrtP4HUJnjLHW-yBFao-02f4jSG2St9wBJks", auth: "BzxxptsQRXqv5BlOg7jtIg" } },
+    status: { registered: false, last_success_at: t(2), last_failure_at: t(41), last_failure: "gone" as const },
+  },
+  /** refused by its push service, and still registered: told, and not mended by subscribing again */
+  refused: {
+    subscription: { endpoint: "https://push.example.test/demo/refused", keys: { p256dh: "AyA9WneUsc7rCCVCX3yZttPwDSpHZIGeu9j1Ei9MaYajwN36FzRRbouoxeL_HDlWc5CtyucEIT5beJWyz-wJJkM", auth: "BUJ_vPk2c7DtKmek4R5bmA" } },
+    status: { registered: true, last_success_at: t(2), last_failure_at: t(44), last_failure: "rejected" as const },
+  },
+};
 
 /** Two earlier, fictional sessions of an agent in a demo folder, newest first. */
 export function sessionHistoryRows(agent: SessionHistoryAgent): SessionHistoryRow[] {
@@ -74,7 +120,8 @@ export function agentSkillRows(agent: string): SlashCommand[] {
   }
 }
 
-const tool = (name: string, summary: string, input: unknown, output: string): ConversationTurn["parts"][number] => ({ kind: "tool", name, summary, input: typeof input === "string" ? input : JSON.stringify(input, null, 2), output });
+type ToolPart = Extract<ConversationTurn["parts"][number], { kind: "tool" }>;
+const tool = (name: string, summary: string, input: unknown, output: string, background?: ToolPart["background"]): ToolPart => ({ ...(background === undefined ? {} : { background }), kind: "tool", name, summary, input: typeof input === "string" ? input : JSON.stringify(input, null, 2), output });
 
 export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { model: string; reasoning_effort: string } }> = {
   api: {
@@ -125,6 +172,14 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
         tool("Bash", "bun test retry --rerun-each 50", { command: "bun test retry --rerun-each 50" }, " 50 pass\n 0 fail"),
         { kind: "text" as const, text: "The test waited on the real clock, so a slow run let the backoff timer fire before the second attempt was counted. It now drives the timer with a fake clock: 50 runs out of 50 pass." },
       ] },
+      { role: "user" as const, ts: t(10), parts: [{ kind: "text" as const, text: "Lint it, run it twenty more times in the background, and watch CI." }] },
+      { role: "assistant" as const, ts: t(10, 4), end_ts: t(10, 30), parts: [
+        tool("Bash", "Lint the retry helper", { command: "bun run lint src/retry.ts", description: "Lint the retry helper", run_in_background: true }, "Command running in background with ID: demo-lint.", { task_id: "demo-lint", kind: "command" as const, status: "failed" as const, exit_code: 1 }),
+        tool("Bash", "Run the retry test twenty times", { command: "for i in $(seq 20); do bun test test/retry.test.ts || exit 1; done", description: "Run the retry test twenty times", run_in_background: true }, "Command running in background with ID: demo-flaky-run.", { task_id: "demo-flaky-run", kind: "command" as const }),
+        tool("Monitor", "CI finishes on the retry branch", { description: "CI finishes on the retry branch", command: "gh run watch --exit-status" }, "Monitor started (task demo-ci-watch, expires in 30m).", { task_id: "demo-ci-watch", kind: "monitor" as const }),
+        { kind: "text" as const, text: "Twenty runs and a CI watch are going in the background; I'll report when they finish." },
+      ] },
+      { role: "user" as const, ts: t(10, 20), parts: [{ kind: "notice" as const, text: 'Background command "Lint the retry helper" failed with exit code 1', source: "task-notification" }] },
     ],
   },
   omp: {

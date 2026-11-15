@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
+import { SLEEP } from "./fixtures/sleep.ts";
 
 if (process.platform !== "linux") { console.log("SKIP Agy process fixture requires Linux"); process.exit(0); }
 const root = mkdtempSync(join(tmpdir(), "herdr-agy-activity-"));
@@ -27,7 +28,7 @@ const add = (type: string, content = "", extra = {}) => {
   appendFileSync(path, JSON.stringify({ step_index, type, content, status: "DONE", ...extra }) + "\n");
 };
 const executable = join(root, "agy");
-copyFileSync("/bin/sleep", executable); chmodSync(executable, 0o755);
+copyFileSync(SLEEP, executable); chmodSync(executable, 0o755);
 let workspace: string | undefined;
 let server: ReturnType<typeof createServer> | undefined;
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -84,9 +85,11 @@ try {
   await activity.waitFor({ state: "detached" });
   assert.equal(await log.getByText("Remove this active prompt", { exact: true }).count(), 0);
   db.exec("DROP TABLE steps");
-  await log.getByText("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.", { exact: true }).waitFor();
+  // the store gone: the reason the PC knows, in place of the general line
+  await log.locator(".chat-unavailable-reason").getByText(/couldn't find or read the file .* keeps this conversation in/u).waitFor();
+  assert.equal(await log.getByText("Antigravity chat is unavailable. Open Terminal to see activity and tool calls.", { exact: true }).count(), 0);
   assert.deepEqual(errors, []);
-  console.log("PASS Agy desktop/mobile native activity, live tools, completion, late results, rewind and unavailable-chat notice");
+  console.log("PASS Agy desktop/mobile native activity, live tools, completion, late results, rewind and unavailable-chat reason");
 } finally {
   const errors: unknown[] = [];
   try { await browser?.close(); } catch (error) { errors.push(error); }

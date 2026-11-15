@@ -9,6 +9,8 @@ import type { WorkspaceCreated } from "../shared/protocol.ts";
 import { sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { passingFolder } from "../src/lib/recent-directories.ts";
 import { chromePath } from "./chrome-path.ts";
+// machine events stay on SSE here: these checks hold or watch /api/machines/events (the socket transport has its own checks)
+process.env["OVIS_MACHINE_EVENTS_WS"] = "0";
 
 await import("./test-herdr.ts");
 const { createServer } = await import("../server/index.ts");
@@ -118,7 +120,9 @@ try {
           await betaRow.waitFor({ state: "attached" });
           const openNew = async () => {
             if (width === 390) await page.locator('[aria-controls="workspace-drawer"]').click();
-            await page.locator(".machine-new").click();
+            // one-line rows (the default): New workspace is the + beside the logo, and in a phone's drawer the row
+            // closing the lone Host's list
+            await page.locator(width === 390 ? ".machine-list .machine-new-row" : ".header-side .new-workspace-button").click();
             await page.getByRole("dialog").waitFor();
           };
           await openNew();
@@ -151,7 +155,11 @@ try {
             await page.getByRole("menu", { name: "최근 폴더", exact: true }).getByRole("menuitem").and(page.locator(`[title="${path}"]`)).click();
           };
           const submit = dialog.locator('button[type="submit"]');
-          assert.deepEqual(await offered(), ["/older/one", other, project], "folders only seen in panes come behind the one kept");
+          // folders only seen in panes go behind the one kept, in the order their panes were first seen
+          // (src/lib/recent-directories.ts): either pane's folder can be seen first, so they are compared as a set
+          const first = await offered();
+          assert.equal(first[0], "/older/one", "the folder kept comes first");
+          assert.deepEqual([...first.slice(1)].sort(), [other, project].sort(), "folders only seen in panes come behind the one kept");
           assert.equal(new Set(await chips.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().top))).size, 1, "recent folders stay on one row");
           // a phone swipes the row sideways; a wider screen has room for it
           if (width === 390) assert.equal(await dialog.locator(".new-session-folder-chips").evaluate((node) => getComputedStyle(node).overflowX), "auto");
