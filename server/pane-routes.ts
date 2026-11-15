@@ -15,7 +15,7 @@ import { searchConversationPages } from "./conversation-search.ts";
 import { OPENCODE_TOOL_REF } from "./opencode.ts";
 import { openCodeFlagVersion, openCodeInstalledVersion } from "./opencode-service.ts";
 import { DevinHistoryChanged } from "./devin.ts";
-import { agentRename, HerdrError, integrationList, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneGet, paneMoveBeside, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
+import { agentRename, HerdrError, integrationList, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneGet, paneMoveBeside, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom, sessionSnapshot } from "./herdr/client.ts";
 import { paneContext, resolveAgent, versionSourceOf } from "./pane-context.ts";
 import { ompScreenContext } from "./omp-status.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
@@ -24,7 +24,7 @@ import { claudeRewindOpen } from "./prompt.ts";
 import { expandedDirectory } from "./directories.ts";
 import { ConversationDiagnostics } from "./conversation-diagnostics.ts";
 import { ghMerge, ghView } from "./pull-requests/gh.ts";
-import { forgetPullRequest, panePullRequests, pullRequestDeps } from "./pull-requests/index.ts";
+import { forgetPullRequest, gitCheckoutOf, panePullRequests, pullRequestDeps } from "./pull-requests/index.ts";
 import { conversationSources, fileChat, PER_CHAT_FILES, type Chat } from "./pull-requests/sources.ts";
 import { canMerge, type PanePullRequests } from "../shared/pull-requests.ts";
 
@@ -340,7 +340,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     }
   }
 
-  // a chat's pull requests: the links it wrote and the PRs of the branches it ran on (server/pull-requests/)
+  // The space's PRs: board/creation evidence and its current branch (server/pull-requests/).
   if (pathname === "/api/pane/pull-requests" || pathname === "/api/pane/pull-requests/merge") {
     setRequestRoute(pathname);
     const merge = pathname.endsWith("/merge");
@@ -357,7 +357,12 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     }
     if (!paneId) return badRequest("missing_pane_id", "pane_id is required");
     try {
-      const { cwd } = await paneContext(paneId);
+      const { cwd: foregroundCwd, pane } = await paneContext(paneId);
+      const deps = pullRequestDeps();
+      const snapshot = await sessionSnapshot();
+      const checkout = snapshot.workspaces.find((workspace) => workspace.workspace_id === pane.workspace_id)?.worktree?.checkout_path;
+      const paneCwd = pane.cwd ?? foregroundCwd;
+      const cwd = checkout ?? await gitCheckoutOf({ run: deps.run, cwd: paneCwd }) ?? paneCwd;
       // the chat the pane shows now: a transcript file is read itself, a shared store through the chat's pages
       const chat = await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome).then((found): Chat => {
         if (PER_CHAT_FILES.has(found.source)) return fileChat(found.path);
@@ -368,13 +373,12 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
           return { turns: conversation.turns, cursor: conversation.cursor };
         }) };
       }, () => null);
-      const deps = pullRequestDeps();
       const answer = await panePullRequests({ paneId, cwd, chat, fresh: !merge && url.searchParams.get("fresh") === "1" }, deps);
       if (!merge) return jsonResponse(answer satisfies PanePullRequests, 200, { "cache-control": "no-store" });
       const listed = answer.pull_requests.find((pr) => pr.url === target);
       if (!listed) return jsonResponse({ error: { code: "pr_not_in_chat", message: "That pull request is not one of this chat's" } }, 404);
       // what GitHub says now, not what was shown: it may have merged or failed since
-      const now = await ghView(deps.run, cwd, target, listed.own ? listed.repo : null);
+      const now = await ghView({ run: deps.run, cwd, url: target, ownRepo: listed.own ? listed.repo : null });
       // the button's own rule (shared/pull-requests.ts canMerge), on what GitHub says now
       if (now === null || !canMerge(now)) {
         const reason = now === null ? "GitHub did not answer for this pull request"
@@ -382,7 +386,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
           : now.review === "changes_requested" ? "Changes were requested since"
           : now.checks === "pending" ? "Its checks are running again"
           : "Its checks are failing now";
-        return jsonResponse({ error: { code: "pr_not_mergeable", message: reason }, state: now }, 409);
+        const { author: _author, ...state } = now ?? {};
+        return jsonResponse({ error: { code: "pr_not_mergeable", message: reason }, state: now === null ? null : state }, 409);
       }
       const merged = await ghMerge(deps.run, cwd, target);
       forgetPullRequest(target);

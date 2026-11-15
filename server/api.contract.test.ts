@@ -1335,19 +1335,20 @@ describe("tab rename and close", () => {
 });
 
 describe("pull requests", () => {
-  const pr = (number: number, state: string) => ({ number, url: `https://github.com/acme/api/pull/${number}`, title: `PR ${number}`, state, isDraft: false, reviewDecision: "APPROVED", headRefName: "feat/replay-metric", baseRefName: "main", additions: 4, deletions: 1, createdAt: "2026-10-28T14:09:00Z", mergedAt: state === "MERGED" ? "2026-10-28T15:00:00Z" : null, closedAt: null, updatedAt: "2026-10-28T14:10:00Z", statusCheckRollup: [] });
+  const pr = (number: number, state: string) => ({ number, author: { login: "owner" }, url: `https://github.com/acme/api/pull/${number}`, title: `PR ${number}`, state, isDraft: false, reviewDecision: "APPROVED", headRefName: "feat/replay-metric", baseRefName: "main", additions: 4, deletions: 1, createdAt: "2026-10-28T14:09:00Z", mergedAt: state === "MERGED" ? "2026-10-28T15:00:00Z" : null, closedAt: null, updatedAt: "2026-10-28T14:10:00Z", statusCheckRollup: [] });
   let viewState = "OPEN";
   let viewChecks: unknown[] = [];
   let viewReview = "APPROVED";
   const merges: string[] = [];
-  const restore = setPullRequestRunner(async (argv) => {
-    if (argv[0] === "git") return { code: 0, stdout: "feat/replay-metric\n", stderr: "" };
+  const restore = setPullRequestRunner({ board: async () => null, run: async (argv) => {
+    if (argv[1] === "api") return { code: 0, stdout: '{"login":"owner"}', stderr: "" };
+    if (argv[0] === "git") return { code: 0, stdout: argv.includes("--show-toplevel") ? argv[2]! : "feat/replay-metric\n", stderr: "" };
     if (argv[1] === "repo") return { code: 0, stdout: '{"nameWithOwner":"acme/api"}', stderr: "" };
     if (argv[2] === "list") return { code: 0, stdout: JSON.stringify([pr(1931, "OPEN")]), stderr: "" };
     if (argv[2] === "view") return { code: 0, stdout: JSON.stringify({ ...pr(1931, viewState), statusCheckRollup: viewChecks, reviewDecision: viewReview }), stderr: "" };
     if (argv[2] === "merge") { merges.push(argv[3]!); return { code: 0, stdout: "", stderr: "" }; }
     return { code: 1, stdout: "", stderr: "" };
-  });
+  } });
   afterAll(restore);
   const merge = (body: unknown, headers: Record<string, string> = {}) => fetch(`${base()}/api/pane/pull-requests/merge`, {
     method: "POST", headers: { "content-type": "application/json", "x-herdr-machine": "1", ...headers }, body: JSON.stringify(body),
@@ -1392,6 +1393,55 @@ describe("pull requests", () => {
     const missing = await fetch(`${base()}/api/pane/pull-requests?pane_id=unknown%3Ap9`);
     expect(missing.status).toBeGreaterThanOrEqual(400);
     expect(((await missing.json()) as ApiError).error.code).toBeTruthy();
+  });
+
+  it("matches the board checkout from a pane opened in a subdirectory", async () => {
+    resetPullRequestCache();
+    const root = mkdtempSync(join(tmpdir(), "pr-checkout-"));
+    const subdir = join(root, "src");
+    mkdirSync(subdir);
+    const owned = await workspaceCreate({ cwd: subdir, label: "ovis-test-pr-checkout" });
+    const calls: { argv: string[]; cwd: string }[] = [];
+    const recorded = { ...pr(7, "MERGED"), headRefName: "finished-branch" };
+    const restoreCheckout = setPullRequestRunner({
+      board: async () => ({ code: 0, stderr: "", stdout: JSON.stringify({ tasks: [{ id: "api/7", worktree: root, branch: "finished-branch", pr: recorded.url }] }) }),
+      run: async (argv, cwd) => {
+        calls.push({ argv, cwd });
+        const answer = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+        if (argv[0] === "git") return answer(argv.includes("--show-toplevel") ? root : "next-branch");
+        if (argv[1] === "api") return answer('{"login":"owner"}');
+        if (argv[1] === "repo") return answer('{"nameWithOwner":"acme/api"}');
+        if (argv[2] === "list") return answer("[]");
+        return answer(JSON.stringify(recorded));
+      },
+    });
+    try {
+      const response = await fetch(`${base()}/api/pane/pull-requests?pane_id=${encodeURIComponent(owned.root_pane.pane_id)}`);
+      expect(response.status).toBe(200);
+      const answer = await response.json() as PanePullRequests;
+      expect(answer.linked).toBe(1);
+      expect(answer.pull_requests.map((pr) => [pr.number, pr.state])).toEqual([[7, "merged"]]);
+      expect(calls.filter(({ argv }) => argv[0] === "gh").every(({ cwd }) => cwd === root)).toBe(true);
+      expect(calls.some(({ argv, cwd }) => argv.includes("--show-toplevel") && cwd === subdir)).toBe(true);
+
+      // A linked workspace keeps its checkout even when the pane's directory is elsewhere.
+      const snapshot = await sessionSnapshot();
+      const workspace = snapshot.workspaces.find((workspace) => workspace.workspace_id === owned.workspace.workspace_id)!;
+      workspace.worktree = { checkout_path: root, is_linked_worktree: true, repo_key: "api", repo_name: "api", repo_root: root };
+      const readSnapshot = spyOn(herdrClient, "sessionSnapshot").mockResolvedValue(snapshot);
+      calls.length = 0;
+      try {
+        const linked = await fetch(`${base()}/api/pane/pull-requests?pane_id=${encodeURIComponent(owned.root_pane.pane_id)}&fresh=1`);
+        expect(((await linked.json()) as PanePullRequests).pull_requests.map((pr) => pr.number)).toEqual([7]);
+        expect(calls.every(({ cwd }) => cwd === root)).toBe(true);
+        expect(calls.some(({ argv }) => argv.includes("--show-toplevel"))).toBe(false);
+      } finally { readSnapshot.mockRestore(); }
+    } finally {
+      restoreCheckout();
+      resetPullRequestCache();
+      await workspaceClose(owned.workspace.workspace_id);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
