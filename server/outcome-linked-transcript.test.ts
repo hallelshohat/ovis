@@ -37,7 +37,7 @@ for (const order of ["forward", "reverse", "unlinked"] as const) {
       spyOn(client, "paneRead").mockResolvedValue({ ...pane, text: "", source: "detection", format: "text", truncated: false });
       let text = "";
       spyOn(conversation, "readCommandTranscript").mockImplementation(async () => ({
-        identity: "fixture", records: commandTranscriptRecords(text),
+        identity: "fixture", end: Buffer.byteLength(text), records: commandTranscriptRecords(text),
       }));
       for (const [index, id] of ["first", "second"].entries()) {
         const sent = { id, text: "/context", at: at + index * 10, agent: "claude", screen: "", store: null,
@@ -118,7 +118,7 @@ it.each([false, true])("does not give an ambiguous terminal echo's result to Cha
       timestamp: new Date(at + 21).toISOString(), content: "<local-command-stdout>terminal-output</local-command-stdout>" },
   ].map(entry => JSON.stringify(entry)).join("\n");
   let shownText = reserved ? text.split("\n")[0]! : text;
-  spyOn(conversation, "readCommandTranscript").mockImplementation(async () => ({ identity: "fixture", records: commandTranscriptRecords(shownText) }));
+  spyOn(conversation, "readCommandTranscript").mockImplementation(async () => ({ identity: "fixture", end: Buffer.byteLength(shownText), records: commandTranscriptRecords(shownText) }));
   const sent = { id: "ambiguous", text: "/context", at, agent: "claude", screen: "", store: null, form: null,
     identity: JSON.stringify([pane.terminal_id, undefined]), invocations: commandInvocations("claude", "/context", []) };
   noteSubmitted(pane.pane_id, sent.text, sent);

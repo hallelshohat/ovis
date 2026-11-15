@@ -2429,8 +2429,15 @@ async function readPaneConversation(paneId: string, codexHome?: string, page: Co
   return answer;
 }
 
-interface CommandTranscript {
+/**
+ * Command evidence needs native control records that the conversation deliberately hides.
+ * Reuse its pane binding, but resolve evidence and pi ancestry from one bounded tail only.
+ * Database agents are observed through their readers/native events, never guessed from turns.
+ */
+export interface CommandTranscript {
   readonly identity: string;
+  /** Byte boundary of this validated read, including a partial final record. */
+  readonly end: number;
   readonly records: readonly CommandTranscriptRecord[];
 }
 const WINDOW_CHUNK_BYTES = 64 * 1024;
@@ -2548,7 +2555,7 @@ export async function readCommandTranscript(paneId: string, codexHome?: string, 
   }
   const cleared = current.reduce((last, { entry }, index) => isContextClear(entry, source) ? index : last, 0);
   const answer = branch === "unresolved" ? null
-    : { identity: `${identity}\0${branch}`, records: cleared > 0 ? current.slice(cleared) : current };
+    : { identity: `${identity}\0${branch}`, end: stat.size, records: cleared > 0 ? current.slice(cleared) : current };
   remember(commandTranscripts, path, { signature, file, start, end: stat.size, digests, partialStart, records, identity, branch, leaf, answer, branches }, 4);
   return answer;
 }

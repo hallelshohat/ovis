@@ -41,7 +41,7 @@ it("keeps a startup send bound to the reported omp session and observes its late
   }));
   spyOn(conversation, "paneProcessRoots").mockResolvedValue({ omo: null, environ: null, pid: null, cwd: null });
   spyOn(conversation, "readCommandTranscript").mockImplementation(async () => ({
-    identity: "fixture", records: commandTranscriptRecords(transcript),
+    identity: "fixture", end: Buffer.byteLength(transcript), records: commandTranscriptRecords(transcript),
   }));
   spyOn(Bun, "sleep").mockImplementation(() => { entered.resolve(); return resume.promise; });
   const deliver = spyOn(client, "agentPrompt").mockResolvedValue();

@@ -33,7 +33,8 @@ import { PendingInputs, samePendingIdentity, type FirstMessageAsk, type PendingI
 import { NO_AGENT_MESSAGE, PASTED_NOT_SENT_MESSAGE, submitNotTyped } from "../../shared/submit-outcome.ts";
 import { processStartedAtAsync } from "../process-start.ts";
 import { agentProcessInFront } from "../agent-process.ts";
-import { agentProcesses } from "../conversation.ts";
+import { agentProcesses, readCommandTranscript } from "../conversation.ts";
+import { codexDeliveryAccepted, type CodexDeliveryAnchor } from "../codex-delivery.ts";
 import { isShellAgentKind, SHELL_AGENTS } from "../shell-agent.ts";
 import { capturePiDeliveryAnchorRetrying, matchPiDeliveries, PiReceiptCapacity, piRecordText, type PiDeliveryAnchor, type PiReceiptReservation } from "../pi-delivery.ts";
 import { isPiProcess, piTranscriptPath, piUnwrittenHeaderId } from "../pi.ts";
@@ -133,7 +134,7 @@ const TYPED_WHILE_WAITING = { code: "typed_while_waiting", message: "Something w
 const FIRST_MESSAGE_RECEIPTS = 8;
 
 export function createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, typedInto = () => 0, submitText, authorizeSocket, clientSnapshot, omo, queueHeld = () => false, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS }: {
-  options: { pendingStartTimeoutMs?: number; piReceiptLimit?: number; submitDeadlineMs?: number; submitDelayMs?: number; ompReportPollMs?: number; ompStartupMs?: number; openCodeStateDir?: string;
+  options: { pendingStartTimeoutMs?: number; piReceiptLimit?: number; submitDeadlineMs?: number; submitDelayMs?: number; ompReportPollMs?: number; ompStartupMs?: number; openCodeStateDir?: string; codexHome?: string;
     herdrFailure?: HerdrFailureView };
   clients: Set<Client>;
   attachments: ReadonlyMap<string, AttachmentView>;
@@ -807,7 +808,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // Status is deliberately not evidence: Pi can report idle/done while its TUI is staging an automatic-compaction input.
       const beforeCapturePid = beforeEnter.identity.processPid;
       const piAnchor = piTracked ? await preparePiReceipt(paneId, beforeEnter.identity).catch(() => null) : undefined;
-      if (piAnchor !== undefined) {
+      const codexAnchor: CodexDeliveryAnchor | null | undefined = interruptWorkingCodex && beforeEnter.identity.agent === "codex" && beforeEnter.working
+        ? await readCommandTranscript(paneId, options.codexHome).then((read) => read && { identity: read.identity, end: read.end }).catch(() => null) : undefined;
+      if (piAnchor !== undefined || codexAnchor !== undefined) {
         enterMark = pending.mark(paneId);
         beforeEnter = await pendingContext(owner, paneId, lease, identity, true, agentOnly).catch(enterRefused);
         if (automatic && (beforeEnter.working || queueHeld(paneId, false))) enterRefused(new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed"));
@@ -867,6 +870,8 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       }
       let statusAtRead = pending.current(paneId);
       await interruptCodexSteering(interruptWorkingCodex, closeMention(text), { agent: beforeEnter.identity.agent, working: beforeEnter.working, screen: beforeEnter.screen }, {
+        accepted: codexAnchor ? async () => codexDeliveryAccepted({ anchor: codexAnchor,
+          current: await readCommandTranscript(paneId, options.codexHome).catch(() => null), text: closeMention(sent) }) : undefined,
         read: async () => {
           const status = pending.current(paneId);
           const current = await pendingContext(owner, paneId, lease, identity, true);
