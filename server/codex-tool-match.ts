@@ -15,10 +15,10 @@ export function matchCodexToolActivity({ screen, candidates }: {
   const shown = toolPreviews(screen);
   if (shown.length < MIN_PAIRS) return null;
   const readings = candidates.map(({ path, text }) => ({ path, evidence: readEvidence({ text, shown }) }));
-  const owners = readings.filter(({ evidence }) => evidence !== null && evidence.matches.size >= MIN_PAIRS);
+  const owners = readings.filter(({ evidence }) => evidence !== null && evidence.matches.size === shown.length);
   if (owners.length !== 1) return null;
   const owner = owners[0]!;
-  return readings.some(({ path, evidence }) => evidence === null || path !== owner.path && (evidence.quoted.size >= MIN_PAIRS || evidence.pending.size > 0)) ? null : owner.path;
+  return readings.some(({ path, evidence }) => evidence === null || path !== owner.path && (evidence.quoted.size === shown.length || evidence.pending.size > 0)) ? null : owner.path;
 }
 
 export const hasCodexToolActivity = (screen: string): boolean => toolPreviews(screen).length >= MIN_PAIRS;
@@ -64,7 +64,7 @@ async function scanConflict({ shown, segments }: { shown: readonly Preview[]; se
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
     try {
       for await (const line of lines) {
-        if (!weighLine({ line, shown, evidence }) || evidence.quoted.size >= MIN_PAIRS) return true;
+        if (!weighLine({ line, shown, evidence }) || evidence.quoted.size === shown.length) return true;
       }
     } catch { return true; }
     finally { lines.close(); stream.destroy(); }
