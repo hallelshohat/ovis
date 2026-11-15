@@ -628,7 +628,7 @@ describe("AgentSidebar fold memory", () => {
       ...machine.snapshot, panes: machine.snapshot.panes.map((pane) => pane.pane_id === paneId ? { ...pane, agent_status: status } : pane),
     } }));
     const since = () => renderer!.root.findByProps({ "data-machine": "local", "data-pane": paneId }).findAll((node) => node.props.className === "agent-since").map((node) => node.children.join(""));
-    const section = () => renderer!.root.findByProps({ className: "agent-section-toggle sidebar-section-label" });
+    const section = () => renderer!.root.findByProps({ className: "agent-section-toggle sidebar-section-label section-label" });
     stored.set("ovis:agent-groups", "true");
     stored.set("ovis:agent-state-folds", "[]");
     jest.useFakeTimers();
