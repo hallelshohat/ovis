@@ -8,6 +8,8 @@ import { commandInvocations, commandOutcome } from "./outcome.ts";
 import { handlePromptRequest, noteSubmitted } from "./prompt.ts";
 import { processStartedAtAsync } from "./process-start.ts";
 import { GJC_NATIVE_DIRECTORY } from "../shared/gjc-native.ts";
+import { codexDeliveryAccepted } from "./codex-delivery.ts";
+import { match } from "ts-pattern";
 import type { HerdrPane, PanePromptResponse, SessionSnapshot, SlashCommand } from "../shared/protocol.ts";
 
 const realStat = fs.statSync;
@@ -15,6 +17,51 @@ const claudeAt = (path: string) => async () => {
   const proven = realStat(path, { bigint: true });
   return { source: "claude-transcript" as const, path, claudeFile: `${proven.dev}:${proven.ino}` };
 };
+
+it.each(["append", "rebuild", "rewrite", "replace", "switch", "partial"] as const)("retains Codex receipt validation across four-peer cache eviction: %s", async (mode) => {
+  const root = fs.mkdtempSync(join(tmpdir(), "codex-receipt-eviction-"));
+  const path = join(root, "original.jsonl");
+  const other = join(root, "other.jsonl");
+  const text = "fresh receipt: 한글 👩🏽‍💻";
+  const line = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }) + "\n";
+  const earlier = JSON.stringify({ type: "session_meta", payload: { id: "original" } }) + "\n";
+  fs.writeFileSync(path, earlier + (mode === "partial" ? line.slice(0, 40) : ""));
+  fs.writeFileSync(other, earlier + line);
+  let currentPath = path;
+  const binding = spyOn(conversation, "paneTranscript").mockImplementation(async (pane) => ({
+    source: "codex-transcript", path: pane === "original" ? currentPath : join(root, `${pane}.jsonl`), codexHome: root,
+  }));
+  const reads = spyOn(fs, "readSync");
+  try {
+    const anchor = await conversation.readCommandTranscript("original");
+    expect(anchor).not.toBeNull();
+    if (!anchor) throw new Error("missing receipt anchor");
+    for (let index = 0; index < 4; index++) {
+      fs.writeFileSync(join(root, `peer${index}.jsonl`), earlier);
+      await conversation.readCommandTranscript(`peer${index}`);
+    }
+    await match(mode)
+      .with("append", () => fs.appendFileSync(path, line))
+      .with("rebuild", async () => { fs.appendFileSync(path, line); await conversation.readCommandTranscript("original"); })
+      .with("rewrite", () => fs.writeFileSync(path, earlier.replace("original", "rewritten") + line))
+      .with("replace", () => fs.renameSync(other, path))
+      .with("switch", () => { currentPath = other; })
+      .with("partial", () => fs.appendFileSync(path, line.slice(40)))
+      .exhaustive();
+    const shared = mode === "rebuild" ? await conversation.readCommandTranscript("original") : null;
+    reads.mockClear();
+    const current = await conversation.readCommandTranscript("original", undefined, { after: anchor });
+    expect(codexDeliveryAccepted({ anchor, current, text })).toBe(mode === "append" || mode === "rebuild");
+    const bytes = reads.mock.results.reduce((sum, result) => sum + (result.type === "return" && typeof result.value === "number" ? result.value : 0), 0);
+    expect(bytes).toBeLessThanOrEqual(conversation.TRANSCRIPT_WINDOW_BYTES);
+    if (shared) expect(await conversation.readCommandTranscript("original")).toBe(shared);
+  } finally {
+    reads.mockRestore();
+    binding.mockRestore();
+    conversation.forgetTranscriptState();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 it("shares unchanged snapshots and parses only verified appends within the read budget", async () => {
   const root = fs.mkdtempSync(join(tmpdir(), "command-transcript-cache-"));

@@ -1070,26 +1070,39 @@ describe("connection-owned pending input", () => {
     expect(f.bytes()).toBe(`${paste("send this now")}\r\u001b`);
   }, 30_000);
 
-  it("confirms Codex Send now from its fresh transcript record after the pending panel disappeared", async () => {
-    const text = "REVIEW_UI_READY: acknowledge this marker and keep waiting.\nSecond line.";
-    const path = join(root, "codex-accepted.jsonl");
+  it.each([{ literal: false, peers: 0 }, { literal: true, peers: 0 }, { literal: false, peers: 4 }, { literal: true, peers: 4 }])("confirms Codex Send now after the pending panel disappeared: %j", async ({ literal, peers }) => {
+    const text = literal ? "<environment_context>ROUND2_LITERAL: acknowledge this exact example, then continue waiting.</environment_context>"
+      : "REVIEW_UI_READY: acknowledge this marker and keep waiting.\nSecond line: 한글 👩🏽‍💻";
+    const path = join(root, `codex-accepted-${literal}-${peers}.jsonl`);
     const line = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }) + "\n";
     writeFileSync(path, line);
     const f = await setup("codex-accepted", "codex");
+    const peerPaths = new Map(Array.from({ length: peers }, (_, index) => [`${f.pane}-peer${index}`, join(root, `${f.pane}-peer${index}.jsonl`)]));
+    for (const path of peerPaths.values()) writeFileSync(path, line);
     const resolve = conversation.paneTranscript;
-    const binding = spyOn(conversation, "paneTranscript").mockImplementation(async (paneId, ...args) => paneId === f.pane
-      ? { source: "codex-transcript", path, codexHome: root } : resolve(paneId, ...args));
+    const binding = spyOn(conversation, "paneTranscript").mockImplementation(async (paneId, ...args) => {
+      const file = paneId === f.pane ? path : peerPaths.get(paneId);
+      return file ? { source: "codex-transcript", path: file, codexHome: root } : resolve(paneId, ...args);
+    });
+    const keys = herdrClient.paneSendKeys;
+    const written = spyOn(herdrClient, "paneSendKeys").mockImplementation(async (...args) => {
+      const result = await keys(...args);
+      if (args[0] === f.pane && args[1].includes("Enter")) {
+        for (const peer of peerPaths.keys()) await conversation.readCommandTranscript(peer);
+        appendFileSync(path, line);
+      }
+      return result;
+    });
     try {
       const message = await f.queue(1, text);
       f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });
       await f.waitBytes("\r");
-      appendFileSync(path, line);
       expect(await f.socket.action(10)).toMatchObject({ ok: true });
       await f.removed(message.id, "sent");
       expect(f.bytes()).toBe(`${paste(text)}\r`);
       expect(f.socket.seen.some((frame: ServerMessage) => frame.type === "pending-messages"
         && frame.messages.some((item) => item.id === message.id && item.state === "uncertain"))).toBe(false);
-    } finally { binding.mockRestore(); }
+    } finally { written.mockRestore(); binding.mockRestore(); }
   }, 30_000);
 
   it.each([false, true])("keeps Codex Send now uncertain for an old receipt (session changed=%s)", async (changed) => {

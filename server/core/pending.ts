@@ -809,7 +809,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       const beforeCapturePid = beforeEnter.identity.processPid;
       const piAnchor = piTracked ? await preparePiReceipt(paneId, beforeEnter.identity).catch(() => null) : undefined;
       const codexAnchor: CodexDeliveryAnchor | null | undefined = interruptWorkingCodex && beforeEnter.identity.agent === "codex" && beforeEnter.working
-        ? await readCommandTranscript(paneId, options.codexHome).then((read) => read && { identity: read.identity, end: read.end }).catch(() => null) : undefined;
+        ? await readCommandTranscript(paneId, options.codexHome).catch(() => null) : undefined;
       if (piAnchor !== undefined || codexAnchor !== undefined) {
         enterMark = pending.mark(paneId);
         beforeEnter = await pendingContext(owner, paneId, lease, identity, true, agentOnly).catch(enterRefused);
@@ -871,7 +871,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       let statusAtRead = pending.current(paneId);
       await interruptCodexSteering(interruptWorkingCodex, closeMention(text), { agent: beforeEnter.identity.agent, working: beforeEnter.working, screen: beforeEnter.screen }, {
         accepted: codexAnchor ? async () => codexDeliveryAccepted({ anchor: codexAnchor,
-          current: await readCommandTranscript(paneId, options.codexHome).catch(() => null), text: closeMention(sent) }) : undefined,
+          current: await readCommandTranscript(paneId, options.codexHome, { after: codexAnchor }).catch(() => null), text: closeMention(sent) }) : undefined,
         read: async () => {
           const status = pending.current(paneId);
           const current = await pendingContext(owner, paneId, lease, identity, true);
