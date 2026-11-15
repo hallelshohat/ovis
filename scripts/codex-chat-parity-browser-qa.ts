@@ -2,13 +2,14 @@
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright-core";
 import { z } from "zod";
 import type { ConversationResponse } from "../shared/protocol.ts";
 import { parseCodexTranscript } from "../server/codex.ts";
+import { forgetTranscriptState } from "../server/conversation.ts";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { shellQuote } from "../server/machine-security.ts";
@@ -227,6 +228,43 @@ try {
   await capture("interrupted-mobile");
   await page.setViewportSize({ width: 1440, height: 1000 });
   console.log("PASS interrupted-and-resubmitted Codex input is not labeled steering");
+  const replacement = parseCodexTranscript(fixture("0.169.0-interrupted.jsonl")).at(-1);
+  assert(replacement?.native_turn_id);
+  const later = Array.from({ length: 19 }, (_, index) => [
+    { type: "task_started", turn_id: `later-${index}` },
+    { type: "user_message", message: `Later task ${index}` },
+    { type: "agent_message", message: `Later answer ${index}` },
+    { type: "task_complete", turn_id: `later-${index}` },
+  ].map((payload) => JSON.stringify({ type: "event_msg", payload }) + "\n").join(""));
+  appendFileSync(rollout, JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: replacement.native_turn_id } }) + "\n" + later.slice(0, 9).join(""));
+  forgetTranscriptState();
+  await page.reload();
+  await log.getByText("Later task 8", { exact: true }).waitFor();
+  const interruptedHistory = log.locator(".chat-turn-user").filter({ hasText: "STEER_ovis:" }).last();
+  await interruptedHistory.getByText("Sent after interruption", { exact: true }).waitFor();
+  await interruptedHistory.scrollIntoViewIfNeeded();
+  assert.equal(await log.getByText("Sent after interruption", { exact: true }).count(), 1);
+  await capture("interrupted-cold-boundary");
+  await log.getByText("Steering · current turn", { exact: true }).first().waitFor();
+  assert.equal(await interruptedHistory.getByText("Sent after interruption", { exact: true }).count(), 1);
+
+  await log.evaluate((node) => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event("scroll")); });
+  appendFileSync(rollout, later.slice(9).join(""));
+  forgetTranscriptState();
+  await page.reload();
+  await log.getByText("Later task 18", { exact: true }).waitFor();
+  const olderLoaded = page.waitForResponse((response) => new URL(response.url()).searchParams.has("before") && response.ok());
+  await page.locator(".chat-older").dispatchEvent("click");
+  await olderLoaded;
+  await page.locator(".chat-older").filter({ hasText: /^Earlier messages$/ }).waitFor();
+  // Mount the loaded page so virtualization cannot hide the label under test.
+  await page.setViewportSize({ width: 1440, height: 5000 });
+  await interruptedHistory.getByText("Sent after interruption", { exact: true }).waitFor();
+  await interruptedHistory.scrollIntoViewIfNeeded();
+  assert.equal(await log.getByText("Sent after interruption", { exact: true }).count(), 1);
+  await capture("interrupted-older-boundary");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  console.log("PASS interruption labels survive cold newest/older page boundaries and history loading without duplicates");
   for (const source of ["error", "stream_error"]) {
     const aborted = fixture("runtime-abort.jsonl").replace('"type":"error"', `"type":"${source}"`);
     writeFileSync(rollout, [header, ...lines.slice(start), fixture("0.167.0-mixed-image.jsonl"), aborted].join("\n") + "\n");

@@ -1463,7 +1463,7 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
       const to = Math.min(start, kept.observedEnd);
       if (to > from) parseTurns(source, path, readStream(stream, from, to).toString("utf8"), inherited, undefined, from);
     }
-    settled = { source, id: stream.id, start, end: start, turns: [], codexInput: kept?.end === start ? { ...kept.codexInput } : {}, metadata: parseConversationMetadata(`${head}
+    settled = { source, id: stream.id, start, end: start, turns: [], codexInput: codexInputBefore({ stream, source, start }), metadata: parseConversationMetadata(`${head}
 `, source, undefined, piAgentDir), tail: bytesBefore(stream, start), taskTitles: new Map(inherited), noticed: new Set(), inherited, observedEnd: stream.length, piAgentDir };
   }
   if (settled.end < last) {
@@ -1480,6 +1480,15 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
   // the live turn is parsed again on every poll: its titles and completions are kept only
   // once it settles, so a read titles a task exactly as a cold read of the same bytes does
   return { turns: [...settled.turns, ...parseTurns(source, path, text, new Map(settled.taskTitles), new Set(settled.noticed), last)], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir) };
+}
+
+/** The preceding task can end on another page, even when no earlier page was cached. */
+function codexInputBefore({ stream, source, start }: { stream: TranscriptStream; source: RecognizedConversation["source"]; start: number }): CodexInputState {
+  const input: CodexInputState = {};
+  if (source !== "codex-transcript" || start <= stream.floor) return input;
+  const previous = pageBefore(stream, source, start, { widen: true, prompts: 1 });
+  parseCodexTranscript(previous.bytes.toString("utf8"), 1, input);
+  return input;
 }
 
 /** Retention diagnostics only: counts/budget adherence, never transcript contents. */
@@ -3033,6 +3042,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   let head = "";
   let cursor: string | null;
   let live: { turns: ConversationTurn[]; metadata: ConversationMetadata } | null = null;
+  let codexInput: CodexInputState | undefined;
   try {
     if (page.before !== undefined) {
       const before = parseCursor(stream, page.before);
@@ -3069,6 +3079,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
       }
     }
     if (live === null && page.before === undefined && start > stream.floor) head = metadataHead(path, stream, source, start);
+    if (live === null) codexInput = codexInputBefore({ stream, source, start });
     cursor = formatCursor(stream, start);
   } catch (error) {
     // another file than one the page is bound to (openBound) is pending, not a missing transcript
@@ -3081,7 +3092,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   // bounds the turns, so none are cut: they must meet the next page exactly.
   // a page is parsed in stretches (before and after the newest turn start), and OmO's goal wait is
   // only ever the conversation's last word: on an older page, or anywhere but the end, it is over
-  const parsed = live?.turns ?? parseTurns(source, path, text, undefined, undefined, start);
+  const parsed = live?.turns ?? parseTurns(source, path, text, undefined, undefined, start, codexInput);
   const turns = parsed.some((turn, index) => turn.parts[0]?.kind === "goal_wait" && (page.before !== undefined || index < parsed.length - 1))
     ? parsed.filter((turn, index) => turn.parts[0]?.kind !== "goal_wait" || (page.before === undefined && index === parsed.length - 1))
     : parsed;
