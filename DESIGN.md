@@ -3916,6 +3916,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   (its first save, trimmed tool outputs: a new history ID whose newest page still opens with those
   turns, each part's kind and each tool's call and input unchanged) keeps the rows, what was opened
   and the reader's place. A compaction that drops turns, a rewind and any other new history start over.
+  Streamed output follows the list's measured content height before paint, without animation or
+  a later snap. This follows Paseo's reading-anchor behavior: output leaves a reader's paragraph
+  in place, and the existing Jump to latest control resumes following.
   A message sent from this browser's message box resumes it once the bridge accepts it at once
   (a receipt with no pending item, no refusal and no uncertain answer): the view goes to the end
   and follows the turn and its reply there. Agent of Empires re-pins its view on any prompt, local,
