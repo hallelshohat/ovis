@@ -19,6 +19,7 @@ export async function scanCodexHistory<T>({ key, segments, cache, initial, each 
   if (!pending) { pending = new Map(); pendingByCache.set(cache, pending); }
   caches.add(cache);
   const load = async (): Promise<boolean> => {
+    const epoch = resetEpoch, until = performance.now() + WAIT_MS;
     const known = cache.get(cacheKey);
     if (known && matchesRequest({ files: known.files, segments })) {
       const current = await unchangedFiles(known.files);
@@ -26,14 +27,14 @@ export async function scanCodexHistory<T>({ key, segments, cache, initial, each 
       // Checked cache hits must not compete with cold scans for queue admission.
       if (current) { cache.delete(cacheKey); cache.set(cacheKey, known); return true; }
     }
-    return enqueue(async (signal) => {
+    return enqueue({ epoch, until, run: async (signal) => {
       const result = await scanHistory({ segments, known: cache.get(cacheKey), initial, each, signal,
         invalidate: () => cache.delete(cacheKey) });
       if (signal.aborted) return false;
       if (result !== null) { cache.delete(cacheKey); cache.set(cacheKey, result); }
       if (cache.size > KEPT) cache.delete(cache.keys().next().value!);
       return result !== null;
-    }) ?? false;
+    } });
   };
   const shared = pending.get(cacheKey) ?? load();
   pending.set(cacheKey, shared);
@@ -58,12 +59,14 @@ export async function scanCodexHistory<T>({ key, segments, cache, initial, each 
 
 /** Reset invalidates queued and running work before clearing the owning caches. */
 export async function resetCodexHistoryScans(): Promise<void> {
+  resetEpoch++;
   const stopped = [...jobs];
   for (const job of stopped) job.abort.abort();
   for (const job of queue.splice(0)) { jobs.delete(job); job.done(false); }
   for (const cache of caches) cache.clear();
   caches.clear();
   pendingByCache = new WeakMap();
+  notifyCapacity();
   await Promise.all(stopped.map((job) => job.promise));
 }
 
@@ -82,6 +85,8 @@ const caches = new Set<{ clear(): void }>();
 const jobs = new Set<Job>();
 const queue: Job[] = [];
 let active = 0;
+let resetEpoch = 0;
+let capacity = Promise.withResolvers<void>();
 
 function matchesRequest({ files, segments }: { files: readonly HistoryFile[]; segments: readonly HistorySegment[] }): boolean {
   return files.length === segments.length && files.every((file, at) => file.path === segments[at]!.path && file.end === segments[at]!.end);
@@ -97,14 +102,27 @@ async function unchangedFiles(files: readonly HistoryFile[]): Promise<boolean> {
   } catch { return false; }
 }
 
-function enqueue(run: Job["run"]): Promise<boolean> | null {
-  if (active >= ACTIVE && queue.length >= WAITING) return null;
+async function enqueue({ run, epoch, until }: { run: Job["run"]; epoch: number; until: number }): Promise<boolean> {
+  while (active >= ACTIVE && queue.length >= WAITING) {
+    if (epoch !== resetEpoch || performance.now() >= until) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([capacity.promise, new Promise<void>((done) => { timer = setTimeout(done, Math.max(0, until - performance.now())); })]);
+    } finally { clearTimeout(timer); }
+  }
+  if (epoch !== resetEpoch || performance.now() >= until) return false;
   const { promise, resolve } = Promise.withResolvers<boolean>();
   const job = { run, promise, done: resolve, abort: new AbortController() };
   jobs.add(job);
   if (active < ACTIVE) start(job);
   else queue.push(job);
   return promise;
+}
+
+function notifyCapacity(): void {
+  const waiting = capacity;
+  capacity = Promise.withResolvers<void>();
+  waiting.resolve();
 }
 
 function start(job: Job): void {
@@ -115,6 +133,7 @@ function start(job: Job): void {
     job.done(success);
     const next = queue.shift();
     if (next) start(next);
+    notifyCapacity();
   };
   void job.run(job.abort.signal).then(finish, () => finish(false));
 }
