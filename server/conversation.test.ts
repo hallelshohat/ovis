@@ -4696,7 +4696,7 @@ describe("a Codex pane that reported no session yet", () => {
     "  ? for shortcuts              ⚠ 3 warnings · f2 to view",
   ].join("\n");
 
-  it("stands in with the terminal, carrying the model Codex's own status line states", async () => {
+  it("keeps an unproved Codex lookup retryable, including a scrolled or incomplete screen", async () => {
     const root = mkdtempSync(join(tmpdir(), "herdr-codex-fresh-"));
     const pane = { pane_id: "codex-fresh", cwd: root, foreground_cwd: root, agent: "codex", agent_status: "idle" } as HerdrPane;
     let screen = FRESH;
@@ -4707,27 +4707,16 @@ describe("a Codex pane that reported no session yet", () => {
       : { process_info: { foreground_processes: [{ argv: ["codex"] }] } }) as never);
     const read = spyOn(herdr, "paneRead").mockImplementation(async () => ({ text: screen }) as never);
     try {
-      await expect(paneConversation(pane.pane_id, join(root, ".codex"))).rejects.toMatchObject({
-        name: "ConversationUnavailable", screen: { model: "gpt-6.1-sol", reasoning_effort: "low" },
-      });
+      const ask = () => paneConversation(pane.pane_id, join(root, ".codex"));
+      await expect(ask()).rejects.toBeInstanceOf(ConversationReadPending);
       screen = FRESH.replace("GPT-6.1-Sol low", "GPT-6-Sol high");
-      await expect(paneConversation(pane.pane_id, join(root, ".codex"))).rejects.toMatchObject({ screen: { model: "gpt-6-sol", reasoning_effort: "high" } });
+      await expect(ask()).rejects.toBeInstanceOf(ConversationReadPending);
       scrolledUp = 3;
-      const scrolled = await paneConversation(pane.pane_id, join(root, ".codex")).catch((error: unknown) => error);
-      expect(scrolled).toBeInstanceOf(ConversationUnavailable);
-      expect((scrolled as ConversationUnavailable).screen).toBeUndefined();
+      await expect(ask()).rejects.toBeInstanceOf(ConversationReadPending);
       scrolledUp = 0;
-      screen = "  >_ OpenAI Codex (v0.163.0)\n  Select Model and Effort\n› 1. GPT-6.1-Sol (default) (current)\n  GPT-6-Sol high · /tmp/project";
-      const picker = await paneConversation(pane.pane_id, join(root, ".codex")).catch((error: unknown) => error);
-      expect(picker).toBeInstanceOf(ConversationUnavailable);
-      expect((picker as ConversationUnavailable).screen).toBeUndefined();
       screen = "$ ";
-      const unknown = await paneConversation(pane.pane_id, join(root, ".codex")).catch((error: unknown) => error);
-      expect(unknown).toBeInstanceOf(ConversationUnavailable);
-      expect((unknown as ConversationUnavailable).screen).toBeUndefined();
-      screen = FRESH;
-      const page = await paneConversation(pane.pane_id, join(root, ".codex"), { before: "x:0" }).catch((error: unknown) => error);
-      expect((page as ConversationUnavailable).screen).toBeUndefined();
+      await expect(ask()).rejects.toBeInstanceOf(ConversationReadPending);
+      await expect(paneConversation(pane.pane_id, join(root, ".codex"), { before: "x:0" })).rejects.toBeInstanceOf(HistoryChanged);
     } finally { snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -4757,30 +4746,30 @@ describe("a Codex pane that reported no session yet", () => {
       above = "";
       scrolledUp = 3;
       const scrolled = await ask();
-      expect(scrolled).toBeInstanceOf(ConversationUnavailable);
-      expect((scrolled as ConversationUnavailable).screen).toBeUndefined();
+      expect(scrolled).toBeInstanceOf(ConversationReadPending);
       scrolledUp = 0;
       const db = new Database(join(home, "state_5.sqlite"));
       db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, source TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER DEFAULT 0, agent_role TEXT)");
       db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at) VALUES ('old', '/nowhere.jsonl', ?, 'cli', 1, 2)").run(root);
       expect(await ask()).toMatchObject({ history_id: greeting.history_id });
       argv = ["codex", "resume"];
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       argv = ["codex", "fork", "--last"];
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       argv = ["codex"];
       screen = FRESH.replace("\u203a Ask Codex", "\u203a hello\n\n\u2022 Hi there\n\n\u203a Ask Codex");
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       screen = FRESH;
       pane.agent_status = "working";
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       pane.agent_status = "done";
       const now = Math.floor(Date.now() / 1000);
       db.query("UPDATE threads SET updated_at = ? WHERE id = 'old'").run(now);
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       db.query("UPDATE threads SET updated_at = 2").run();
       db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at) VALUES ('new', '/nowhere-2.jsonl', ?, 'cli', ?, ?)").run(root, now, now);
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
+      // one in another folder, a subagent's or a `codex exec` run's says nothing about this one
       db.query("UPDATE threads SET cwd = '/elsewhere' WHERE id = 'new'").run();
       db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at, agent_role) VALUES ('sub', '/sub.jsonl', ?, 'cli', ?, ?, 'worker')").run(root, now, now);
       db.query("INSERT INTO threads (id, rollout_path, cwd, source, created_at, updated_at) VALUES ('exec', '/exec.jsonl', ?, 'exec', ?, ?)").run(root, now, now);
@@ -4789,28 +4778,28 @@ describe("a Codex pane that reported no session yet", () => {
       db.query("UPDATE threads SET cwd = ?, first_user_message = '' WHERE id = 'new'").run(root);
       expect(await ask()).toMatchObject({ history_id: greeting.history_id });
       db.query("UPDATE threads SET first_user_message = 'hi' WHERE id = 'new'").run();
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       // the pane's folder named through a link: Codex stored the folder it resolves to
       const alias = join(tmpdir(), `herdr-codex-greet-alias-${process.pid}`);
       symlinkSync(root, alias);
       try {
         pane.cwd = alias;
         pane.foreground_cwd = alias;
-        expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+        expect(await ask()).toBeInstanceOf(ConversationReadPending);
       } finally { pane.cwd = root; pane.foreground_cwd = root; rmSync(alias, { force: true }); }
       const elsewhere = mkdtempSync(join(tmpdir(), "herdr-codex-greet-fg-"));
       try {
         db.query("UPDATE threads SET cwd = ? WHERE id = 'new'").run(elsewhere);
         expect(await ask()).toMatchObject({ history_id: greeting.history_id });
         pane.foreground_cwd = elsewhere;
-        expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+        expect(await ask()).toBeInstanceOf(ConversationReadPending);
       } finally { pane.foreground_cwd = root; rmSync(elsewhere, { recursive: true, force: true }); }
       db.close();
       writeFileSync(join(home, "state_5.sqlite"), "not a database");
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       rmSync(join(home, "state_5.sqlite"));
       symlinkSync(join(home, "state_5.sqlite"), join(home, "state_5.sqlite"));
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
     } finally { snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -4868,22 +4857,24 @@ describe("a Codex pane that reported no session yet", () => {
       };
       begun(relative);
       await started("rel");
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
+      // a CODEX_HOME that is no directory, or a second Codex whose home cannot be placed
       await started(join(root, "missing"));
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       await started(own, "rel");
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       // no CODEX_HOME: the store is .codex in the HOME the Codex runs with, never the server's own
       const user = join(root, "user");
       mkdirSync(join(user, ".codex"), { recursive: true });
       await started({ CODEX_HOME: undefined, HOME: user });
       expect(await ask()).toMatchObject({ history_id: expect.stringMatching(/^unwritten:codex:/) });
       begun(join(user, ".codex"));
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
+      // with no HOME, or a relative one, there is no telling where it is
       await started({ CODEX_HOME: undefined, HOME: undefined });
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
       await started({ CODEX_HOME: undefined, HOME: "user" });
-      expect(await ask()).toBeInstanceOf(ConversationUnavailable);
+      expect(await ask()).toBeInstanceOf(ConversationReadPending);
     } finally {
       if (serverHome === undefined) delete process.env["CODEX_HOME"]; else process.env["CODEX_HOME"] = serverHome;
       for (const child of children) child.kill();
