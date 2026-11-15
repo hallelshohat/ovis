@@ -3,6 +3,8 @@ import { stripVTControlCharacters } from "node:util";
 export interface CodexSteeringContext { agent: string | null; working: boolean; screen: string }
 interface SteeringIO {
   read: () => Promise<CodexSteeringContext>;
+  /** Read-only proof that Codex already consumed this submission. */
+  accepted?: () => Promise<boolean>;
   /** sends Escape; `fresh` is asked again when herdr is reached, and a stale write is withheld */
   escape: (fresh: () => boolean) => Promise<void>;
   restarting: () => void;
@@ -109,18 +111,25 @@ export async function interruptCodexSteering(explicit: boolean, text: string, su
   const wait = io.wait ?? Bun.sleep;
   const deadline = now() + 1500;
   const unconfirmed = () => new Error("Codex immediate delivery was not confirmed. Check the terminal before sending again.");
-  while (now() < deadline) {
-    // The caller rechecks live identity, lease, authority and interactive prompts in this read.
-    const current = await io.read();
-    if (now() >= deadline || current.agent !== "codex") throw unconfirmed();
-    if (!current.working) return;
-    if (codexSteeringPending(current.screen, text)) {
-      io.restarting();
-      // the RPC's connect is awaited: by the time herdr is written to, the deadline may have passed
-      await io.escape(() => now() < deadline);
-      return;
+  try {
+    while (now() < deadline) {
+      if (await io.accepted?.()) return;
+      // The caller rechecks live identity, lease, authority and interactive prompts in this read.
+      const current = await io.read();
+      if (now() >= deadline || current.agent !== "codex") throw unconfirmed();
+      if (!current.working) return;
+      if (codexSteeringPending(current.screen, text)) {
+        io.restarting();
+        // the RPC's connect is awaited: by the time herdr is written to, the deadline may have passed
+        await io.escape(() => now() < deadline);
+        return;
+      }
+      await wait(Math.min(50, deadline - now()));
     }
-    await wait(Math.min(50, deadline - now()));
+    throw unconfirmed();
+  } catch (error) {
+    // A consumed message may open a new prompt or outlast a read; its receipt authorizes no key.
+    if (await io.accepted?.()) return;
+    throw error;
   }
-  throw unconfirmed();
 }

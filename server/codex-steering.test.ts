@@ -126,6 +126,45 @@ function fixture(contexts: CodexSteeringContext[] = [working]) {
 }
 
 describe("explicit Codex Send now", () => {
+  it("confirms an already consumed message while Codex is still working without another key", async () => {
+    const f = fixture([{ ...working, screen: frame("Queued follow-up inputs") }]);
+    const io = { ...f.io, accepted: async () => true };
+    await interruptCodexSteering(true, "send this now", working, io);
+    expect(f.effects).toEqual([]);
+  });
+
+  it("accepts a fresh receipt after a prompt guard refuses further input", async () => {
+    const f = fixture();
+    let accepted = false;
+    const io = { ...f.io, accepted: async () => accepted, read: async () => {
+      accepted = true;
+      throw new Error("agent_blocked");
+    } };
+    await interruptCodexSteering(true, "send this now", working, io);
+    expect(f.effects).toEqual([]);
+  });
+
+  it("checks the receipt once more when a slow screen read exhausts the Escape deadline", async () => {
+    const f = fixture();
+    const io = { ...f.io, accepted: async () => f.elapsed() > 1500, read: async () => {
+      f.advance(1501);
+      return working;
+    } };
+    await interruptCodexSteering(true, "send this now", working, io);
+    expect(f.effects).toEqual([]);
+  });
+
+  it("confirms consumption when a stale Escape is withheld instead of sending another key", async () => {
+    const f = fixture();
+    let accepted = false;
+    const io = { ...f.io, accepted: async () => accepted, escape: async () => {
+      accepted = true;
+      throw new Error("cancelled");
+    } };
+    await interruptCodexSteering(true, "send this now", working, io);
+    expect(f.effects).toEqual(["restart gate"]);
+  });
+
   it("confirms the recorded wrapped-footer panel with one guarded Escape", async () => {
     const context = { ...working, screen: recorded169 };
     const f = fixture([context]);

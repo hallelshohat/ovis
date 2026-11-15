@@ -14,6 +14,7 @@ import { OmoStatus } from "./omo-status.ts";
 import * as claudeStore from "./claude-store.ts";
 import * as agentLaunchModule from "./agent-launch.ts";
 import * as piModule from "./pi.ts";
+import * as conversation from "./conversation.ts";
 import { MachineManager } from "./machines.ts";
 import { DeviceStore } from "./devices.ts";
 import { DEVICE_COOKIE } from "./auth.ts";
@@ -1121,6 +1122,49 @@ describe("connection-owned pending input", () => {
     expect(await f.socket.action(11)).toMatchObject({ ok: true });
     await f.socket.wait((frame) => frame.type === "pending-messages" && frame.removed?.some((item: any) => item.id === message.id), received);
     expect(f.bytes()).toBe(`${paste("send this now")}\r\u001b`);
+  }, 30_000);
+
+  it("confirms Codex Send now from its fresh transcript record after the pending panel disappeared", async () => {
+    const text = "REVIEW_UI_READY: acknowledge this marker and keep waiting.\nSecond line.";
+    const path = join(root, "codex-accepted.jsonl");
+    const line = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }) + "\n";
+    writeFileSync(path, line);
+    const f = await setup("codex-accepted", "codex");
+    const resolve = conversation.paneTranscript;
+    const binding = spyOn(conversation, "paneTranscript").mockImplementation(async (paneId, ...args) => paneId === f.pane
+      ? { source: "codex-transcript", path, codexHome: root } : resolve(paneId, ...args));
+    try {
+      const message = await f.queue(1, text);
+      f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });
+      await f.waitBytes("\r");
+      appendFileSync(path, line);
+      expect(await f.socket.action(10)).toMatchObject({ ok: true });
+      await f.removed(message.id, "sent");
+      expect(f.bytes()).toBe(`${paste(text)}\r`);
+      expect(f.socket.seen.some((frame: ServerMessage) => frame.type === "pending-messages"
+        && frame.messages.some((item) => item.id === message.id && item.state === "uncertain"))).toBe(false);
+    } finally { binding.mockRestore(); }
+  }, 30_000);
+
+  it.each([false, true])("keeps Codex Send now uncertain for an old receipt (session changed=%s)", async (changed) => {
+    const text = "same earlier message";
+    const path = join(root, `codex-old-${changed}.jsonl`);
+    const other = join(root, `codex-other-${changed}.jsonl`);
+    const line = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }) + "\n";
+    writeFileSync(path, line); writeFileSync(other, line + line);
+    const f = await setup("codex-old-receipt", "codex");
+    let current = path;
+    const resolve = conversation.paneTranscript;
+    const binding = spyOn(conversation, "paneTranscript").mockImplementation(async (paneId, ...args) => paneId === f.pane
+      ? { source: "codex-transcript", path: current, codexHome: root } : resolve(paneId, ...args));
+    try {
+      const message = await f.queue(1, text);
+      f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: message.id, action: "steer" });
+      await f.waitBytes("\r");
+      if (changed) current = other;
+      expect(await f.socket.action(10)).toMatchObject({ ok: false, code: "submit_changed" });
+      expect(f.bytes()).toBe(`${paste(text)}\r`);
+    } finally { binding.mockRestore(); }
   }, 30_000);
 
   it.each([false, true])("confirms Codex Send now with a wrapped footer (background rows=%s)", async (background) => {
