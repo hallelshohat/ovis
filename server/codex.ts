@@ -1788,9 +1788,16 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
     })) matching.add(candidate.path);
     const anchors = answersOf(parsed[index]!.slice(-100)).slice(-8).flatMap((text) => {
       const found = answerAnchor(text);
-      return found !== null && displays.some((display) => display.includes(found.anchor))
-        && (wholeBlocks.some((block) => found.whole.test(markedDisplay(block)) || working && completedAnswerMatches(text, block))
-          || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) ? [found] : [];
+      if (found === null || !displays.some((display) => display.includes(found.anchor))) return [];
+      if (wholeBlocks.some((block) => found.whole.test(markedDisplay(block)))
+        || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) return [found];
+      if (!working) return [];
+      const rendered = wholeBlocks.find((block) => completedAnswerMatches(text, block));
+      if (rendered === undefined) return [];
+      // A raw anchor can miss an equivalent entity spelling; it must still compete with a rendered match.
+      const letters = normalizeDisplay(rendered), bare = bareLetters(rendered), words = wordsEnding(rendered, found.anchor.length);
+      if (candidates.some((other) => other.path !== candidate.path && saidBy(other, letters, bare, words))) open = true;
+      return [found];
     });
     if (anchors.length === 0) continue;
     if (!scrutinized.has(candidate.path) || anchors.some((anchor) => !givenElsewhere(index, anchor))) matching.add(candidate.path);

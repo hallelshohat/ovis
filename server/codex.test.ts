@@ -740,6 +740,23 @@ describe("Codex rollout resolution", () => {
       expect(matchCodexTranscript(working(`• ${wrapped}`), [candidate, twin])).toBeNull();
     });
 
+    it("weighs rendered entity twins even when their raw anchors differ", () => {
+      for (const { written, shown } of [
+        { written: "cleanup &amp; inventory", shown: "cleanup & inventory" },
+        { written: "cleanup &#38; inventory", shown: "cleanup & inventory" },
+        { written: "cleanup &#x26; inventory", shown: "cleanup & inventory" },
+        { written: "the caf&eacute; inventory", shown: "the café inventory" },
+        { written: "the invent&#111;ry", shown: "the inventory" },
+      ]) {
+        const template = "The preparation jobs passed, including independent PLACEHOLDER. The measured speedup remains **1.34×** while the remaining checks continue.";
+        const encoded = { path: "encoded", text: jsonl(message("assistant", template.replace("PLACEHOLDER", written), "commentary")) };
+        const literal = { path: "literal", text: jsonl(message("assistant", template.replace("PLACEHOLDER", shown), "commentary")) };
+        const screen = working(`• ${template.replace("PLACEHOLDER", shown).replaceAll("**", "")}`);
+        expect(matchCodexTranscript(screen, [encoded, literal])).toBeNull();
+        expect(matchCodexTranscript(screen, [literal, encoded])).toBeNull();
+      }
+    });
+
     it("preserves punctuation, numbers and word boundaries", () => {
       for (const changed of [wrapped.replace("base + 1", "base - 1"), wrapped.replace("1.34×", "1.43×"), wrapped.replace("source starts", "sourcestarts")]) {
         expect(matchCodexTranscript(working(`• ${changed}`), [candidate])).toBeNull();
