@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadKatex, Markdown } from "../components/Markdown.tsx";
@@ -6,7 +7,7 @@ import { FILE_LINK_COUNT, FILE_LINK_LIMIT, linkFilePaths } from "../components/F
 import { HighlightedCode } from "../components/HighlightedCode.tsx";
 import { OpenFileContext } from "./filePaths.ts";
 import { SettingsProvider } from "./settings.ts";
-import { FOLD_CODE_AFTER_LINES, FOLDED_CODE_LINES, foldCode, inlineMarks, isTableSeparator, mathNestsTooDeep, parseInline, parseMarkdown, safeMarkdownHref, trimUrl, type InlineNode, type ListBlock } from "./markdown.ts";
+import { FOLD_CODE_AFTER_LINES, FOLD_OUTPUT_CHARS, FOLDED_CODE_LINES, foldCode, foldToolOutput, inlineMarks, isTableSeparator, mathNestsTooDeep, parseInline, parseMarkdown, safeMarkdownHref, shownText, trimUrl, type InlineNode, type ListBlock, markdownFileTarget } from "../../shared/markdown.ts";
 
 describe("parseMarkdown", () => {
   it("renders inline and display math while leaving fenced code untouched", async () => {
@@ -63,6 +64,48 @@ describe("parseMarkdown", () => {
     expect(parseMarkdown("\\[unfinished")).toEqual([{ type: "paragraph", lines: [[{ type: "text", value: "\\[unfinished" }]] }]);
   });
 
+  it("recognizes $$ display math and a math fence", () => {
+    expect(parseMarkdown("$$\n\\int_0^1 x\\,dx\n$$")).toEqual([{ type: "math", value: "\\int_0^1 x\\,dx", dollar: true }]);
+    expect(parseMarkdown("before\n$$x^2$$\nafter").map((block) => block.type)).toEqual(["paragraph", "math", "paragraph"]);
+    expect(parseMarkdown("$$unfinished\n\n# Still a heading").map((block) => block.type)).toEqual(["paragraph", "heading"]);
+    expect(parseMarkdown("$$ a\n$$ b\n```\ncode\n```\n$$ c $$").map((block) => block.type)).toEqual(["paragraph", "paragraph", "code", "math"]);
+    // a formula left open does not hide one a later line opens and closes, with either delimiter
+    expect(parseMarkdown("$$oops\n\n# Heading\n\n$$x^2$$").map((block) => block.type)).toEqual(["paragraph", "heading", "math"]);
+    expect(parseMarkdown("\\[oops\n\n# Heading\n\n\\[x^2\\]").map((block) => block.type)).toEqual(["paragraph", "heading", "math"]);
+    // a blank line ends the search for a close (display math holds none), so a later formula on several lines is drawn
+    expect(parseMarkdown("$$ is the shell PID.\n\nLater:\n\n$$\na^2+b^2\n$$").map((block) => block.type)).toEqual(["paragraph", "paragraph", "math"]);
+    expect(parseMarkdown("\\[oops\n\n# Heading\n\n\\[\nx\n\\]").map((block) => block.type)).toEqual(["paragraph", "heading", "math"]);
+    // nor does it reach past a line that opens a formula with the other delimiter
+    expect(parseMarkdown("$$oops\n\\[\nx\n\\]\n$$").map((block) => block.type)).toEqual(["paragraph", "math", "paragraph"]);
+    expect(parseMarkdown("\\[oops\n$$\nx\n$$\n\\]").map((block) => block.type)).toEqual(["paragraph", "math", "paragraph"]);
+    // a line that closes its formula and goes on in prose is prose, and takes nothing after it
+    expect(parseMarkdown("$$E=mc^2$$ where E is energy\n\n## Units\n\n- joules\n\n$$\nE\n$$").map((block) => block.type)).toEqual(["paragraph", "heading", "list", "math"]);
+    expect(parseMarkdown("```math\nx^2\n```")).toEqual([{ type: "code", language: "math", value: "x^2" }]);
+  });
+
+  it("draws $…$, $$…$$ and a math fence with KaTeX, and leaves prices as text", async () => {
+    await loadKatex();
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    try {
+      const draw = (source: string): string => renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(Markdown, { children: source }) }));
+      expect(draw("$x^2$ costs $5 and $10")).toMatch(/^(?:(?!katex).)*class="katex"(?:(?!class="katex").)*\$5 and \$10/s);
+      // one KaTeX cannot draw shows as written: a $$ formula on its own lines, a math fence as its code
+      expect(draw("$$\na \\unknowncommand\nb\n$$")).toContain('<span class="markdown-math-source">$$\na \\unknowncommand\nb\n$$</span>');
+      expect(draw("$$\\unknowncommand$$")).toContain('<span class="markdown-math-source">$$\\unknowncommand$$</span>');
+      expect(draw("$$\n\\unknowncommand\n$$")).toContain('<span class="markdown-math-source">$$\n\\unknowncommand\n$$</span>');
+      expect(draw("```math\n\\unknowncommand\n```")).toContain("<pre");
+      for (const source of ["$$\nx^2\n$$", "```math\nx^2\n```"]) {
+        const html = draw(source);
+        expect(html).toContain("katex-display");
+        expect(html).not.toContain("<pre");
+      }
+    } finally {
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+  });
+
   it("keeps later markdown and code intact after an unclosed display formula", () => {
     for (const code of ["raw code", "\\]"]) {
       expect(parseMarkdown(`\\[unfinished\n\n# Still a heading\n\n\`\`\`tex\n${code}\n\`\`\`\n\n- still a list`).map((block) => block.type)).toEqual([
@@ -78,6 +121,82 @@ describe("parseMarkdown", () => {
 });
 
 describe("inline markdown", () => {
+  it("turns Codex local file citations into file links, including source metadata and Unicode paths", () => {
+    const path = "/Users/u/My Documents/보고서.pdf";
+    const output = `:codex-file-citation{path=${JSON.stringify(path)} purpose="output"}`;
+    const source = `:codex-file-citation{purpose="source" page_number="4" path=${JSON.stringify(path)}}`;
+    const file: InlineNode = { type: "file", path, children: [{ type: "text", value: "보고서.pdf" }] };
+    expect(parseInline(output)).toEqual([file]);
+    expect(parseInline(`See ${source}.`)).toEqual([{ type: "text", value: "See " }, file, { type: "text", value: "." }]);
+    const windows = "C:\\Users\\u\\My Docs\\report.docx";
+    expect(parseInline(`:codex-file-citation{path=${JSON.stringify(windows)} purpose="output"}`)).toMatchObject([{ type: "file", path: windows }]);
+    expect(parseInline(output, false)).toEqual([{ type: "text", value: output }]);
+  });
+
+  it("leaves incomplete, invalid and non-local Codex citations as written", () => {
+    for (const citation of [
+      ':codex-file-citation{path="/tmp/report.pdf" purpose="output"',
+      ':codex-file-citation{path="https://example.com/x" purpose="output"}',
+      ':codex-file-citation{path="/tmp/x" purpose="output" path="/tmp/y"}',
+      ':codex-file-citation{path="/tmp/x" purpose="output" mode="live"}',
+      ':codex-file-citation{path="/tmp/x" purpose="unknown"}',
+      ':codex-file-citation{path="/tmp/x" purpose="output" broken}',
+    ]) expect(parseInline(citation).some((node) => node.type === "file")).toBe(false);
+    const citation = ':codex-file-citation{path="/tmp/report.pdf" purpose="output"}';
+    expect(parseInline(`\`${citation}\``)).toEqual([{ type: "code", value: citation }]);
+    expect(parseMarkdown(`\`\`\`text\n${citation}\n\`\`\``)).toEqual([{ type: "code", language: "text", value: citation }]);
+  });
+
+  it("opens a Codex citation only where a file:/// link could: no network share, no control character", () => {
+    for (const path of ["//server/share/a.txt", "\\\\server\\share\\a.txt", "/tmp/a\u007fb"]) {
+      expect(parseInline(`:codex-file-citation{path=${JSON.stringify(path)} purpose="output"}`).some((node) => node.type === "file")).toBe(false);
+    }
+    // the same share, its slashes written as JSON escapes
+    expect(parseInline(':codex-file-citation{path="\\u002f\\u002fserver/share/a.txt" purpose="output"}').some((node) => node.type === "file")).toBe(false);
+  });
+
+  it("keeps a Markdown link to a path that begins with two separators a file link: the server says whether it opens", () => {
+    // on a Windows PC such a path is a network share. Whether it is another host's is the server's to say, which knows
+    // its system and the folders its panes work in (server/windows-share.ts): a pane on `//nas/work` links its own
+    // files this way, and on Linux and macOS the path is the local one
+    for (const [target, path] of [
+      ["//nas/work/report.md", "//nas/work/report.md"], ["//nas/work/report.md:12", "//nas/work/report.md:12"], ["//nas/work/a%20b.md#L3", "//nas/work/a b.md#L3"],
+      ["%5C%5Cnas%5Cwork%5Creport.md", "\\\\nas\\work\\report.md"], ["~///nas/work/report.md", "~///nas/work/report.md"],
+      ["//wsl$/Ubuntu/home/u/a.md", "//wsl$/Ubuntu/home/u/a.md"], ["//home/u/a.md", "//home/u/a.md"],
+    ] as const) {
+      expect(markdownFileTarget(target), target).toBe(path);
+      expect(parseInline(`[report](${target})`).find((node) => node.type === "file"), target).toMatchObject({ path });
+    }
+    expect(markdownFileTarget("\\\\nas\\work\\report.md")).toBe("\\\\nas\\work\\report.md");
+    // a file:/// link still names no share (fileUri.ts), as before
+    expect(markdownFileTarget("file:////nas/work/report.md")).toBeNull();
+  });
+
+  it("leaves the markdown after an unfinished Codex citation as markdown, and reads a brace inside a quoted path", () => {
+    const nodes = parseInline(':codex-file-citation{unfinished **urgent** and `code` } then :codex-file-citation{path="/tmp/a.pdf" purpose="output"}');
+    expect(nodes.map((node) => node.type)).toEqual(["text", "strong", "text", "code", "text", "file"]);
+    expect(parseInline(':codex-file-citation{path="/tmp/a}b.pdf" purpose="output"}')).toEqual([{ type: "file", path: "/tmp/a}b.pdf", children: [{ type: "text", value: "a}b.pdf" }] }]);
+    expect(parseInline(':codex-file-citation{path="/tmp/a.pdf" purpose="output" }')).toMatchObject([{ type: "file", path: "/tmp/a.pdf" }]);
+    // an escape JSON has no reading for is no directive: the markdown inside it stays markdown
+    expect(parseInline(':codex-file-citation{path="/tmp/\\q **urgent**" purpose="output"}').some((node) => node.type === "strong")).toBe(true);
+  });
+
+  it("renders a Codex citation through the existing file opener", () => {
+    const citation = ':codex-file-citation{path="/tmp/My report.pdf" purpose="output"}';
+    const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+    try {
+      const html = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(OpenFileContext.Provider, {
+        value: () => {}, children: createElement(Markdown, { children: citation }),
+      }) }));
+      expect(html).toContain('<button type="button" class="markdown-file" title="Open /tmp/My report.pdf"><span>My report.pdf</span></button>');
+      expect(html).not.toContain("codex-file-citation");
+    } finally {
+      if (languages) Object.defineProperty(navigator, "languages", languages);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+  });
+
   it("parses links and rejects unsafe protocols", () => {
     expect(safeMarkdownHref("https://example.com")).toBe("https://example.com");
     expect(safeMarkdownHref("mailto:a@example.com")).toBe("mailto:a@example.com");
@@ -107,6 +226,25 @@ describe("inline markdown", () => {
     for (const target of ["javascript:bad", "data:text/html,x", "#section"]) {
       expect(parseInline(`[label](${target})`)).toEqual([{ type: "text", value: "label" }]);
     }
+  });
+
+  it("decodes a percent-encoded file link once, as a file URI is", () => {
+    expect(parseInline("[photo](/tmp/ovis%20test/%EC%82%AC%EC%A7%84.png)")).toMatchObject([{ type: "file", path: "/tmp/ovis test/사진.png" }]);
+    expect(parseInline("[x](src/a%20b.ts#L12) [y](a%2520b.md:3)")).toMatchObject([
+      { type: "file", path: "src/a b.ts#L12" },
+      { type: "text", value: " " },
+      { type: "file", path: "a%20b.md:3" },
+    ]);
+    // not valid encoding, a control character or a line once decoded: kept as written
+    expect(parseInline("[x](/tmp/100%.png) [y](/tmp/a%0Ab.md) [z](/tmp/a%23L12)")).toMatchObject([
+      { type: "file", path: "/tmp/100%.png" },
+      { type: "text", value: " " },
+      { type: "file", path: "/tmp/a%0Ab.md" },
+      { type: "text", value: " " },
+      { type: "file", path: "/tmp/a%23L12" },
+    ]);
+    // a terminal shows the address as written
+    expect(shownText(parseInline("Open [the guide](/tmp/a%20b.md)?"), true)).toBe("Open the guide (/tmp/a%20b.md)?");
   });
 
   it("links an address written without its scheme, and leaves files and non-addresses alone", () => {
@@ -149,6 +287,32 @@ describe("inline markdown", () => {
       { type: "code", value: "\\(raw\\)" },
     ]);
     expect(parseInline("\\(unfinished")).toEqual([{ type: "text", value: "\\(unfinished" }]);
+  });
+
+  it("reads $…$ as math only where a price cannot be", () => {
+    const text = (value: string): InlineNode[] => [{ type: "text", value }];
+    for (const prose of [
+      "costs $5 and $10 today", "$5 or $10", "from $5 to $10.", "I paid $5 for X$ and", "$20, $30 and $40",
+      "a$b$c", "$x$5", "$ x$", "$x $", "\\$x$", "$$x$$ inline", "echo $HOME and $PATH", "Run $HOME/${PATH} now", "cd $HOME/$(whoami)", "echo $A$#", "$5 or six$", "${HOME} and ${PATH}", "$x$y",
+    ]) expect(parseInline(prose)).toEqual(text(prose));
+    expect(parseInline("$x^2$ and $\\alpha$.")).toEqual([
+      { type: "math", value: "x^2", dollar: true }, { type: "text", value: " and " }, { type: "math", value: "\\alpha", dollar: true }, { type: "text", value: "." },
+    ]);
+    expect(parseInline("solve $2x+1 = 0$")).toEqual([{ type: "text", value: "solve " }, { type: "math", value: "2x+1 = 0", dollar: true }]);
+    expect(parseInline("($E=mc^2$)")).toEqual([{ type: "text", value: "(" }, { type: "math", value: "E=mc^2", dollar: true }, { type: "text", value: ")" }]);
+    expect(parseInline("$2 + 2 = 4$")).toEqual([{ type: "math", value: "2 + 2 = 4", dollar: true }]);
+    // a formula touching Korean, Japanese or Chinese text (a particle) is still one
+    expect(parseInline("$x$는 실수이다")).toEqual([{ type: "math", value: "x", dollar: true }, { type: "text", value: "는 실수이다" }]);
+    expect(parseInline("함수 $f(x)$를 보자").map((node) => node.type)).toEqual(["text", "math", "text"]);
+    expect(parseInline("값은$x$이다").map((node) => node.type)).toEqual(["text", "math", "text"]);
+    // sentence punctuation after a formula ends the sentence, not the formula
+    for (const end of ["?", "!", ".", ","]) expect(parseInline(`What is $x$${end}`).map((node) => node.type)).toEqual(["text", "math", "text"]);
+    expect(parseInline("$3$ apples")).toEqual([{ type: "math", value: "3", dollar: true }, { type: "text", value: " apples" }]);
+    expect(parseInline("`$x$`")).toEqual([{ type: "code", value: "$x$" }]);
+    // a code span after a dollar stays a code span: its backtick never joins a formula
+    expect(parseInline("$x `y$` z")).toEqual([{ type: "text", value: "$x " }, { type: "code", value: "y$" }, { type: "text", value: " z" }]);
+    expect(parseInline("Set $FOO `bar$`")).toEqual([{ type: "text", value: "Set $FOO " }, { type: "code", value: "bar$" }]);
+    expect(parseInline("$a`$ b")).toEqual([{ type: "text", value: "$a`$ b" }]);
   });
 
   it("preserves underscores in identifiers while retaining standalone emphasis", () => {
@@ -239,13 +403,77 @@ describe("foldCode", () => {
   });
 });
 
+describe("foldToolOutput", () => {
+  it("folds one very long line by its length, never between the halves of an emoji", () => {
+    const output = `${"a".repeat(FOLD_OUTPUT_CHARS - 1)}😀${"b".repeat(5000)}`;
+    const fold = foldToolOutput(output);
+    expect(fold).toEqual({ head: "a".repeat(FOLD_OUTPUT_CHARS - 1), lines: null });
+    expect(output.startsWith(fold?.head ?? "")).toBe(true);
+  });
+});
+
+/**
+ * This thread's CPU time in milliseconds, where the system keeps a clock for it (Linux, macOS), or
+ * null. process.threadCpuUsage() counts in whole ticks of a millisecond, so a run of two read none
+ * on a busy runner, and the ratio was infinite.
+ */
+const threadClock = ((): (() => number) | null => {
+  const id = process.platform === "linux" ? 3 : process.platform === "darwin" ? 16 : null;
+  if (id === null) return null;
+  try {
+    const { symbols } = dlopen(process.platform === "linux" ? "libc.so.6" : "libSystem.B.dylib", { clock_gettime: { args: [FFIType.i32, FFIType.ptr], returns: FFIType.i32 } });
+    const time = new BigInt64Array(2);
+    return () => {
+      if (symbols.clock_gettime(id, ptr(time)) !== 0) throw new Error("clock_gettime(CLOCK_THREAD_CPUTIME_ID) failed");
+      return Number(time[0]!) * 1000 + Number(time[1]!) / 1e6;
+    };
+  } catch { return null; }
+})();
+
 describe("text no one wrote by hand", () => {
   // what an agent prints, or a changelog holds, is not always prose: the page parses it while it
   // draws, so a line that takes seconds freezes the tab, and one that nests without end crashes it
-  const within = (milliseconds: number, run: () => void): void => {
-    const start = performance.now();
-    run();
-    expect(performance.now() - start).toBeLessThan(milliseconds);
+  /**
+   * What `parse` makes of `text(size)`, having checked that it reads in linear time: ten times the
+   * text takes under thirty times as long (linear is ten, a search of the rest of the line from
+   * every character a hundred). A budget in milliseconds failed on GitHub's runners with nothing
+   * slower in the parser, so this counts the CPU time this thread spent, which a busy runner does
+   * not stretch as it does the clock (the process's time also counts the compiler's and the garbage
+   * collector's threads, and reached 32 on a busy runner, #2084). Small and large are timed in
+   * turn, up to five rounds, and the fastest of each are compared: being preempted or slowed only
+   * adds time, so the fastest run is the one closest to the parser's own work. A count of the
+   * parser's steps would not see what some of these cases guard against, a regular expression
+   * backtracking in one call.
+   */
+  const linear = <T,>(text: (size: number) => string, size: number, parse: (text: string) => T): T => {
+    const small = text(size / 10);
+    const large = text(size);
+    // both read once untimed, so the first timed run is not the one that compiles the parser
+    parse(small);
+    const read = parse(large);
+    const cpu = (): number => {
+      if (threadClock !== null) return threadClock();
+      const { user, system } = process.cpuUsage();
+      return (user + system) / 1000;
+    };
+    // a parse of microseconds is timed over as many runs as take two milliseconds; twenty where the
+    // process's clock may count in steps of milliseconds, so no run of the small text reads none
+    const shortest = threadClock === null ? 20 : 2;
+    let runs = 1;
+    const timed = (input: string): number => {
+      const start = cpu();
+      for (let run = 0; run < runs; run += 1) parse(input);
+      return cpu() - start;
+    };
+    while (timed(small) < shortest) runs *= 2;
+    let fastestSmall = Infinity;
+    let fastestLarge = Infinity;
+    for (let round = 0; round < 5 && !(fastestLarge / fastestSmall < 30); round += 1) {
+      fastestSmall = Math.min(fastestSmall, timed(small));
+      fastestLarge = Math.min(fastestLarge, timed(large));
+    }
+    expect(fastestLarge / fastestSmall).toBeLessThan(30);
+    return read;
   };
   /** every string of up to `length` of the `parts`, in order */
   const everyLine = (parts: string[], length: number): string[] => {
@@ -276,8 +504,9 @@ describe("text no one wrote by hand", () => {
     const urls = everyLine(["a", "(", ")", ".", "_"], 6).map((tail) => `https://x.dev/${tail}`);
     expect(urls.length).toBeGreaterThan(19_000);
     for (const url of urls) expect(trimUrl(url)).toBe(asBefore(url));
-    within(1000, () => expect(trimUrl(`https://x.dev/${")".repeat(48_000)}`)).toBe("https://x.dev/"));
-    within(1000, () => parseMarkdown(`https://x.dev/${")".repeat(48_000)}`));
+    const closing = (count: number): string => `https://x.dev/${")".repeat(count)}`;
+    expect(linear(closing, 48_000, trimUrl)).toBe("https://x.dev/");
+    linear(closing, 48_000, (text) => parseMarkdown(text));
   });
 
   it("knows a table's separator line as it did, cell by cell", () => {
@@ -293,30 +522,99 @@ describe("text no one wrote by hand", () => {
     expect(separators).toBeGreaterThan(100);
     for (const line of ["|---|---|", "---|---", " | :--- | ---: | :---: | ", "\t|---\t|\t---|\t", "|--|--|", "|---|:-:|-|"]) expect(isTableSeparator(line)).toBe(true);
     for (const line of ["", "---", "|---|", "||---|---", "|---|---||", "|---|:|", "|---|-x-|"]) expect(isTableSeparator(line)).toBe(false);
-    within(1000, () => parseMarkdown(`a|b\n${" ".repeat(96_000)}x`));
-    within(1000, () => parseMarkdown(`a|b\n---|---${" ".repeat(96_000)}x`));
+    linear((spaces) => `a|b\n${" ".repeat(spaces)}x`, 96_000, (text) => parseMarkdown(text));
+    linear((spaces) => `a|b\n---|---${" ".repeat(spaces)}x`, 96_000, (text) => parseMarkdown(text));
   });
 
   it("looks once for the end of a formula that never closes", () => {
-    within(1000, () => {
-      const blocks = parseMarkdown("\\[\n".repeat(32_000));
-      expect(blocks).toHaveLength(32_000);
-      expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
+    const indexOf = String.prototype.indexOf;
+    // characters the closer searches read, not how many there are: one search per opener over the
+    // rest of the text is as many calls as one per line, but reads the text over and over
+    let scanned = 0;
+    let expectedMaximum = 0;
+    const closer = spyOn(String.prototype, "indexOf").mockImplementation(function (this: string, search, position) {
+      const found = indexOf.call(this, search, position);
+      if (search === "\\]") {
+        const from = Math.max(0, Math.min(this.length, Number(position ?? 0)));
+        scanned += (found === -1 ? this.length : found + search.length) - from;
+        // Fail promptly on a quadratic search instead of finishing its work.
+        expect(scanned).toBeLessThanOrEqual(expectedMaximum);
+      }
+      return found;
     });
+    let blocks: ReturnType<typeof parseMarkdown> = [];
+    try {
+      for (const lines of [3_200, 32_000]) {
+        const text = "\\[\n".repeat(lines);
+        scanned = 0;
+        // the text read about once, with a few characters for each line's own search
+        expectedMaximum = text.length + 4 * (lines + 1);
+        blocks = parseMarkdown(text);
+        expect(scanned).toBeGreaterThan(0);
+        expect(scanned).toBeLessThanOrEqual(expectedMaximum);
+      }
+    } finally {
+      closer.mockRestore();
+    }
+    expect(blocks).toHaveLength(32_000);
+    expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
     // the search ends at a fence: what opens after it is looked for again
     expect(parseMarkdown("\\[ a\n\\[ b\n```\ncode\n```\n\\[ c \\]\n\\[ d").map((block) => block.type))
       .toEqual(["paragraph", "paragraph", "code", "math", "paragraph"]);
   });
 
   it("looks once for what closes a bracket, an inline formula or an underscore", () => {
+    const exec = RegExp.prototype.exec;
+    // These searches have no variable-length backtracking inside one attempt. The token pattern
+    // is deliberately absent: a single global exec of it can search quadratically before failing.
+    const searches = new Set([
+      /[`[<*_~$]|:codex-file-citation\{|\\\(|file:\/\/\/|https?:\/\/|www\./g,
+      /\n/g, /}/g, /[\n\r\u2028\u2029]/g, /\\\)/g, /\$/g, /[\]\n]/g, /[\s)]/g,
+      /_(?![\p{L}\p{N}\p{M}_])/gu,
+      /__(?![\p{L}\p{N}\p{M}_])/gu,
+      // Only the single-underscore token can succeed in the last fixture; trying the bold
+      // alternative first would rescan the whole suffix at every `__`.
+      /_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_])/yu,
+      // one sticky attempt, over a run with no `*` in it
+      /\*\*[^*\n]+\*\*/y,
+    ].map((pattern) => pattern.toString()));
+    const counted = (text: string): InlineNode[] => {
+      let scanned = 0;
+      let unbounded = 0;
+      const closer = spyOn(RegExp.prototype, "exec").mockImplementation(function (this: RegExp, input) {
+        if (input !== text) return exec.call(this, input);
+        if (!searches.has(this.toString())) {
+          unbounded += 1;
+          // Stop before running a potentially quadratic search, even on the largest fixture.
+          expect(unbounded).toBe(0);
+        }
+        const start = this.lastIndex;
+        const match = exec.call(this, input);
+        // Count the span searched, not calls: failed searches consume the remaining suffix.
+        scanned += Math.max(0, (match === null ? input.length : match.index + match[0].length) - start);
+        return match;
+      });
+      let nodes: InlineNode[];
+      try {
+        nodes = parseInline(text);
+      } finally {
+        closer.mockRestore();
+      }
+      expect(scanned).toBeGreaterThan(0);
+      // Each opener/closer search gets one pass; tokens consume their own text.
+      expect(scanned).toBeLessThanOrEqual(10 * text.length);
+      return nodes;
+    };
     // a megabyte of each took from one minute to four: every one was searched from to the line's end
-    for (const part of ["[a", "\\(", "_a ", "__a "]) {
-      const line = part.repeat(Math.ceil(1_000_000 / part.length));
-      within(1000, () => expect(parseInline(line)).toEqual([{ type: "text", value: line }]));
+    for (const part of ["[a", "\\(", "_a ", "__a ", "a$", ":codex-file-citation{"]) {
+      const line = (length: number): string => part.repeat(Math.ceil(length / part.length));
+      for (const length of [20_000, 200_000]) {
+        expect(counted(line(length))).toEqual([{ type: "text", value: line(length) }]);
+      }
     }
     // a label closed with an address that is not, and a `__` that only a `_` closes
-    within(1000, () => expect(parseInline("[a](b".repeat(200_000))).toHaveLength(1));
-    within(1000, () => expect(parseInline("__a b_ ".repeat(150_000))).toHaveLength(300_000));
+    for (const count of [4_000, 40_000]) expect(counted("[a](b".repeat(count))).toHaveLength(1);
+    for (const count of [3_000, 30_000]) expect(counted("__a b_ ".repeat(count))).toHaveLength(count * 2);
     // the marks are the ones it found as one pattern, searching the whole line
     const asBefore = /(`[^`\n]+`|\\\(.+?\\\)|\[[^\]\n]+\]\([^\s)]+\)|<https?:\/\/[^\s<>]+>|file:\/\/\/[!#-;=?-_a-~]+|https?:\/\/[!-;=?-~]+|(?<![\w.@/-])www\.[!-;=?-~]+|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}\p{M}_])__(?=\S)[^\n]*?\S__(?![\p{L}\p{N}\p{M}_])|~~[^~\n]+~~|(?<!\*)\*[^*\n]+\*(?!\*)|(?<![\p{L}\p{N}\p{M}_])_(?=\S)[^\n]*?\S_(?![\p{L}\p{N}\p{M}_]))/gu;
     const found = (marks: Iterable<RegExpMatchArray>): string => [...marks].map((mark) => `${mark.index}:${mark[0]}`).join("\n");
@@ -331,12 +629,14 @@ describe("text no one wrote by hand", () => {
     expect(marked).toBeGreaterThan(1000);
   });
 
+  it("reads a line of dollars that never closes in linear time", () => {
+    for (const part of ["$a ", "$5 ", "$a\\$", " $a$b"]) linear((size) => part.repeat(size / part.length), 200_000, (line) => parseInline(line));
+  });
+
   it("adds an item's lines to it without copying the item at every line", () => {
-    within(1000, () => {
-      const [list] = parseMarkdown(`- a\n${"  x\n".repeat(48_000)}`) as [ListBlock];
-      expect(list.items).toHaveLength(1);
-      expect(list.items[0]?.content).toHaveLength(96_001);
-    });
+    const [list] = linear((lines) => `- a\n${"  x\n".repeat(lines)}`, 48_000, (text) => parseMarkdown(text)) as [ListBlock];
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]?.content).toHaveLength(96_001);
   });
 
   it("stops nesting emphasis after a few levels, and keeps what is inside as text", () => {
@@ -347,12 +647,10 @@ describe("text no one wrote by hand", () => {
       }
       return levels;
     };
-    within(1000, () => {
-      const nodes = parseInline(`${"_".repeat(48_000)} x`);
-      expect(depth(nodes)).toBeLessThan(20);
-      // nothing is lost: what the levels left over hold is still there, as text
-      expect(JSON.stringify(nodes)).toContain("_".repeat(40_000));
-    });
+    const nodes = linear((count) => `${"_".repeat(count)} x`, 48_000, (text) => parseInline(text));
+    expect(depth(nodes)).toBeLessThan(20);
+    // nothing is lost: what the levels left over hold is still there, as text
+    expect(JSON.stringify(nodes)).toContain("_".repeat(40_000));
     // what people write nests as before
     expect(parseInline("**a _b ~~c~~_**")).toEqual([{ type: "strong", children: [{ type: "text", value: "a " },
       { type: "em", children: [{ type: "text", value: "b " }, { type: "del", children: [{ type: "text", value: "c" }] }] }] }]);
@@ -365,15 +663,11 @@ describe("text no one wrote by hand", () => {
 
   it("reads a heading or an item whose text holds a line separator, without trying every split of its spaces", () => {
     // U+2028 is not a line here (only \n is), and `.` stops at it unless told otherwise
-    within(1000, () => {
-      const [heading] = parseMarkdown(`# ${" ".repeat(48_000)}a\u2028b`);
-      expect(heading).toEqual({ type: "heading", level: 1, content: [{ type: "text", value: "a\u2028b" }] });
-    });
-    within(1000, () => {
-      const [list] = parseMarkdown(`- ${" ".repeat(48_000)}a\u2028b`) as [ListBlock];
-      expect(list.items).toEqual([{ content: [{ type: "text", value: "a\u2028b" }] }]);
-    });
-    within(1000, () => parseMarkdown(`1. ${" ".repeat(48_000)}\u2029`));
+    const [heading] = linear((spaces) => `# ${" ".repeat(spaces)}a\u2028b`, 48_000, (text) => parseMarkdown(text));
+    expect(heading).toEqual({ type: "heading", level: 1, content: [{ type: "text", value: "a\u2028b" }] });
+    const [list] = linear((spaces) => `- ${" ".repeat(spaces)}a\u2028b`, 48_000, (text) => parseMarkdown(text)) as [ListBlock];
+    expect(list.items).toEqual([{ content: [{ type: "text", value: "a\u2028b" }] }]);
+    linear((spaces) => `1. ${" ".repeat(spaces)}\u2029`, 48_000, (text) => parseMarkdown(text));
   });
 
   it("shows a formula nested beyond reason as its source, without asking KaTeX", async () => {
@@ -381,17 +675,18 @@ describe("text no one wrote by hand", () => {
     expect(mathNestsTooDeep("{".repeat(101))).toBe(true);
     const fractions = `${"\\frac{1}{".repeat(4000)}x${"}".repeat(4000)}`;
     expect(mathNestsTooDeep(fractions)).toBe(true);
-    await loadKatex();
+    const katex = await loadKatex();
+    const asked = spyOn(katex, "renderToString");
     const languages = Object.getOwnPropertyDescriptor(navigator, "languages");
     Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
     try {
-      within(1000, () => {
-        const html = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(Markdown, { children: `\\[${fractions}\\]\n\n\\(\\frac{1}{2}\\)` }) }));
-        expect(html).toContain("\\frac{1}{\\frac{1}{");
-        // the formula beside it is still drawn
-        expect(html).toContain("katex-html");
-      });
+      const html = renderToStaticMarkup(createElement(SettingsProvider, { children: createElement(Markdown, { children: `\\[${fractions}\\]\n\n\\(\\frac{1}{2}\\)` }) }));
+      expect(html).toContain("\\frac{1}{\\frac{1}{");
+      // the formula beside it is still drawn, and it is the only one KaTeX was given
+      expect(html).toContain("katex-html");
+      expect(asked.mock.calls.map(([formula]) => formula)).toEqual(["\\frac{1}{2}"]);
     } finally {
+      asked.mockRestore();
       if (languages) Object.defineProperty(navigator, "languages", languages);
       else Reflect.deleteProperty(navigator, "languages");
     }
@@ -410,6 +705,20 @@ describe("numbered lists as agents write them", () => {
     }
   };
   const lists = (source: string) => parseMarkdown(source).map((block) => block.type === "list" ? { start: block.start ?? 1, items: block.items.length } : block.type);
+
+  it("tells the list how many digits its widest number has, as the browser numbers it (#1993)", () => {
+    const digits = (source: string) => render(source).match(/--markdown-list-digits:(\d+)/)?.[1] ?? null;
+    expect(digits("1. a\n2. b")).toBeNull();
+    expect(digits("9. a\n10. b")).toBe("2");
+    expect(digits("99. a\n100. b")).toBe("3");
+    expect(digits("0. a")).toBeNull();
+    expect(digits("- a\n- b")).toBeNull();
+    // a nested list counts its own numbers, not its parent's
+    expect(render("100. a\n    1. b")).toMatch(/--markdown-list-digits:3[^>]*><li><span>a<\/span><ol class="markdown-list"><li>/);
+    // past a 32-bit integer the browser counts from 1, so that start sets no wider indent
+    expect(digits("2147483647. a")).toBe("10");
+    expect(digits("100000000000000000000. a")).toBeNull();
+  });
 
   it("reads a task list item's box as checked or open, and keeps the rest as its text", () => {
     const [block] = parseMarkdown("- [x] done\n- [ ] open\n- [X] also done\n- [ ]\n- [y] not a box\n- plain");

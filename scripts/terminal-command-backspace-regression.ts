@@ -27,7 +27,7 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
     for (const [shortcut, expected] of [
       ["Backspace", "\x7f"],
       ["Meta+Backspace", "\x15"],
-      ["Control+Backspace", "\b"],
+      ["Control+Backspace", "\x17"],
       ["Alt+Backspace", "\x1b\x7f"],
       ["Meta+Shift+Backspace", "\x7f"],
       ["Meta+Alt+Backspace", "\x1b\x7f"],
@@ -81,7 +81,9 @@ process.stdin.on("data", (data) => {
 });
 `);
     try {
-      await paneSendKeys(paneId, ["ctrl+c"]);
+      // Ctrl+E and Ctrl+U empty the prompt line as keys, read in order with the command. Ctrl+C is a
+      // signal: when the command is there before bash handles it, bash runs the line without its first byte.
+      await paneSendText(paneId, "\x05\x15");
       await paneSendText(paneId, `node ${script}`);
       await paneSendKeys(paneId, ["Enter"]);
       const deadline = Date.now() + 10_000;
@@ -128,7 +130,14 @@ process.stdin.on("data", (data) => {
     await page.locator(".xterm-helper-textarea").press("Meta+Backspace");
     await page.waitForTimeout(300);
     assert.deepEqual(inputs, ["\x7f"], "non-macOS Meta+Backspace keeps its native sequence");
-    console.log("PASS non-macOS Meta+Backspace keeps native DEL");
+    await page.locator(".xterm-helper-textarea").press("Control+Backspace");
+    const deadline = Date.now() + 5_000;
+    while (inputs.length < 2) {
+      if (Date.now() > deadline) throw new Error("Ctrl+Backspace sent nothing");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.deepEqual(inputs, ["\x7f", "\x17"], "non-macOS Ctrl+Backspace erases a word with Ctrl+W");
+    console.log("PASS non-macOS Meta+Backspace keeps native DEL; Ctrl+Backspace sends Ctrl+W");
   } finally {
     await nonMac.close();
   }

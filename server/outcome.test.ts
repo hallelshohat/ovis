@@ -4,14 +4,17 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrPane, PanePromptResponse, SlashCommand } from "../shared/protocol.ts";
-import { commandInvocations, commandOutcome, CommandReservations, type CommandSend } from "./outcome.ts";
+import { commandInvocations, commandOutcome, CommandReservations, ownsCommandDialog, WINDOW_MS, type CommandSend } from "./outcome.ts";
+import { parsePrompt } from "./dialogs/live.ts";
 import { finishPrompt, type DialogReader } from "./dialogs/shared.ts";
 import { bindCommandProcess, commandSendFrom, handlePromptRequest, noteCommandEvidence, noteSubmitted } from "./prompt.ts";
 import { socketAddress } from "./herdr/client.ts";
+import { readCommandTranscript } from "./conversation.ts";
 import * as processStart from "./process-start.ts";
 import { registry } from "./dialogs/registry.ts";
 import { source as claudeSource } from "./skills/claude.ts";
 import { source as ompSource } from "./skills/omp.ts";
+import { source as piSource } from "./skills/pi.ts";
 
 const at = Date.parse("2026-10-20T00:00:00Z");
 const row = (name: string, interaction: "none" | "dialog" | "terminal" | "unknown" = "none"): SlashCommand => ({
@@ -141,6 +144,27 @@ describe("evidence-only command outcomes", () => {
     }
     expect(outcome(send("/compact", "codex", [row("compact")]), { transcript: entry("compacted") }).state).toBe("accepted");
     expect(outcome(send("/context", "codex"), { transcript: local("/context") }).state).toBe("accepted");
+  });
+  it("calls Claude's /compact done only once the compaction is recorded, not when its line is written at the start", () => {
+    const line = (entry: object, ms: number) => JSON.stringify({ ...entry, timestamp: new Date(at + ms).toISOString() });
+    // Claude Code 2.1: `/compact` as a user line when it starts; the boundary, the summary, its echo and output when it ends
+    const started = line({ type: "user", message: { role: "user", content: "/compact" } }, 10);
+    const ended = [started,
+      line({ type: "system", subtype: "compact_boundary", content: "Conversation compacted" }, 40_000),
+      line({ type: "user", isCompactSummary: true, message: { role: "user", content: "This session is being continued from a previous conversation." } }, 40_000),
+      line({ type: "user", message: { role: "user", content: "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>" } }, 10),
+      line({ type: "user", message: { role: "user", content: "<local-command-stdout>Compacted</local-command-stdout>" } }, 40_001)].join("\n");
+    const sent = send("/compact", "claude", [row("compact")]);
+    expect(outcome(sent, { now: at + 2_000, transcript: started }).state).toBe("accepted");
+    expect(outcome(sent, { now: at + 41_000, transcript: ended })).toMatchObject({ state: "result-observed", evidence: [{ kind: "transcript", at: new Date(at + 40_000).toISOString() }] });
+  });
+  it("does not call a queued Claude /compact done on an automatic compaction", () => {
+    const line = (entry: object, ms: number) => JSON.stringify({ ...entry, timestamp: new Date(at + ms).toISOString() });
+    const boundary = (trigger: string) => line({ type: "system", subtype: "compact_boundary", content: "Conversation compacted", compactMetadata: { trigger, preTokens: 160_000 } }, 30_000);
+    const summary = line({ type: "user", isCompactSummary: true, message: { role: "user", content: "This session is being continued from a previous conversation." } }, 30_000);
+    const sent = send("/compact", "claude", [row("compact")]);
+    expect(outcome(sent, { now: at + 31_000, transcript: [boundary("auto"), summary].join("\n") }).state).toBe("accepted");
+    expect(outcome(sent, { now: at + 31_000, transcript: [boundary("manual"), summary].join("\n") }).state).toBe("result-observed");
   });
 });
 
@@ -313,12 +337,13 @@ const resultReader: DialogReader = {
 let readerPaneSequence = 0;
 
 /** A herdr stand-in serving one pane whose screen the test sets; keys sent to it are kept. */
-async function withFakeHerdr(pane: { agent: string; status: string; screen: string; terminal_id?: string; agent_session?: HerdrPane["agent_session"]; pid?: number; argv?: string[] }, run: (paneId: string, keys: unknown[], processReads: () => number) => Promise<void>): Promise<void> {
+async function withFakeHerdr(pane: { agent: string; status: string; screen: string; terminal_id?: string; agent_session?: HerdrPane["agent_session"]; pid?: number; argv?: string[]; cwd?: string }, run: (paneId: string, keys: unknown[], processReads: () => number, calls: () => Record<string, number>) => Promise<void>): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "herdr-outcome-reader-"));
   const socketPath = join(root, "herdr.sock");
   const previous = process.env.HERDR_SOCKET;
   const paneId = `outcome-reader-${++readerPaneSequence}`;
   const keys: unknown[] = [];
+  const calls: Record<string, number> = {};
   let processReads = 0;
   const server = createServer((socket) => {
     let input = "";
@@ -329,10 +354,13 @@ async function withFakeHerdr(pane: { agent: string; status: string; screen: stri
       if (request.method === "pane.send_keys") keys.push(request.params?.keys);
       if (request.method === "pane.send_text") keys.push(request.params?.text);
       if (request.method === "pane.process_info") processReads += 1;
+      calls[request.method] = (calls[request.method] ?? 0) + 1;
       const result = request.method === "session.snapshot"
-        ? { snapshot: { panes: [{ pane_id: paneId, agent: pane.agent, agent_status: pane.status, terminal_id: pane.terminal_id, agent_session: pane.agent_session }], layouts: [] } }
+        ? { snapshot: { panes: [{ pane_id: paneId, agent: pane.agent, agent_status: pane.status, terminal_id: pane.terminal_id, agent_session: pane.agent_session, cwd: pane.cwd }], layouts: [] } }
         : request.method === "pane.process_info"
         ? { process_info: { foreground_processes: pane.pid === undefined ? [] : [{ pid: pane.pid, argv: pane.argv ?? [pane.agent] }] } }
+        : request.method === "agent.get"
+        ? { agent: { pane_id: paneId, agent: pane.agent, agent_status: pane.status, terminal_id: pane.terminal_id, agent_session: pane.agent_session } }
         : { read: { text: pane.screen } };
       socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
     });
@@ -340,7 +368,7 @@ async function withFakeHerdr(pane: { agent: string; status: string; screen: stri
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketAddress(socketPath), resolve); });
   process.env.HERDR_SOCKET = socketPath;
   try {
-    await run(paneId, keys, () => processReads);
+    await run(paneId, keys, () => processReads, () => ({ ...calls }));
   } finally {
     if (previous === undefined) delete process.env.HERDR_SOCKET;
     else process.env.HERDR_SOCKET = previous;
@@ -348,6 +376,35 @@ async function withFakeHerdr(pane: { agent: string; status: string; screen: stri
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+it("correlates Pi's thinking card and session-only commit with bare /thinking, not /model", async () => {
+  const pane = {
+    pane_id: "fixture", workspace_id: "w", tab_id: "t", terminal_id: "fixture-terminal",
+    focused: false, revision: 0, agent: "pi", agent_status: "idle", status: "idle", screen: "Ready",
+    // pi holds the pane's input: its cards answer only then
+    pid: 2147483646, argv: ["pi"],
+  };
+  await withFakeHerdr(pane, async (paneId, keys) => {
+    const catalog = ["thinking", "model"].map((name) => ({ ...row(name), forms: piSource.forms?.[name] }));
+    const command = commandSendFrom(pane, "pi", catalog, "/thinking")!;
+    noteSubmitted(paneId, command.text, command);
+    pane.screen = "Thinking Level\n\nShift+Tab cycles thinking levels in-session\n\n>\n\n→ ✓ medium\n    high\n\nEnter to select · Ctrl+S to set as default · Escape/Ctrl+C to cancel\n────────────────────\n/tmp/fixture\n0.0%/215k (auto)";
+    const shown = await served(paneId);
+    expect(command.dialogObserved).toBe(true);
+    expect(command.dialogId).toBe(shown.prompt?.id);
+    const url = new URL("http://localhost/api/pane/prompt/answer");
+    const response = await handlePromptRequest(new Request(url, { method: "POST", body: JSON.stringify({ pane_id: paneId, prompt_id: shown.prompt!.id, option_index: 0 }) }), url);
+    expect(response?.status).toBe(200);
+    expect(keys).toEqual([["enter"]]);
+    expect((await served(paneId)).outcomes).toMatchObject([{ id: command.id, state: "result-observed", evidence: [{ kind: "dialog" }] }]);
+    pane.screen = "Ready again";
+    const model = commandSendFrom(pane, "pi", catalog, "/model")!;
+    noteSubmitted(paneId, model.text, model);
+    pane.screen = "Thinking Level\n\n>\n\n→ ✓ medium\n\nEnter to select · Ctrl+S to set as default · Escape/Ctrl+C to cancel";
+    await served(paneId);
+    expect(model.dialogObserved).not.toBe(true);
+  });
+});
 
 const fixture = (name: string): string => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 const promptUrl = (paneId: string): URL => new URL(`http://localhost/api/pane/prompt?pane_id=${paneId}`);
@@ -470,6 +527,74 @@ describe("session-scoped command outcomes", () => {
     });
   }
 
+  it("reads the pane's processes and the session once per poll while a command's transcript is open", async () => {
+    // a Claude pane in a folder, so the poll resolves its transcript down to Claude's (empty) store
+    const store = mkdtempSync(join(tmpdir(), "outcome-claude-store-"));
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = store;
+    const pane = { ...target(), pid: 2147483645, cwd: store,
+      agent_session: session("0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9") };
+    try {
+      await withFakeHerdr(pane, async (paneId, _keys, _processReads, calls) => {
+        const command = await submit(paneId, pane, "/context");
+        await command.visibility?.binding;
+        const before = calls();
+        expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual([command.id]);
+        const after = calls();
+        const made = (method: string) => (after[method] ?? 0) - (before[method] ?? 0);
+        expect(made("agent.get")).toBe(1);
+        expect(made("pane.process_info")).toBe(1);
+        expect(made("session.snapshot")).toBe(1);
+      });
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      rmSync(store, { recursive: true, force: true });
+    }
+  });
+
+  // the Codex, omp and gjc lookups take the poll's process read too, rather than asking herdr again (#1879); Codex
+  // reads once more right before a screen match may bind a rollout to its processes
+  for (const [agent, text, reads] of [["codex", "$imagegen", 2], ["omp", "/context", 1], ["gjc", "/context", 1]] as const) {
+    it(`reads a ${agent} pane's processes once per poll while a command's transcript is open`, async () => {
+      const store = mkdtempSync(join(tmpdir(), `outcome-${agent}-store-`));
+      const previous = process.env.CODEX_HOME;
+      process.env.CODEX_HOME = store;
+      const pane = { ...target(), agent, pid: 2147483645, argv: [agent], cwd: store, agent_session: { ...session("fixture-session"), agent } };
+      try {
+        await withFakeHerdr(pane, async (paneId, _keys, _processReads, calls) => {
+          const catalog: SlashCommand[] = agent === "codex" ? [{ ...row("imagegen"), source: "skill", trigger: "$" }] : [row("context")];
+          const command = commandSendFrom(pane, agent, catalog, text);
+          if (!command) throw new Error("fixture command was not recorded");
+          bindCommandProcess(paneId, command);
+          noteSubmitted(paneId, text, command);
+          await command.visibility?.binding;
+          const before = calls();
+          expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual([command.id]);
+          const made = (method: string) => (calls()[method] ?? 0) - (before[method] ?? 0);
+          expect(made("pane.process_info")).toBe(reads);
+          expect(made("session.snapshot")).toBe(1);
+        });
+      } finally {
+        if (previous === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = previous;
+        rmSync(store, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // a poll read with no omp in it (none in front, only the shell, or an omp gone since) says nothing of the omp
+  // the pane runs now, which may keep another store than the session herdr still reports
+  for (const [label, foreground] of [["no process", []], ["only the shell", [{ pid: 2147483640, argv: ["bash"] }]]] as const) {
+    it(`asks for an omp pane's processes again when the poll's read names ${label}`, async () => {
+      const pane = { ...target(), agent: "omp", pid: 2147483645, argv: ["omp"], cwd: "/tmp", agent_session: null as HerdrPane["agent_session"] };
+      await withFakeHerdr(pane, async (paneId, _keys, processReads) => {
+        await readCommandTranscript(paneId, undefined, { processes: { foreground_processes: [...foreground] } as never }).catch(() => null);
+        expect(processReads()).toBe(1);
+      });
+    });
+  }
+
   it("omits a known session's sends once a restarted agent still reports that session id", async () => {
     // herdr keeps a restarted Claude Code's old session id until the new process's first turn
     const pane = { ...target(), pid: 2147483645 };
@@ -542,6 +667,43 @@ describe("session-scoped command outcomes", () => {
       } finally {
         clock.mockRestore();
       }
+    });
+  });
+
+  // herdr keeps a restarted agent's old session id for up to a minute (STALE_SESSION_LAG_MS): within it a session
+  // change typed in the terminal is taken for the agent's own session, past it for a later one
+  for (const [lag, kept] of [[59_000, true], [61_000, false]] as const) {
+    it(`${kept ? "keeps" : "drops"} a resumed session's send whose session changes in the terminal ${lag / 1000} s after it`, async () => {
+      const pane = { ...target(), pid: 2147483645 };
+      await withFakeHerdr(pane, async (paneId) => {
+        const fresh = await resumed(paneId, pane);
+        pane.agent_session = session("typed-in-terminal");
+        const clock = spyOn(Date, "now").mockImplementation(() => fresh.at + lag);
+        try {
+          expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual(kept ? [fresh.id] : undefined);
+        } finally {
+          clock.mockRestore();
+        }
+      });
+    });
+  }
+
+  // herdr names an OmO pane `pi` (its process cannot be told on native Windows): the session herdr reports under
+  // that label is the one the OmO send started, and a later one is not
+  it("adopts an unmatched OmO send into the session herdr reports under the pane's label at the send", async () => {
+    const pane = { ...target(), agent: "pi", agent_session: null as HerdrPane["agent_session"] };
+    await withFakeHerdr(pane, async (paneId) => {
+      const command = commandSendFrom(pane, "omo", [row("context")], "/context");
+      if (!command) throw new Error("fixture command was not recorded");
+      bindCommandProcess(paneId, command);
+      noteSubmitted(paneId, "/context", command);
+      expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual([command.id]);
+      const reported = { agent: "pi", kind: "path", source: "herdr:pi", value: "/fixture/omo-first.jsonl" };
+      pane.agent_session = reported;
+      expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual([command.id]);
+      expect((await served(paneId)).outcomes?.map(({ id }) => id)).toEqual([command.id]);
+      pane.agent_session = { ...reported, value: "/fixture/omo-later.jsonl" };
+      expect((await served(paneId)).outcomes).toBeUndefined();
     });
   });
 
@@ -760,6 +922,117 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
   });
 
+  it("links a skill's question beside Claude's fullscreen diff panel to its send", async () => {
+    // every row of the 2.1.303 capture ends in the panel's edge in column 99 and the panel's text, the echo's row too
+    const lines = fixture("claude-diff-panel-2.1.303-english-180.txt").split("\n");
+    const screen = lines.slice(0, 33).join("\n");
+    lines[33] = `${"❯ /review".padEnd(99)}│`;
+    const pane = { agent: "claude", status: "blocked", screen: lines.join("\n") };
+    await withFakeHerdr(pane, async (paneId) => {
+      const current = { ...send("/review", "claude", [{ ...row("review"), source: "skill" }]),
+        at: Date.now() - 10, screen, identity: JSON.stringify([undefined, undefined]), store: null };
+      noteSubmitted(paneId, current.text, current);
+      const shown = await served(paneId);
+      expect(shown.prompt).toMatchObject({ kind: "question", question: "Which color?" });
+      expect(shown.outcomes?.at(-1)?.state).toBe("interaction-required");
+      expect(current.dialogId).toBe(shown.prompt!.id);
+    });
+  });
+
+  it("keeps a skill's question linked when only its send's screen looks like a side panel", async () => {
+    // a table's divider through every row of the send's screen passes there for the panel's edge, not on the next screen
+    const table = Array.from({ length: 8 }, (_, index) => `${`Task ${index}`.padEnd(40)}\u2502 preserve requirement ${index}`);
+    const pane = { agent: "claude", status: "blocked", screen: [...table, "\u276f /review", "\u2610 Dataset", "",
+      "Which evaluation dataset should we use?", "", "\u276f 1. LM-O", "     Occlusion benchmark.", "  2. YCB-V", "     Household objects.",
+      "  3. Type something.", "\u2500".repeat(28), "  4. Chat about this", "", "Enter to select \u00b7 \u2191/\u2193 to navigate \u00b7 Esc to cancel"].join("\n") };
+    await withFakeHerdr(pane, async (paneId) => {
+      const current = { ...send("/review", "claude", [{ ...row("review"), source: "skill" }]),
+        at: Date.now() - 10, screen: table.join("\n"), identity: JSON.stringify([undefined, undefined]), store: null };
+      noteSubmitted(paneId, current.text, current);
+      const shown = await served(paneId);
+      expect(shown.prompt).toMatchObject({ kind: "question", question: "Which evaluation dataset should we use?" });
+      expect(shown.outcomes?.at(-1)?.state).toBe("interaction-required");
+      expect(current.dialogId).toBe(shown.prompt!.id);
+    });
+  });
+
+  it("gives no send a terminal command's question when its echoes were counted without the panel's cut", () => {
+    // the first send's screen shows too few of the panel's rows to be cut, the second's enough: the second's echoes
+    // were counted as drawn, its own echo with the panel's text missed; the later screen is cut
+    const edge = (text: string, panel = "") => `${text.padEnd(99)}\u2502${panel}`;
+    const top = Array.from({ length: 7 }, (_, index) => edge(`fixture-row-${index}`, index === 0 ? "1 file changed +2" : ""));
+    const skill = [{ ...row("review"), source: "skill" as const }];
+    const first = { ...send("/review", "claude", skill), id: "first", screen: top.join("\n") };
+    const second = { ...send("/review", "claude", skill), id: "second", at: at + 1,
+      screen: [...top, edge("\u276f /review", " 3 +three"), edge("\u25cf Reviewed."), edge("fixture-tail")].join("\n") };
+    const question = ["\u2610 Dataset", "", "Which evaluation dataset should we use?", "", "\u276f 1. LM-O", "  2. YCB-V",
+      "  3. Type something.", "\u2500".repeat(28), "  4. Chat about this", "", "Enter to select \u00b7 \u2191/\u2193 to navigate \u00b7 Esc to cancel"];
+    const later = [...second.screen.split("\n"), edge("\u276f /review"), edge("\u25cf Reviewed again."), edge("\u276f /review"),
+      ...question.map((line) => edge(line))].join("\n");
+    const reservations = new CommandReservations();
+    const readers = registry.readersFor("claude");
+    reservations.add(first, readers);
+    reservations.add(second, readers);
+    const prompt = parsePrompt("claude", later);
+    expect(prompt).toMatchObject({ kind: "question" });
+    expect(ownsCommandDialog(second, prompt!, later, registry.readerFor(prompt!.responder)!, readers)).toBe(false);
+  });
+
+  it("gives a later send no terminal command's question through an echo count inherited from screens read the other way (#2207)", () => {
+    // as above, the second send's echoes were counted as drawn; once the first send's reservation expires, the third's
+    // screens, read alike, are cut, and the second's count would let the third skip its own echo for the next one
+    const edge = (text: string, panel = "") => `${text.padEnd(99)}\u2502${panel}`;
+    const top = Array.from({ length: 7 }, (_, index) => edge(`fixture-row-${index}`, index === 0 ? "1 file changed +2" : ""));
+    const skill = [{ ...row("review"), source: "skill" as const }];
+    const first = { ...send("/review", "claude", skill), id: "first", screen: top.join("\n") };
+    const second = { ...send("/review", "claude", skill), id: "second", at: at + 1,
+      screen: [...top, edge("\u276f /review", " 3 +three"), edge("\u25cf Reviewed."), edge("fixture-tail")].join("\n") };
+    const third = { ...send("/review", "claude", skill), id: "third", at: at + WINDOW_MS,
+      screen: [...second.screen.split("\n"), edge("\u276f /review"), edge("\u25cf Reviewed again."), edge("third-tail")].join("\n") };
+    const question = ["\u2610 Dataset", "", "Which evaluation dataset should we use?", "", "\u276f 1. LM-O", "  2. YCB-V",
+      "  3. Type something.", "\u2500".repeat(28), "  4. Chat about this", "", "Enter to select \u00b7 \u2191/\u2193 to navigate \u00b7 Esc to cancel"];
+    // the third send's own result, then the same command typed in the terminal, which asks
+    const later = [...third.screen.split("\n"), edge("\u276f /review"), edge("\u25cf Reviewed a third time."), edge("\u276f /review"),
+      ...question.map((line) => edge(line))].join("\n");
+    const reservations = new CommandReservations();
+    const readers = registry.readersFor("claude");
+    reservations.add(first, readers);
+    reservations.add(second, readers);
+    expect(second.countedCut).toBe(false);
+    reservations.add(third, readers);
+    expect(third.countedCut).toBe(true);
+    const prompt = parsePrompt("claude", later);
+    expect(prompt).toMatchObject({ kind: "question" });
+    expect(ownsCommandDialog(third, prompt!, later, registry.readerFor(prompt!.responder)!, readers)).toBe(false);
+  });
+
+  it("still gives a send its own question after a send counted the other way whose result was seen and whose screen scrolled off", () => {
+    const edge = (text: string, panel = "") => `${text.padEnd(99)}\u2502${panel}`;
+    const top = Array.from({ length: 7 }, (_, index) => edge(`fixture-row-${index}`, index === 0 ? "1 file changed +2" : ""));
+    const skill = [{ ...row("review"), source: "skill" as const }];
+    const first = { ...send("/review", "claude", skill), id: "first", screen: top.join("\n") };
+    const second = { ...send("/review", "claude", skill), id: "second", at: at + 60_000,
+      screen: [...top, edge("\u276f /review", " 3 +three"), edge("\u25cf Reviewed."), edge("old-tail")].join("\n") };
+    const third = { ...send("/review", "claude", skill), id: "third", at: at + WINDOW_MS,
+      screen: [...Array.from({ length: 7 }, (_, index) => edge(`fresh-row-${index}`)), edge("fresh-tail")].join("\n") };
+    const reservations = new CommandReservations();
+    const readers = registry.readersFor("claude");
+    reservations.add(first, readers);
+    reservations.add(second, readers);
+    // Claude's own records acknowledge both earlier sends: neither still owes an echo
+    const acknowledged = (time: number) => JSON.stringify({ type: "user", timestamp: new Date(time).toISOString(), message: { content: "/review" } });
+    first.outcome = commandOutcome("p", first, { now: at + 60_020, transcript: acknowledged(at + 10) });
+    second.outcome = commandOutcome("p", second, { now: at + 60_020, transcript: acknowledged(at + 60_010) });
+    expect(second.outcome.state).toBe("result-observed");
+    reservations.add(third, readers);
+    const question = ["\u2610 Dataset", "", "Which evaluation dataset should we use?", "", "\u276f 1. LM-O", "  2. YCB-V",
+      "  3. Type something.", "\u2500".repeat(28), "  4. Chat about this", "", "Enter to select \u00b7 \u2191/\u2193 to navigate \u00b7 Esc to cancel"];
+    const later = [third.screen, edge("\u276f /review"), ...question.map((line) => edge(line))].join("\n");
+    const prompt = parsePrompt("claude", later);
+    expect(prompt).toMatchObject({ kind: "question" });
+    expect(ownsCommandDialog(third, prompt!, later, registry.readerFor(prompt!.responder)!, readers)).toBe(true);
+  });
+
   it("completes a named Claude model card through the real answer handler", async () => {
     const pane = { agent: "claude", status: "idle", screen: `❯ /model
 
@@ -789,6 +1062,41 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       pane.screen = "fixture-anchor\n> ";
       expect((await served(paneId)).outcomes?.at(-1)).toMatchObject({ state: "result-observed", evidence: [{ kind: "dialog" }] });
     });
+  });
+
+  it("completes Claude's /effort while Ultracode is on, and through its switch (#2232)", async () => {
+    // Claude Code 2.1.311's slider: with the switch on (no card before the switch was read), a level
+    // picked with `s`; with it off, the switch's row, Tab, then `s` once the slider shows it on
+    const cases = [
+      { start: "on", option: 3, label: "Turn Ultracode off", keys: ["s"] },
+      { start: "off", option: 5, label: "Turn Ultracode on", keys: [["tab"], "s"] },
+    ];
+    for (const { start, option, label, keys: expected } of cases) {
+      let keys: unknown[] = [];
+      const pane = { agent: "claude", status: "idle",
+        get screen() {
+          if (keys.includes("s")) return fixture("claude-effort-2.1.311-set-120.txt");
+          return fixture(`claude-effort-2.1.311-${keys.some((sent) => Array.isArray(sent) && sent.includes("tab")) ? "on" : start}-120.txt`);
+        } };
+      await withFakeHerdr(pane, async (paneId, sent) => {
+        keys = sent;
+        const current = { ...send("/effort", "claude", [{ ...row("effort", "dialog"), forms: claudeSource.forms!.effort }]),
+          at: Date.now() - 10, screen: "fixture-anchor", identity: JSON.stringify([undefined, undefined]), store: null };
+        expect(current.form).toEqual({ match: "bare", interaction: "dialog", dialog: "claude-effort" });
+        noteSubmitted(paneId, current.text, current);
+        const shown = await served(paneId);
+        expect(shown.outcomes?.at(-1)?.state, start).toBe("interaction-required");
+        expect(shown.prompt?.options.at(-1)?.label, start).toBe(label);
+        // the switch's drawn state stays with the server
+        expect(shown.prompt, start).not.toHaveProperty("claudeUltracode");
+        const url = new URL("http://localhost/api/pane/prompt/answer");
+        const answered = await handlePromptRequest(new Request(url, { method: "POST",
+          body: JSON.stringify({ pane_id: paneId, prompt_id: shown.prompt!.id, option_index: option }) }), url);
+        expect(answered?.status, start).toBe(200);
+        expect(keys, start).toEqual(expected);
+        expect((await served(paneId)).outcomes?.at(-1), start).toMatchObject({ state: "result-observed", evidence: [{ kind: "dialog" }] });
+      });
+    }
   });
 
   it("closes a command's card correlation when a later plain message is sent", async () => {
@@ -834,6 +1142,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       noteSubmitted(paneId, current.text, current);
       const shown = await served(paneId);
       expect(shown.prompt).toMatchObject({ agent: "claude", title: "Goal active", options: [{ label: "Close" }] });
+      // the route hands over which words are the bridge's own, as keys the client translates (#1482)
+      expect(shown.prompt?.own_text).toEqual({ title: { key: "Goal active" }, labels: { 0: { key: "Close" } } });
       expect(shown.outcomes?.at(-1)).toMatchObject({ id: "goal-send", state: "interaction-required" });
       expect(current.dialogId).toBe(shown.prompt!.id);
       // a form naming another reader's dialog is not waiting on this card
@@ -858,7 +1168,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     expect(outcome(sent, { transcript: compaction("auto", at + 10) }).state).toBe("accepted");
   });
   it("keeps omp's /handoff interaction-required on its card, and a cancel from it never resolves the send", async () => {
-    const pane = { agent: "omp", status: "working", screen: fixture("omp-handoff-18.8.7-generating-narrow.txt") };
+    const pane = { agent: "omp", status: "working", screen: fixture("omp-handoff-18.8.7-generating-narrow.txt"), pid: 4242, argv: ["omp"] };
     await withFakeHerdr(pane, async (paneId, keys) => {
       const current = { ...send("/handoff", "omp", [handoffRow]), at: Date.now() - 1, id: "handoff-send", identity: JSON.stringify([undefined, undefined]), store: null };
       noteSubmitted(paneId, current.text, current);

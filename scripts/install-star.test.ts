@@ -43,6 +43,7 @@ const STAND_INS: Record<string, string> = {
     printf '{"plugin_id":"someone.else","plugin_root":"/nowhere"}]}}\\n' ;;
   # under the id the ref's manifest names
   "plugin install "*)
+    printf '%s\n' "\${OVIS_FROM_SOURCE:-}" > "$SCRATCH/plugin-source"
     if [ "$(cat "$SCRATCH/ref-id" 2>/dev/null)" = devswha.herdr-web-ui ]; then
       : > "$SCRATCH/legacy"
       mkdir -p "$SCRATCH/legacy-plugin/scripts"
@@ -57,13 +58,16 @@ const STAND_INS: Record<string, string> = {
   "plugin action invoke "*) ;;
   *) echo "unexpected herdr $*" >&2; exit 1 ;;
 esac`,
-  node: `echo v22.0.0`,
+  // a Node 22 for this PC: --version, and the probe install.sh's node_fits makes (version and architecture)
+  node: `case "$1" in -p) case "$(uname -m)" in aarch64 | arm64) echo "22 arm64" ;; *) echo "22 x64" ;; esac ;; *) echo v22.0.0 ;; esac`,
   // only the manifest of the ref being installed: what its id is, or a network that blocks the host
   curl: `echo "$*" >> "$SCRATCH/curl.calls"
 case "$*" in
   *" https://raw.githubusercontent.com/devswha/ovis/$OVIS_REF/herdr-plugin.toml")
     [ ! -e "$SCRATCH/manifest-blocked" ] || { echo "curl: (7) Failed to connect to raw.githubusercontent.com port 443" >&2; exit 7; }
     printf 'id = "%s"\\nname = "Ovis"\\n' "$(cat "$SCRATCH/ref-id" 2>/dev/null || echo devswha.ovis)" ;;
+  # a release from before the compiled server: no ovis-server.json
+  *" https://github.com/devswha/ovis/releases/download/$OVIS_REF/ovis-server.json") echo "curl: (22) The requested URL returned error: 404" >&2; exit 22 ;;
   *) echo "unexpected curl $*" >&2; exit 1 ;;
 esac`,
   // a desktop's openers, which only write down what they were asked to open (renamed into place: a reader never sees half a line)
@@ -102,13 +106,24 @@ class Pc {
     mkdirSync(bin);
     mkdirSync(join(this.scratch, "plugin", "scripts"), { recursive: true });
     writeFileSync(join(this.scratch, "plugin", "scripts", "plugin.ts"), `import { existsSync } from "node:fs";\nif (process.argv[2] === "phone") console.log("the phone step");\nif (process.argv[2] === "status" && existsSync(process.env.SCRATCH + "/running")) console.log("running http://127.0.0.1:7317 (pid 1234)");\n`);
-    for (const tool of ["sh", "bash", "cat", "uname", "ldd", "grep", "git", "tar", "awk", "sed", "mktemp", "rm", "sleep", "perl", "mv", "mkdir", "cp"]) {
+    for (const tool of ["sh", "bash", "cat", "uname", "ldd", "grep", "git", "tar", "awk", "sed", "mktemp", "rm", "sleep", "perl", "mv", "mkdir", "cp", "chmod"]) {
       if (tool === "perl" && options.perl === false) continue;
       const real = Bun.which(tool);
       if (!real) continue;
       if (tool !== "bash") { symlinkSync(real, join(bin, tool)); continue; }
-      // bash as the PC has it, which also leaves how the question's read ended for answerRead()
-      writeFileSync(join(bin, "bash"), `#!/bin/sh\ncase "$*" in\n  *"${QUESTION_READ}"*) '${real}' "$@"; status=$?; echo "$status" > "$SCRATCH/read.status"; exit "$status" ;;\nesac\nexec '${real}' "$@"\n`);
+      // Clock both ends beside the real read, independently of the parent's output delivery.
+      writeFileSync(join(bin, "bash"), `#!/bin/sh
+case "$*" in
+  *"${QUESTION_READ}"*)
+    perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'print clock_gettime(CLOCK_MONOTONIC) * 1000' > "$SCRATCH/read.started"
+    '${real}' "$@"
+    status=$?
+    perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'print clock_gettime(CLOCK_MONOTONIC) * 1000' > "$SCRATCH/read.ended"
+    echo "$status" > "$SCRATCH/read.status"
+    exit "$status" ;;
+esac
+exec '${real}' "$@"
+`);
       chmodSync(join(bin, "bash"), 0o755);
     }
     symlinkSync(process.execPath, join(bin, "bun"));
@@ -180,7 +195,7 @@ class Pc {
     return existsSync(file) ? Number(readFileSync(file, "utf8").trim()) : null;
   }
   private environment(extra: Record<string, string> = {}): Record<string, string> {
-    return { PATH: join(this.scratch, "bin"), HOME: this.scratch, SCRATCH: this.scratch, SHELL: "/bin/sh", TERM: "xterm", OVIS_REF: "v0.0.0", ...extra };
+    return { PATH: join(this.scratch, "bin"), HOME: this.scratch, SCRATCH: this.scratch, SHELL: "/bin/sh", TERM: "xterm", OVIS_REF: "v0.0.0", OVIS_FROM_SOURCE: "1", ...extra };
   }
 
   /** as a script or an agent runs it: the script on stdin, and no terminal */
@@ -198,14 +213,13 @@ class Pc {
    * typed as the install starts, long before the question. The wrapping shell survives Ctrl-C as
    * the user's own shell does, and reports the installer's exit code.
    */
-  async atTerminal(typed: string | null, extra?: Record<string, string>, typedAhead?: string, background = false): Promise<{ out: string; exitCode: number; asked: boolean; askedAt: number | null }> {
+  async atTerminal(typed: string | null, extra?: Record<string, string>, typedAhead?: string, background = false, observeAfterExit = false): Promise<{ out: string; exitCode: number; asked: boolean; readDuration: number | null }> {
     // a background job of a shell with job control: its own process group, not the terminal's foreground
     const install = background ? `bash -c 'set -m; (cat "${join(ROOT, "install.sh")}" | sh) & wait %1'` : `cat "${join(ROOT, "install.sh")}" | sh`;
     const command = `trap : INT; ${install}; echo "exit=$?"`;
     const child = Bun.spawn([Bun.which("script")!, "-qec", command, "/dev/null"], { cwd: this.scratch, env: this.environment(extra), stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     let out = "";
     let answered = false;
-    let askedAt: number | null = null;
     let again: ReturnType<typeof setInterval> | undefined;
     // The installer can end before what is typed reaches it (Ctrl-C is pressed until it lands). As
     // script(1) exits it closes its end of the pipe, and until it is reaped a write there throws
@@ -222,10 +236,10 @@ class Pc {
     if (typedAhead) type(typedAhead);
     const decoder = new TextDecoder();
     try {
+      if (observeAfterExit) await child.exited;
       // the terminal's output ends with the installer (or when deadline() ends script(1))
       for await (const chunk of child.stdout) {
         out += decoder.decode(chunk, { stream: true });
-        if (askedAt === null && out.includes(QUESTION)) askedAt = Date.now();
         if (answered || typed === null || !out.includes(QUESTION)) continue;
         answered = true;
         type(typed);
@@ -239,7 +253,11 @@ class Pc {
     }
     child.stdin.end();
     if (ended()) throw new Error(`install.sh did not end within ${RUN_ENDS_WITHIN_MS} ms at a terminal; it printed:\n${out}`);
-    return { out, exitCode: Number(/exit=(\d+)/.exec(out)?.[1] ?? -1), asked: out.includes(QUESTION), askedAt };
+    const readStarted = join(this.scratch, "read.started");
+    const readEnded = join(this.scratch, "read.ended");
+    const readDuration = existsSync(readStarted) && existsSync(readEnded)
+      ? Number(readFileSync(readEnded, "utf8")) - Number(readFileSync(readStarted, "utf8")) : null;
+    return { out, exitCode: Number(/exit=(\d+)/.exec(out)?.[1] ?? -1), asked: out.includes(QUESTION), readDuration };
   }
 }
 const pcs: string[] = [];
@@ -335,6 +353,18 @@ describe.skipIf(platform() === "win32")("install.sh with a release from before t
     expect(out).toContain("could not read the plugin id at main");
     expect(existsSync(join(pc.scratch, "legacy-stopped"))).toBe(false);
     expect(existsSync(join(pc.scratch, "herdr.calls"))).toBe(false);
+  });
+
+  it.concurrent("has herdr build a branch from its own sources, and a release without a compiled server as it is", async () => {
+    const branch = new Pc();
+    const built = await branch.unattended({ OVIS_REF: "feat/x", OVIS_FROM_SOURCE: "" });
+    expect(built.exitCode, built.out).toBe(0);
+    expect(readFileSync(join(branch.scratch, "plugin-source"), "utf8")).toBe("1\n");
+    const release = new Pc();
+    const old = await release.unattended({ OVIS_REF: "v0.4.14", OVIS_FROM_SOURCE: "" });
+    expect(old.exitCode, old.out).toBe(0);
+    expect(old.out).toContain("ships no compiled server, so it is installed from source");
+    expect(readFileSync(join(release.scratch, "plugin-source"), "utf8")).toBe("\n");
   });
 
   it.concurrent("finds the install of a branch whose manifest cannot be read under the old id it named", async () => {
@@ -447,8 +477,11 @@ describe.skipIf(platform() === "win32")("install.sh and the browser", () => {
     });
   }
 
-  it.concurrent("opens nothing on a PC with no display and no BROWSER", async () => {
+  it.concurrent("opens nothing on a Linux PC with no display and no BROWSER", async () => {
     const pc = new Pc().running();
+    const uname = join(pc.scratch, "bin", "uname");
+    rmSync(uname);
+    writeFileSync(uname, '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n', { mode: 0o755 });
     const { out, exitCode } = await pc.unattended();
     expect(exitCode).toBe(0);
     expect(out).toContain("open http://127.0.0.1:7317 in your browser");
@@ -554,19 +587,19 @@ describe.skipIf(platform() !== "linux" || !Bun.which("script"))("install.sh at a
     expect(asked).toBe(false);
   });
 
-  it.concurrent("goes on by itself when nobody is at the terminal", async () => {
+  for (const observeAfterExit of [false, true]) it.concurrent(`goes on by itself when nobody is at the terminal${observeAfterExit ? ", even when its output is read after it exits" : ""}`, async () => {
     const pc = new Pc("not");
     const started = Date.now();
-    const { asked, askedAt, exitCode } = await pc.atTerminal(null);
+    const { asked, readDuration, exitCode } = await pc.atTerminal(null, {}, undefined, false, observeAfterExit);
     const ended = Date.now();
     expect(asked).toBe(true);
     expect(exitCode).toBe(0);
     expect(pc.answerRead()).toBeGreaterThan(128);
     expect(pc.stars()).toBe(0);
-    // the 20 seconds are the question's, from the moment it is on the terminal
-    expect(askedAt).not.toBeNull();
-    expect(ended - askedAt!).toBeGreaterThanOrEqual(19_000);
-    expect(ended - askedAt!).toBeLessThan(27_000);
+    // Measure the child's read, not when this process got around to receiving its output.
+    expect(readDuration).not.toBeNull();
+    expect(readDuration!).toBeGreaterThanOrEqual(19_000);
+    expect(readDuration!).toBeLessThan(27_000);
     expect(ended - started).toBeLessThan(40_000);
   });
 });

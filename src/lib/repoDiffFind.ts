@@ -106,3 +106,51 @@ export function stepMatch(index: number | null, total: number, direction: 1 | -1
   if (index === null) return direction === 1 ? 0 : total - 1;
   return (index + direction + total) % total;
 }
+
+/**
+ * The first line of each change, as VS Code's diff counts them: a run of removed and added lines
+ * with no unchanged line between them is one change. Hunks are always split by unchanged lines,
+ * so a run never spans two.
+ */
+export function diffChanges(lines: readonly DiffFindLine[]): DiffFindLine[] {
+  return lines.filter((line, index) => line.kind !== "context" && (index === 0 || lines[index - 1]!.kind === "context"));
+}
+
+/**
+ * Whether both whole sides of a file are the ones a patch was read from: the patch applied to the
+ * old side gives the new side exactly, every line between and around its hunks included. A file
+ * changed since the patch was read (an edit inside or outside a hunk, a line added above or
+ * appended below) fails, and is never mixed into the patch's rows. Line endings are compared
+ * without their carriage return, and a final newline the sides differ in alone is no change.
+ */
+export function contentsMatchPatch(lines: readonly DiffFindLine[], old: string, next: string): boolean {
+  const split = (text: string): string[] => {
+    const parts = text.split("\n").map((line) => line.replace(/\r$/, ""));
+    if (parts.at(-1) === "") parts.pop();
+    return parts;
+  };
+  const oldLines = split(old);
+  const newLines = split(next);
+  const rebuilt: string[] = [];
+  // the next old line not yet copied, 1-based
+  let at = 1;
+  for (const line of lines) {
+    // the unchanged lines before this one are the old side's, copied as they are
+    const until = line.oldLine ?? at + (line.newLine! - 1 - rebuilt.length);
+    while (at < until) {
+      if (at > oldLines.length) return false;
+      rebuilt.push(oldLines[at - 1]!);
+      at += 1;
+    }
+    if (line.oldLine !== null) {
+      if (oldLines[at - 1] !== line.text) return false;
+      at += 1;
+    }
+    if (line.newLine !== null) {
+      if (rebuilt.length + 1 !== line.newLine) return false;
+      rebuilt.push(line.text);
+    }
+  }
+  while (at <= oldLines.length) { rebuilt.push(oldLines[at - 1]!); at += 1; }
+  return rebuilt.length === newLines.length && rebuilt.every((line, index) => line === newLines[index]);
+}

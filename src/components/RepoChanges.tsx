@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Folder, FolderOpen, GitBranch, GitMerge, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Folder, FolderOpen, GitBranch, GitCompare, GitMerge, RefreshCw } from "lucide-react";
+import { EmptyState } from "./EmptyState.tsx";
 
 import "./RepoChanges.css";
 import { FileGlyph } from "./FileGlyph.tsx";
@@ -10,6 +11,7 @@ import { changeTree, changeTreeFolders, type ChangeTreeEntry } from "../lib/chan
 import { useLocale, useT } from "../lib/i18n.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { diffErrorMessage, nothingChangedWord, refName, shortHash, STATUS_MARK, statusWord, type RepoComparison } from "../lib/repoDiff.ts";
+import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { skeletonRows } from "../lib/skeleton.ts";
 
 export interface RepoChangesProps {
@@ -60,6 +62,8 @@ export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps)
   const [refs, setRefs] = useState<Refs>(NO_REFS);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [active, setActive] = useState(0);
+  // Back closes the list of branches, as Escape does, not the Files dialog it is in
+  usePhoneSheetBack(() => setPickerOpen(false), pickerOpen);
   const refsRequest = useRef(0);
   const pickerRef = useRef<HTMLDivElement>(null);
   const refsRef = useRef<HTMLDivElement>(null);
@@ -345,7 +349,9 @@ export function RepoChanges({ paneId, directory, onOpenDiff }: RepoChangesProps)
             </span>)}
           </li>}
           {listing !== null && answered !== null && rows(tree, listing.files, answered)}
-          {listing !== null && listing.files.length === 0 && <li className="repo-changes-note">{nothingChangedWord(t, listing.scope)}</li>}
+          {listing !== null && listing.files.length === 0 && (
+            <li className="repo-changes-note"><EmptyState icon={GitCompare} title={nothingChangedWord(t, listing.scope)} detail={t("Choose another comparison or refresh.")} /></li>
+          )}
           {listing?.truncated && <li className="repo-changes-note" role="status">
             {listing.total === null
               ? t("The list was cut short; only the first {count} files are shown.", { count: listing.files.length.toLocaleString(locale) })

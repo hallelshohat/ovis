@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "./index.ts";
@@ -33,7 +34,26 @@ beforeAll(async () => {
   workspaceId = created.workspace.workspace_id;
   paneId = created.root_pane.pane_id;
   await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle", agent_session_path: rollout });
-  await herdrRpc("pane.send_text", { pane_id: paneId, text: `printf '%s\\n' '${answerPrefix}Answer one' '${answerPrefix}Answer two'\n` });
+  // a stand-in Codex that shows both answers, then says so with a file, and keeps running: the chat reads
+  // a screen only while a Codex process runs in the pane
+  mkdirSync(join(root, "bin"));
+  const codex = join(root, "bin", "codex");
+  const ready = join(root, "bin", "ready");
+  // each answer as Codex shows one: a bullet, wrapped below the pane's width, what it wraps onto indented
+  const show = (text: string) => `printf '%s\\n' '${text}' | fold -s -w 60 | sed '1s/^/• /;2,$s/^/  /'`;
+  writeFileSync(codex, `#!/bin/sh\n${show(`${answerPrefix}Answer one`)}\n${show(`${answerPrefix}Answer two`)}\n: > '${ready}'\nsleep 600\n`);
+  chmodSync(codex, 0o755);
+  // watched before the command is sent, so its creation cannot be missed
+  const watcher = watch(join(root, "bin"));
+  const started = new Promise<void>((done) => watcher.on("change", (_, name) => { if (name === "ready" && existsSync(ready)) done(); }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await herdrRpc("pane.send_text", { pane_id: paneId, text: `${codex}\n` });
+    await Promise.race([started, new Promise<never>((_, fail) => { timer = setTimeout(() => fail(new Error("the stand-in codex never started")), 10_000); })]);
+  } finally {
+    clearTimeout(timer);
+    watcher.close();
+  }
   server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "push"), codexHome });
 });
 
@@ -66,7 +86,7 @@ it("serves native Codex conversations and invalidates replaced files even at the
   expect(replaced.history_id).not.toBe(first.history_id);
   expect(replaced.turns.at(-1)?.parts[0]).toMatchObject({ text: `${answerPrefix}Answer two` });
   rmSync(rollout);
-  expect(await read()).toEqual({ source: "scrollback", turns: [] });
+  expect(await read()).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
 });
 
 it("answers an unchanged conversation with a bodyless 304 and a changed one in full", async () => {
@@ -107,6 +127,23 @@ it("serves a native image-only Codex turn through the pane-scoped image API", as
   expect((await fetch(url)).status).toBe(404);
 });
 
+// codex-cli 0.163.0's view_image as recorded (server/fixtures/codex-pictures-0.163.0-rollout.jsonl)
+it("serves a picture a Codex tool returned, named by its call, through the pane-scoped image API", async () => {
+  const recorded = readFileSync(new URL("./fixtures/codex-pictures-0.163.0-rollout.jsonl", import.meta.url), "utf8").split("\n").filter(Boolean).slice(1);
+  writeFileSync(rollout, [transcript(`${answerPrefix}Answer one`), ...recorded].join("\n") + "\n");
+  const tool = (await read()).turns.flatMap((turn) => turn.parts).find((part) => part.kind === "tool" && part.images !== undefined);
+  if (tool?.kind !== "tool") throw new Error("missing tool picture");
+  expect(tool.images).toEqual([{ media_type: "image/png", ref: "codex-tool:call_c14dcc9fd54946c7bc093bac1ec706fd:0" }]);
+  const url = `http://127.0.0.1:${server.port}/api/pane/conversation/image?${new URLSearchParams({ pane_id: paneId, ref: tool.images![0]!.ref })}`;
+  const response = await fetch(url);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("image/png");
+  expect(response.headers.get("cache-control")).toContain("no-store");
+  expect(createHash("sha256").update(Buffer.from(await response.arrayBuffer())).digest("hex")).toBe("216412999d849811ca002949953aa22a041cebcf0b31e7c812ee86328338b893");
+  writeFileSync(rollout, transcript(`${answerPrefix}Answer one`));
+  expect((await fetch(url)).status).toBe(404);
+});
+
 it("serves skill activity without shipping the selected skill's instruction body", async () => {
   const envelope = { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "<skill>\n<name>review</name>\n<path>/project/skills/review/SKILL.md</path>\nPRIVATE SKILL INSTRUCTIONS\n</skill>" }] } };
   writeFileSync(rollout, `${transcript(`${answerPrefix}Answer one`)}\n${JSON.stringify(envelope)}`);
@@ -114,4 +151,47 @@ it("serves skill activity without shipping the selected skill's instruction body
   expect(conversation.source).toBe("codex-transcript");
   expect(conversation.turns.at(-1)?.parts).toContainEqual({ kind: "skill", skill: { name: "review", path: "/project/skills/review/SKILL.md", evidence: "instructions", status: "loaded" } });
   expect(JSON.stringify(conversation)).not.toContain("PRIVATE SKILL INSTRUCTIONS");
+});
+
+it("shows a turn Codex ended in an error in the chat, and reads it at rest rather than DONE", async () => {
+  const status = async () => ((await (await fetch(`http://127.0.0.1:${server.port}/api/session`)).json()) as { snapshot: { panes: { pane_id: string; agent_status: string }[] } })
+    .snapshot.panes.find((pane) => pane.pane_id === paneId)?.agent_status;
+  // the pane's statuses as the server tells its clients, each waited for from before the report that causes it
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
+  const frames: string[] = [];
+  const waiters = new Set<() => void>();
+  ws.addEventListener("message", (event) => {
+    const frame = JSON.parse(String(event.data)) as { type?: string; pane_id?: string; agent_status?: string };
+    if (frame.type === "snapshot" || (frame.type === "pane-status" && frame.pane_id === paneId)) frames.push(frame.type === "snapshot" ? "snapshot" : frame.agent_status!);
+    for (const wake of waiters) wake();
+  });
+  const settles = (wanted: string, from = frames.length) => new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { waiters.delete(check); reject(new Error(`the pane never read ${wanted}: ${frames.slice(from).join(", ")}`)); }, 10_000);
+    function check() { if (!frames.slice(from).includes(wanted)) return; clearTimeout(timer); waiters.delete(check); resolve(); }
+    waiters.add(check);
+    check();
+  });
+  await settles("snapshot");
+  const turn = async (rest: string) => {
+    const working = settles("working");
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "working", agent_session_path: rollout });
+    await working;
+    const rested = settles(rest);
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle", agent_session_path: rollout });
+    await rested;
+  };
+  try {
+    // a turn that answered is a finish
+    writeFileSync(rollout, transcript(`${answerPrefix}Answer one`));
+    await turn("done");
+    // codex-cli 0.167.0 at its usage limit, as recorded: the turn's end carries the error, and no answer
+    const failed = readFileSync(new URL("./fixtures/codex-usage-limit-0.167.0-rollout.jsonl", import.meta.url), "utf8");
+    writeFileSync(rollout, `${transcript(`${answerPrefix}Answer one`)}\n${failed}`);
+    await turn("idle");
+    expect((await read()).turns.at(-1)?.parts).toEqual([{ kind: "text", failed: true,
+      text: "Error: You\u2019ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 13th, 2026 6:05 PM." }]);
+    // herdr saying the rest again changes nothing
+    await herdrRpc("pane.report_agent", { pane_id: paneId, source: "manual", agent: "codex", state: "idle", agent_session_path: rollout });
+    expect(await status()).toBe("idle");
+  } finally { ws.close(); }
 });

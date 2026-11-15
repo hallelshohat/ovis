@@ -6,6 +6,7 @@ import { chromium } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { openLens } from "./header-lens.ts";
 
 // Build the unmodified app and inject only the demo's fixture transport. All files and
 // HTTP traffic stay in this disposable, loopback-only app; no herdr session is opened.
@@ -70,7 +71,7 @@ try {
         }, panes.api);
         assert.ok(openedFinish.finishId > 0);
         assert.equal(openedFinish.seen, openedFinish.finishId, "READY comes from acknowledging this server finish");
-        await page.getByTitle("Chat transcript (⌘⇧J)", { exact: true }).click();
+        await openLens(page, "chat");
         const message = page.getByRole("textbox", { name: "Message", exact: true });
         await message.fill("Demo geometry check");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -81,7 +82,7 @@ try {
         await page.locator(`.pane-select[title^="${panes.hermes} —"][aria-current="true"]`).waitFor({ state: "attached" });
         const card = page.locator(".droplet-card");
         await card.waitFor({ state: "visible", timeout: 6_000 });
-        assert.match(await card.getAttribute("aria-label") ?? "", /Finished/);
+        assert.match(await card.getAttribute("aria-label") ?? "", /\bDONE\b/);
         assert.equal(await page.locator(".droplet").getAttribute("data-kind"), "done");
 
         const check = async (label: string) => {
