@@ -135,7 +135,7 @@ function weighLine({ line, shown, evidence }: { line: string; shown: readonly Pr
       if (!commandMatches({ preview, command: part.summary })) return;
       if (payload.type === "item_completed" && (part.state === "ok" || part.state === "error") && compact(part.output).includes(preview.output)) {
         evidence.quoted.add(index);
-        if (index > ([...evidence.matches].at(-1) ?? -1) && !evidence.calls.has(native!.id)) {
+        if (index === evidence.matches.size && !evidence.calls.has(native!.id)) {
           evidence.matches.add(index);
           evidence.calls.add(native!.id);
         }
