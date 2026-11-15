@@ -56,6 +56,49 @@ describe("a chat's pull request sources", () => {
     expect((await fileSources(path)).urls).toEqual([{ url: "https://github.com/acme/api/pull/1931", at: "2026-10-28T13:20:00Z" }]);
   });
 
+  it("pairs Grok's partial updates by session and call ID, using its agent timestamp", async () => {
+    const url = "https://github.com/acme/api/pull/41";
+    const event = ({ update, session = "one" }: { update: object; session?: string }) => JSON.stringify({ timestamp: 1700000000, method: "session/update", params: {
+      sessionId: session, _meta: { agentTimestampMs: Date.parse("2026-10-28T13:00:00Z") }, update,
+    } });
+    const path = file("grok-partials.jsonl", [
+      event({ update: { sessionUpdate: "tool_call", toolCallId: "create", _meta: { "x.ai/tool": { name: "run_terminal_command" } } } }),
+      event({ update: { sessionUpdate: "tool_call_update", toolCallId: "create", rawInput: { command: "gh pr create --fill" } } }),
+      event({ update: { sessionUpdate: "tool_call", toolCallId: "read", name: "run_terminal_command", rawInput: { command: "gh pr list" } } }),
+      event({ update: { sessionUpdate: "tool_call_update", toolCallId: "read", status: "completed", content: [{ type: "content", content: { type: "text", text: url } }] } }),
+      event({ session: "other", update: { sessionUpdate: "tool_call_update", toolCallId: "create", status: "completed", content: [{ type: "content", content: { type: "text", text: url } }] } }),
+      event({ update: { sessionUpdate: "tool_call_update", toolCallId: "create", content: [{ type: "content", content: { type: "text", text: url } }], rawOutput: { exit_code: 0 } } }),
+    ]);
+    expect(await fileSources(path)).toEqual({ started_at: "2026-10-28T13:00:00.000Z", branches: [], urls: [] });
+    const completed = event({ update: { sessionUpdate: "tool_call_update", toolCallId: "create", rawInput: null, name: null, status: "completed" } });
+    appendFileSync(path, completed.slice(0, 40));
+    expect((await fileSources(path)).urls).toEqual([]);
+    appendFileSync(path, completed.slice(40));
+    expect((await fileSources(path)).urls).toEqual([{ url, at: "2026-10-28T13:00:00.000Z" }]);
+    appendFileSync(path, "\n");
+    expect((await fileSources(path)).urls).toHaveLength(1);
+    resetSourceCache();
+    expect((await fileSources(path)).urls).toHaveLength(1);
+    rmSync(path);
+    file("grok-partials.jsonl", [completed]);
+    expect((await fileSources(path)).urls).toEqual([]);
+  });
+
+  it("ignores failed, timed-out and unseeded Grok creations and copied URLs", async () => {
+    const url = "https://github.com/acme/api/pull/41";
+    const event = (update: object) => JSON.stringify({ timestamp: 1700000000, method: "session/update", params: { sessionId: "one", update } });
+    for (const failure of [{ status: "failed", rawOutput: { exit_code: 0 } }, { status: "completed", rawOutput: { exit_code: 1 } }, { status: "completed", rawOutput: { exit_code: 0, timed_out: true } }]) {
+      const path = file("grok-failed.jsonl", [
+        event({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: url } }),
+        event({ sessionUpdate: "tool_call", toolCallId: "create", name: "run_terminal_command", rawInput: { command: "gh pr create --fill" } }),
+        event({ sessionUpdate: "tool_call_update", toolCallId: "create", ...failure, content: [{ type: "content", content: { type: "text", text: url } }] }),
+        event({ sessionUpdate: "tool_call_update", toolCallId: "missing", status: "completed", rawInput: { command: "gh pr create" }, rawOutput: { output_for_prompt: url, exit_code: 0 } }),
+      ]);
+      resetSourceCache();
+      expect((await fileSources(path)).urls).toEqual([]);
+    }
+  });
+
   it("reads a transcript past 32 MiB from its start", async () => {
     const path = join(dir, "huge.jsonl");
     const head = JSON.stringify({ timestamp: "2026-10-28T10:00:00Z", type: "session_meta", payload: { git: { branch: "feature-a" } } }) + "\n"

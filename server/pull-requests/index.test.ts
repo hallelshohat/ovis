@@ -1,11 +1,12 @@
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BoardRunner } from "../board-routes.ts";
 import type { Run } from "./gh.ts";
 import { OPEN_TTL_MS, panePullRequests, resetPullRequestCache, type PrDeps } from "./index.ts";
 import { fileChat, type Chat } from "./sources.ts";
+import { parseGrokTranscript } from "../grok.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "pr-index-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -178,6 +179,38 @@ describe("a chat's own pull requests, as review found them", () => {
     expect((await ask()).pull_requests.map((pr) => [pr.number, pr.state])).toEqual([[1, "closed"]]);
     resetPullRequestCache();
     expect((await ask()).pull_requests.map((pr) => [pr.number, pr.state])).toEqual([[1, "closed"]]);
+  });
+
+  it.each(["MERGED", "CLOSED"])("retains a native Grok %s PR on its head and after a branch switch", async (state) => {
+    const created = raw(41, "acme/api", { headRefName: "feature-a", state, createdAt: "2026-10-11T00:00:00Z", closedAt: "2026-10-12T00:00:00Z" });
+    const fixture = readFileSync(new URL("../fixtures/grok/native-tool.jsonl", import.meta.url), "utf8")
+      .replaceAll("printf '%s\\\\n' 'FICTIONAL_TOOL_OUTPUT'", "gh pr create --fill")
+      .replaceAll("FICTIONAL_TOOL_OUTPUT", created.url);
+    const path = join(dir, `grok-${state}.jsonl`);
+    writeFileSync(path, fixture);
+    expect(parseGrokTranscript(fixture).flatMap((turn) => turn.parts).some((part) => part.kind === "tool" && part.input.includes("gh pr create") && part.output.includes(created.url))).toBe(true);
+    const c = fileChat(path);
+    expect((await c.read()).started_at).toBe("2026-10-10T22:49:38.000Z");
+    expect((await c.read()).urls.map(({ url }) => url)).toEqual([created.url]);
+    const run = listing({ "feature-a": [created] }, { [created.url]: created });
+    for (const branch of ["feature-a", "next-branch"]) {
+      resetPullRequestCache();
+      const answer = await panePullRequests({ paneId: "grok", cwd: "/w", chat: c, fresh: true }, { ...deps(run), currentBranch: async () => branch });
+      expect(answer.linked).toBe(1);
+      expect(answer.pull_requests.map((pr) => `${pr.number}:${pr.state}`)).toEqual([`41:${state.toLowerCase()}`]);
+    }
+  });
+
+  it("retains a merged PR created with quoted punctuation after switching branches", async () => {
+    const created = raw(41, "acme/api", { headRefName: "feature-a", state: "MERGED", mergedAt: "2026-10-28T14:00:00Z" });
+    const c = transcript("quoted-create.jsonl", [
+      { type: "assistant", timestamp: "2026-10-28T12:00:00Z", message: { role: "assistant", content: [{ type: "tool_use", id: "create", name: "Bash", input: { command: "gh pr create --title 'Fix header & sidebar' --body-file body.md" } }] } },
+      { type: "user", timestamp: "2026-10-28T13:00:00Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "create", content: created.url, is_error: false }] } },
+    ]);
+    const run = listing({}, { [created.url]: created });
+    const answer = await panePullRequests({ paneId: "quoted", cwd: "/w", chat: c, fresh: true }, { ...deps(run), currentBranch: async () => "next-branch" });
+    expect(answer.linked).toBe(1);
+    expect(answer.pull_requests.map((pr) => [pr.number, pr.state])).toEqual([[41, "merged"]]);
   });
 
   it("does not resurrect completed branch PRs without a known start or after reusing a branch in a new chat", async () => {

@@ -175,7 +175,7 @@ export function grokProjection(path: string, stat: { dev: number; ino: number; s
   return { segments, promptStarts, revision: index.revision.toString(36), activity: index.prompts.at(-1)?.activity ?? "idle" };
 }
 
-function outputText(value: unknown): string {
+export function grokOutputText(value: unknown): string {
   if (typeof value === "string") return value;
   if (!Array.isArray(value)) return "";
   return value.map((item) => {
@@ -276,7 +276,7 @@ export function parseGrokTranscript(text: string, path?: string, wholeCall?: str
       const block = record(value);
       if (block.type === "diff") call.diffs.set(hash(JSON.stringify(block)), block);
     }
-    const output = outputText([...call.diffs.values(), ...content.filter((block) => record(block).type !== "diff")]);
+    const output = grokOutputText([...call.diffs.values(), ...content.filter((block) => record(block).type !== "diff")]);
     const images = [...new Set(updatePictures(fields).map((picture) => `${picture.mediaType}\0grok-image:${digestOf(picture.data)}`))]
       .map((key) => ({ media_type: key.slice(0, key.indexOf("\0")), ref: key.slice(key.indexOf("\0") + 1) }));
     if (images.length > 0) call.part.images = images; else delete call.part.images;

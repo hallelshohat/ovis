@@ -10,7 +10,8 @@
 import { statSync } from "node:fs";
 import { z } from "zod";
 import type { ConversationTurn } from "../../shared/protocol.ts";
-import { createdPrUrls, creationRecordUrls, type CreationCalls } from "./creation.ts";
+import { grokEvent } from "../grok.ts";
+import { createdPrUrls, createdGrokPrUrls, creationRecordUrls, type CreationCalls } from "./creation.ts";
 
 export interface ChatSources {
   urls: { url: string; at: string | null }[];
@@ -108,7 +109,7 @@ function scanTurns(turns: readonly ConversationTurn[], into: ChatSources): void 
   into.urls.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""));
 }
 
-const lineSchema = z.object({ timestamp: z.iso.datetime({ offset: true }).optional(), gitBranch: z.string().optional(), type: z.string().optional(), payload: z.unknown().optional() });
+const lineSchema = z.object({ timestamp: z.union([z.iso.datetime({ offset: true }), z.number()]).optional(), method: z.string().optional(), gitBranch: z.string().optional(), type: z.string().optional(), payload: z.unknown().optional() });
 const metaSchema = z.object({ git: z.object({ branch: z.string() }).optional() });
 
 function scanLine({ line, into, calls }: { line: string; into: ChatSources; calls: CreationCalls }): void {
@@ -117,12 +118,17 @@ function scanLine({ line, into, calls }: { line: string; into: ChatSources; call
   const parsed = lineSchema.safeParse(value);
   if (!parsed.success) return;
   const fields = parsed.data;
-  const at = fields.timestamp ?? null;
+  let grok: ReturnType<typeof grokEvent> = null;
+  if (fields.method === "session/update" || fields.method === "_x.ai/session/update") {
+    try { grok = grokEvent(line); } catch { return; }
+  }
+  const at = grok?.ts ?? (typeof fields.timestamp === "string" ? fields.timestamp : null);
   if (at !== null && (into.started_at === null || at < into.started_at)) into.started_at = at;
   const meta = fields.type === "session_meta" ? metaSchema.safeParse(fields.payload) : null;
   const branch = fields.gitBranch ?? (meta?.success ? meta.data.git?.branch : null);
   if (branch && into.branches.at(-1)?.branch !== branch) into.branches.push({ branch, at });
-  collectUrls({ urls: creationRecordUrls({ value, calls }), at, into });
+  const urls = grok ? createdGrokPrUrls({ event: grok, calls }) : creationRecordUrls({ value, calls });
+  collectUrls({ urls, at, into });
 }
 
 function collectUrls({ urls, at, into }: { urls: string[]; at: string | null; into: ChatSources }): void {

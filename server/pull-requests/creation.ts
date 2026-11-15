@@ -2,10 +2,12 @@ import { z } from "zod";
 import { match } from "ts-pattern";
 import type { ConversationPart } from "../../shared/protocol.ts";
 import { codexNativeItem } from "../codex-items.ts";
+import { grokOutputText, type GrokEvent } from "../grok.ts";
 import { piMessage, piResults, resultText } from "../transcript-records.ts";
 
 type Tool = Extract<ConversationPart, { kind: "tool" }>;
-export type CreationCalls = Map<string, Pick<Tool, "name" | "input">>;
+type CreationCall = Pick<Tool, "name" | "input"> & Partial<Pick<Tool, "output" | "exit_code" | "error">>;
+export type CreationCalls = Map<string, CreationCall>;
 
 /** A command's own successful result, never a link in a prompt, search or quoted example. */
 export function createdPrUrls({ part }: { part: Tool }): string[] {
@@ -54,7 +56,36 @@ function messageUrls({ entry, calls }: { entry: { type: "assistant" | "user" | "
   return urls;
 }
 
-const shellTools = new Set(["Bash", "bash", "exec_command", "shell_command", "shell", "terminal"]);
+/** Grok sends input, output and completion separately, scoped to the session and call. */
+export function createdGrokPrUrls({ event, calls }: { event: GrokEvent; calls: CreationCalls }): string[] {
+  const parsed = grokToolSchema.safeParse(event.update);
+  if (!parsed.success) return [];
+  const update = parsed.data;
+  const id = `grok\0${event.session}\0${update.toolCallId}`;
+  const call = match(update.sessionUpdate)
+    .with("tool_call", (): CreationCall => {
+      const seed = { name: "", input: "" };
+      calls.set(id, seed);
+      return seed;
+    })
+    .with("tool_call_update", () => calls.get(id))
+    .exhaustive();
+  if (!call) return [];
+  const name = update.name ?? update._meta?.["x.ai/tool"]?.name;
+  if (name != null) call.name = name;
+  if (update.rawInput != null) call.input = typeof update.rawInput === "string" ? update.rawInput : JSON.stringify(update.rawInput);
+  if (update.content != null) call.output = grokOutputText(update.content);
+  if (update.rawOutput != null) {
+    call.output = update.rawOutput.output_for_prompt ?? call.output;
+    call.exit_code = update.rawOutput.exit_code ?? call.exit_code;
+    call.error = update.rawOutput.timed_out === true;
+  }
+  if (update.status !== "completed" && update.status !== "failed") return [];
+  calls.delete(id);
+  return createdPrUrls({ part: { kind: "tool", summary: "", output: "", ...call, state: update.status === "completed" ? "ok" : "error" } });
+}
+
+const shellTools = new Set(["Bash", "bash", "exec_command", "shell_command", "shell", "terminal", "run_terminal_command"]);
 const inputSchema = z.object({ command: z.string().optional(), cmd: z.string().optional() });
 function isCreation({ name, input }: Pick<Tool, "name" | "input">): boolean {
   if (!shellTools.has(name)) return false;
@@ -62,9 +93,12 @@ function isCreation({ name, input }: Pick<Tool, "name" | "input">): boolean {
   try { raw = JSON.parse(input); } catch { return false; }
   const parsed = inputSchema.safeParse(raw);
   if (!parsed.success) return false;
-  const command = (parsed.data.command ?? parsed.data.cmd ?? "").replace(/\n\s*#[^\n]*/g, "").trim();
+  // Quoted/escaped punctuation is argument text; only syntax outside those literals controls the shell.
+  const command = (parsed.data.command ?? parsed.data.cmd ?? "")
+    .replace(/'[^']*'|"(?:\\[\s\S]|[^"\\$`])*"|\\[\s\S]/g, (literal) => literal === "\\\n" ? "" : "literal")
+    .replace(/(?:^|\s)#[^\n]*/g, "").trim();
   // Only a literal single command proves creation; compound scripts still use exact-head discovery.
-  return /^gh\s+pr\s+create(?:\s|$)/.test(command) && !/[\n\r;&|<>`$]/.test(command)
+  return /^gh\s+pr\s+create(?:\s|$)/.test(command) && !/[\n\r;&|<>`$'"\\(){}]/.test(command)
     && !/(?:^|\s)(?:--help|-h|--dry-run)(?:\s|$)/.test(command);
 }
 
@@ -91,6 +125,13 @@ const callSchema = z.union([
   z.object({ type: z.literal("toolCall"), id: z.string(), name: z.string(), arguments: z.unknown() }).transform(({ id, name, arguments: input }) => ({ id, name, input })),
 ]);
 const resultSchema = z.object({ type: z.literal("tool_result"), tool_use_id: z.string(), content: z.unknown(), is_error: z.boolean().optional() });
+
+const grokToolSchema = z.object({
+  sessionUpdate: z.enum(["tool_call", "tool_call_update"]), toolCallId: z.string().min(1),
+  name: z.string().nullish(), rawInput: z.unknown().optional(), content: z.unknown().optional(), status: z.string().optional(),
+  _meta: z.object({ "x.ai/tool": z.object({ name: z.string().optional() }).optional() }).optional(),
+  rawOutput: z.object({ output_for_prompt: z.string().optional(), exit_code: z.number().nullish(), timed_out: z.boolean().optional() }).nullish(),
+});
 
 const envelopeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("event_msg"), payload: nativeSchema }),
