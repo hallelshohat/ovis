@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, statSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { codexToolActivityConflict, matchCodexToolActivity } from "./codex-tool-match.ts";
+import { resetCodexHistoryScans } from "./codex-history-scan.ts";
 
 describe("Codex native command screen ownership", () => {
   const commands = ["bun run verify --project /work/integration", "git diff --stat -- src/verification"];
@@ -116,4 +118,36 @@ describe("Codex native command screen ownership", () => {
       expect(await codexToolActivityConflict({ screen, segments: [{ path, end: 100 }] })).toBe(true);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+
+  for (const bytes of [8 * 1024 * 1024 + 1, 32 * 1024 * 1024]) {
+    it(`checks a valid ${bytes}-byte tool output without permanently refusing its peer`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "ovis-tool-large-record-")), path = join(root, "rollout.jsonl");
+      const record = (output: string) => JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "unrelated", output } }) + "\n";
+      const conflict = () => codexToolActivityConflict({ screen, segments: [{ path, end: statSync(path).size }] });
+      try {
+        const padding = "x".repeat(bytes);
+        writeFileSync(path, record(padding));
+        const started = performance.now();
+        let refused = await conflict();
+        while (refused && performance.now() - started < 2000) {
+          await setImmediate();
+          refused = await conflict();
+        }
+        expect(refused).toBe(false);
+        expect(await conflict()).toBe(false);
+        appendFileSync(path, record("Another unrelated completed call."));
+        expect(await conflict()).toBe(false);
+
+        // Evidence after the old size boundary must still prevent binding the wrong peer.
+        writeFileSync(path, record(padding + body));
+        expect(await conflict()).toBe(true);
+        expect(await conflict()).toBe(true);
+        writeFileSync(path, record("Unrelated replacement."));
+        expect(await conflict()).toBe(false);
+      } finally {
+        await resetCodexHistoryScans();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
 });
