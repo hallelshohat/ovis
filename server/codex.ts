@@ -3640,7 +3640,7 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
     if (resumedPath === null) return null;
     if (resumedNewer.length > 0) {
       if (!local || screen === null || agent.nestedTerminal || agent.unlabelled) return null;
-      return resumedWithoutLoadedSuccessors({ paneId, processes, screen: screen.text, home, resumedPath, newer: resumedNewer });
+      return soleLoadedResume({ paneId, processes, screen: screen.text, home, resumedPath, newer: resumedNewer });
     }
     // A verified launch ID is still useful before any answer is visible (including terminals
     // with tool output only). A visible answer that fits no candidate is not launch evidence.
@@ -3665,17 +3665,17 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   return loadedConversation((screen ?? await paneRead({ paneId, source: "recent", lines: 400, stripAnsi: true })).text, paths, home);
 }
 
-/** Completed reviews in the same worktree cannot replace a still-loaded resume once their threads unload. */
-async function resumedWithoutLoadedSuccessors({ paneId, processes, screen, home, resumedPath, newer }: {
+/** A picker resume can leave the argv thread loaded beside an older thread from any folder. */
+async function soleLoadedResume({ paneId, processes, screen, home, resumedPath, newer }: {
   paneId: string; processes: string; screen: string; home: string; resumedPath: string; newer: readonly string[];
 }): Promise<string | null> {
   try {
     if (newer.some((path) => codexRolloutPath(path, home) === null)) return null;
     const loaded = await loadedRollouts(home);
-    if (!loaded?.get(resumedPath)?.offered || newer.some((path) => loaded.has(path))) return null;
+    if (loaded?.size !== 1 || !loaded.get(resumedPath)?.offered) return null;
     if (!await stillAsWeighed(paneId, processes, screen, home, new Set(loaded.keys()))) return null;
     // The last screen read may precede an unload or a replacement; keep the resumed thread held too.
     const now = await loadedRollouts(home);
-    return now?.get(resumedPath)?.offered && [...now.keys()].every((path) => loaded.has(path)) ? resumedPath : null;
+    return now?.size === 1 && now.get(resumedPath)?.offered ? resumedPath : null;
   } catch { return null; }
 }
