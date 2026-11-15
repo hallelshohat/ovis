@@ -8,6 +8,7 @@ import { asCodexTitle, codexOpenRollout, codexTranscriptPath, limitCodexHistoryF
 import * as codexModule from "./codex.ts";
 import * as conversationModule from "./conversation.ts";
 import * as processStart from "./process-start.ts";
+import * as herdrClient from "./herdr/client.ts";
 import { processStartedAt } from "./process-start.ts";
 import * as kiro from "./kiro-terminal.ts";
 import { paneTranscript } from "./conversation.ts";
@@ -1041,6 +1042,138 @@ function ownThread(records: { type: string; payload: Record<string, unknown> }[]
 const said = (type: "user_message" | "agent_message", message: string) => ({ type: "event_msg", payload: { type, message } });
 
 const heldIt = (name: string, test: () => Promise<void>) => it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(name, test, 20_000);
+
+describe("a resumed Codex chat beside unloaded newer sessions", () => {
+  const successors = ["01a1de4e-df32-79a0-8c2f-000000000001", "01a1de4e-df32-79a0-8c2f-000000000002"];
+
+  async function resumedWithSuccessors(): Promise<string[]> {
+    const child = await runningCodex(true);
+    foreground = [{ pid: child.pid, argv: ["codex", "resume", thread] }];
+    screen = "• Ran bun test\n  └ 12 tests passed\n\n• Working (8m 29s • esc to interrupt)\n› \nGPT-6-Astra high · /project\n? for shortcuts";
+    const folder = join(home, "sessions", "2026", "11", "15");
+    mkdirSync(folder, { recursive: true });
+    const db = new Database(join(home, "state_5.sqlite"));
+    try {
+      return successors.map((id) => {
+        const rollout = join(folder, `rollout-2026-11-15T10-24-33-${id}.jsonl`);
+        writeFileSync(rollout, [
+          { type: "session_meta", payload: { id, session_id: id, cwd: root, source: "cli", thread_source: "user", cli_version: "0.169.0" } },
+          said("user_message", "Review the finished change."),
+          said("agent_message", "The independent review is complete."),
+        ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+        db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, ?, ?, 'cli')")
+          .run(id, rollout, root, Math.ceil(Date.now() / 1000), Math.ceil(Date.now() / 1000));
+        return rollout;
+      });
+    } finally { db.close(); }
+  }
+
+  heldIt("recovers the resumed chat after newer sessions unload, but refuses an active replacement", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    expect(await resolve()).toBe(path);
+    const replacement = await loaded(successors[0]!);
+    expect(await resolve()).toBeNull();
+    replacement.kill();
+    await replacement.exited;
+    expect(await resolve()).toBe(path);
+  });
+
+  heldIt("refuses recovery when the resumed thread is no longer loaded", async () => {
+    await resumedWithSuccessors();
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("refuses recovery when a newer rollout is missing or invalid", async () => {
+    const [newer] = await resumedWithSuccessors();
+    await loaded(thread);
+    writeFileSync(newer!, "not a rollout\n");
+    expect(await resolve()).toBeNull();
+    rmSync(newer!);
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("refuses recovery when a loaded thread has no readable store entry", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread, "01a1de4e-df32-79a0-8c2f-000000000003");
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("refuses recovery when the Codex process changes during revalidation", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) foreground = [{ pid: 2147483647, argv: ["codex", "resume", thread] }];
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+
+  heldIt("refuses recovery when a successor loads during revalidation", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation(async (input) => {
+      if (++reads === 2) await loaded(successors[0]!);
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+
+  heldIt("recovers the chat while Codex's working clock advances", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const ticking = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) screen = screen.replace("8m 29s", "8m 30s");
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBe(path);
+      expect(reads).toBe(2);
+    } finally { ticking.mockRestore(); }
+  });
+
+  heldIt("refuses recovery when the screen changes beyond the working clock", async () => {
+    await resumedWithSuccessors();
+    await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) screen = "OpenAI Codex (v0.169.0)\n› \nGPT-6-Astra high · /project\n? for shortcuts";
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+
+  heldIt("refuses recovery when the resumed conversation unloads during revalidation", async () => {
+    await resumedWithSuccessors();
+    const holder = await loaded(thread);
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const changing = spyOn(herdrClient, "paneRead").mockImplementation(async (input) => {
+      if (++reads === 2) { holder.kill(); await holder.exited; }
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { changing.mockRestore(); }
+  });
+});
 
 heldIt("does not bind an argv resume outside the folder when another loaded thread gave the visible answer", async () => {
   const launch = "01a16b22-7e1f-7072-8897-d5e46a0d5f90";
