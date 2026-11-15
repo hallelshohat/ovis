@@ -82,7 +82,12 @@ it("serves native Codex conversations and invalidates replaced files even at the
   expect(replaced.history_id).not.toBe(first.history_id);
   expect(replaced.turns.at(-1)?.parts[0]).toMatchObject({ text: `${answerPrefix}Answer two` });
   rmSync(rollout);
-  expect(await read()).toEqual({ source: "scrollback", turns: [], unavailable: "not_found" });
+  const missing = await fetch(`http://127.0.0.1:${server.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
+  expect(missing.status).toBe(503);
+  expect(missing.headers.get("cache-control")).toBe("no-store");
+  expect(await missing.json()).toMatchObject({ error: { code: "conversation_read_pending" } });
+  writeFileSync(rollout, transcript(`${answerPrefix}Answer two`));
+  expect((await read()).turns.at(-1)?.parts[0]).toMatchObject({ text: `${answerPrefix}Answer two` });
 });
 
 it("answers an unchanged conversation with a bodyless 304 and a changed one in full", async () => {

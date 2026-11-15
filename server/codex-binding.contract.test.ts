@@ -67,7 +67,14 @@ const pane = async (label: string, command: string, cwd = root, owned = workspac
 
 const read = async (paneId: string): Promise<ConversationResponse> => {
   const response = await fetch(`http://127.0.0.1:${server.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
+  expect(response.status).toBe(200);
   return await response.json() as ConversationResponse;
+};
+const pending = async (paneId: string): Promise<void> => {
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`);
+  expect(response.status).toBe(503);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toMatchObject({ error: { code: "conversation_read_pending" } });
 };
 /** A thread row begun now in the panes' cwd, as /new starts one (or a subagent, or `codex exec`); returns its removal. */
 let rows = 10;
@@ -153,13 +160,12 @@ it("reads a resumed thread's rollout only when its header is an interactive thre
   try {
     for (const { fixture, id, answer } of cases) {
       const paneId = await pane(`classifier-${id.slice(-4)}`, `${join(root, "bin", "codex")} resume ${id}`, cwd);
-      const conversation = await read(paneId);
       if (fixture.interactive) {
+        const conversation = await read(paneId);
         expect([fixture.name, conversation.source, lastAnswer(conversation)]).toEqual([fixture.name, "codex-transcript", answer]);
       } else {
         // no other rollout stands in for a refused one, its parent's included
-        expect([fixture.name, conversation.source]).toEqual([fixture.name, "scrollback"]);
-        expect(lastAnswer(conversation)).not.toBe(answer);
+        await pending(paneId);
       }
     }
   } finally {
@@ -248,7 +254,7 @@ it("reads the thread a Codex TUI was resumed on while none of its answers is on 
   // line no longer tells, and the chat says so rather than show the resumed thread
   const remove = newerThread();
   try {
-    expect((await read(paneId)).source).toBe("scrollback");
+    await pending(paneId);
   } finally {
     remove();
   }
@@ -266,7 +272,7 @@ it("keeps a matched rollout while tool output scrolls the answer away, and drops
   await herdrRpc("pane.send_keys", { pane_id: paneId, keys: ["ctrl+c"] });
   await herdrRpc("pane.send_text", { pane_id: paneId, text: `${join(root, "bin", "codex")}\n` });
   await codexRunning(paneId, first);
-  expect((await read(paneId)).source).toBe("scrollback");
+  await pending(paneId);
 }, 20_000);
 
 it("reads a thread whose answers are all short by its newest answers on screen, and never rebinds a matched pane by them", async () => {
@@ -295,7 +301,7 @@ it("reads a thread whose answers are all short by its newest answers on screen, 
       };
     };
     const gone = thread("01a0c7a1-56d9-7e20-9f08-f7a2d973bd01", join(codexHome, "sessions", "rollout-2026-09-24T00-00-00-01a0c7a1-56d9-7e20-9f08-f7a2d973bd01.jsonl"));
-    try { expect((await read(shortPane)).source).toBe("scrollback"); } finally { gone(); }
+    try { await pending(shortPane); } finally { gone(); }
     expect((await read(shortPane)).source).toBe("codex-transcript");
     const forkId = "01a0c7a1-56d9-7e20-9f08-f7a2d973bd02";
     const fork = join(codexHome, "sessions", `rollout-2026-09-24T00-00-00-${forkId}.jsonl`);
@@ -304,7 +310,7 @@ it("reads a thread whose answers are all short by its newest answers on screen, 
       { type: "response_item", timestamp: "2026-09-24T00:00:05Z", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Done." }] } },
     ].map((entry) => JSON.stringify(entry)).join("\n"));
     const forked = thread(forkId, fork);
-    try { expect((await read(shortPane)).source).toBe("scrollback"); } finally { forked(); }
+    try { await pending(shortPane); } finally { forked(); }
     expect((await read(shortPane)).source).toBe("codex-transcript");
     const bound = await pane("bound-short", `FLOOD_ON_ENTER=1 THEN=short ${join(root, "bin", "codex")} --say`, root, owned);
     for (let attempt = 0; attempt < 30 && lastAnswer(await read(bound)) !== answers.matched; attempt++) await Bun.sleep(100);
@@ -329,7 +335,7 @@ it("reads a thread whose answers are all short by its newest answers on screen, 
         }
       })();
     } finally { db.close(); }
-    expect((await read(shortPane)).source).toBe("scrollback");
+    await pending(shortPane);
   } finally {
     const db = new Database(join(codexHome, "state_5.sqlite"));
     db.query("DELETE FROM threads WHERE id = ? OR first_user_message = 'later'").run(threads.short);
@@ -355,7 +361,7 @@ it("drops a matched rollout once a newer interactive thread begins in its cwd, a
     expect(lastAnswer(await read(paneId))).toBe(answers.matched);
     const remove = newerThread();
     try {
-      expect((await read(paneId)).source).toBe("scrollback");
+      await pending(paneId);
     } finally {
       remove();
     }
@@ -372,10 +378,10 @@ it("keeps a matched rollout when the newer thread shows in another Codex pane, w
   await floodedAway(paneId, answers.matched);
   const remove = newerThread("cli", threads.other, rollout("other"), "question for other");
   try {
-    expect((await read(paneId)).source).toBe("scrollback");
+    await pending(paneId);
     const quoting = await pane("quoting", `${join(root, "bin", "codex")} --quote other`);
     await onScreen(quoting, answers.other);
-    expect((await read(paneId)).source).toBe("scrollback");
+    await pending(paneId);
     const otherPane = await pane("theirs", `${join(root, "bin", "codex")} --say other`);
     await onScreen(otherPane, answers.other);
     expect(lastAnswer(await read(paneId))).toBe(answers.matched);
@@ -406,13 +412,13 @@ it("claims nothing for a pane whose screen matches this pane's thread as well, n
   try {
     const both = await pane("both", `${join(root, "bin", "codex")} --both fresh`);
     await onScreen(both, answers.fresh);
-    expect((await read(paneId)).source).toBe("scrollback");
+    await pending(paneId);
     await workspaceClose(workspaces.pop()!);
     const theirs = await pane("owner", `${join(root, "bin", "codex")} --say fresh`);
     await onScreen(theirs, answers.fresh);
     expect(lastAnswer(await read(paneId))).toBe(answers.matched);
     await workspaceClose(workspaces.pop()!);
-    expect((await read(paneId)).source).toBe("scrollback");
+    await pending(paneId);
   } finally {
     remove();
   }
@@ -431,7 +437,7 @@ it("takes the thread herdr has for a Codex pane as a hint: the shared daemon rep
     expect(lastAnswer(await read(resumed))).toBe(answers.resumed);
     const silent = await pane("silent", codex);
     await reportThread(silent, threads.resumed);
-    expect((await read(silent)).source).toBe("scrollback");
+    await pending(silent);
   } finally {
     remove();
   }
@@ -442,7 +448,7 @@ it("takes the thread herdr has for a Codex pane as a hint: the shared daemon rep
   db.close();
   const alone = await pane("hinted", codex);
   await reportThread(alone, threads.hinted);
-  expect((await read(alone)).source).toBe("scrollback");
+  await pending(alone);
   writeFileSync(join(root, "bin", "hinted.txt"), `${answers.hinted}\n`);
   const shown = await pane("hinted-shown", `${codex} --say hinted`);
   await reportThread(shown, threads.hinted);
