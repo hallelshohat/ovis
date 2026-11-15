@@ -3430,17 +3430,19 @@ async function unmarkedConversation({ screen, paths, owners, home }: {
   // All peers start warming together; no result can bind until every history is verified.
   const scans = await Promise.all(histories.map(({ segments }) => scanCodexHistory({
     key: "final prompts", segments, cache: promptHistories,
-    initial: (): PromptHistory => ({ prompts: [], turns: new Map(), completed: null, footerEnded: false, onlyStarted: true }),
+    initial: (): PromptHistory => ({ prompts: [], turns: new Map(), completed: null, completedAt: 0, footerEnded: false, onlyStarted: true }),
     each: (history, line) => readPromptHistory({ history, line }),
   })));
   if (scans.some((scan) => scan === null || scan.value.footerEnded)) return null;
-  const candidates = histories.flatMap(({ path }, at) => scans[at]!.value.onlyStarted ? []
-    : [{ path, text: [...scans[at]!.value.prompts, scans[at]!.value.completed ?? ""].join("\n") }]);
+  const candidates = histories.flatMap(({ path }, at) => {
+    const { prompts, completed, completedAt, onlyStarted } = scans[at]!.value;
+    return onlyStarted ? [] : [{ path, text: [...prompts.slice(0, completedAt), completed ?? "", ...prompts.slice(completedAt)].join("\n") }];
+  });
   const found = unmarkedFinalTranscript({ screen, candidates, owners });
   return found === null ? null : { found, files: scans.flatMap((scan) => scan!.files) };
 }
 
-interface PromptHistory { prompts: string[]; turns: Map<string, number>; completed: string | null; footerEnded: boolean; onlyStarted: boolean }
+interface PromptHistory { prompts: string[]; turns: Map<string, number>; completed: string | null; completedAt: number; footerEnded: boolean; onlyStarted: boolean }
 const promptHistories = new Map<string, CodexHistoryScan<PromptHistory>>();
 const promptEnvelope = z.object({ type: z.string(), payload: z.looseObject({ type: z.string().optional() }) });
 
@@ -3460,10 +3462,12 @@ function readPromptHistory({ history, line }: { history: PromptHistory; line: st
   }
   if (type === "event_msg" && payload.type === "task_complete") {
     history.completed = line;
+    history.completedAt = history.prompts.length;
     // A finished native turn supersedes earlier prompts; retain its steering and any later prompts.
     const start = turn === null ? undefined : history.turns.get(turn);
     if (start !== undefined && start > 0) {
       history.prompts.splice(0, start);
+      history.completedAt -= start;
       for (const [id, at] of history.turns) {
         if (at < start) history.turns.delete(id);
         else history.turns.set(id, at - start);
