@@ -141,6 +141,37 @@ it("bounds active and queued scans, and reset prevents late work from publishing
   } finally { gate.resolve(); open.mockRestore(); }
 });
 
+it("does not admit expired foreground checks when queue capacity returns", async () => {
+  const gate = Promise.withResolvers<void>();
+  const original = files.open;
+  const open = spyOn(files, "open").mockImplementation(async (...args) => { await gate.promise; return original(...args); });
+  try {
+    const reads = Array.from({ length: 40 }, (_, index) => scanCodexHistory({ key: String(index), segments: [{ path, end: 8 }], cache, initial: () => [], each }));
+    expect((await Promise.all(reads)).every((result) => result === null)).toBe(true);
+    expect(open).toHaveBeenCalledTimes(2);
+    gate.resolve();
+    await eventually(async () => cache.size === 34 ? true : null);
+    expect(lines).toBe(34);
+    for (let index = 34; index < 40; index++) expect(cache.has(JSON.stringify([String(index), [path]]))).toBe(false);
+  } finally { gate.resolve(); open.mockRestore(); }
+});
+
+it("reset cancels foreground admission before its deadline", async () => {
+  const gate = Promise.withResolvers<void>();
+  const original = files.open;
+  const open = spyOn(files, "open").mockImplementation(async (...args) => { await gate.promise; return original(...args); });
+  try {
+    const reads = Array.from({ length: 40 }, (_, index) => scanCodexHistory({ key: String(index), segments: [{ path, end: 8 }], cache, initial: () => [], each }));
+    const stopped = resetCodexHistoryScans();
+    gate.resolve();
+    await stopped;
+    expect((await Promise.all(reads)).every((result) => result === null)).toBe(true);
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(lines).toBe(0);
+    expect(cache.size).toBe(0);
+  } finally { gate.resolve(); open.mockRestore(); }
+});
+
 it("reuses only unchanged cached snapshots while the scan queue is full", async () => {
   expect((await scan())?.value).toEqual([1]);
   const gate = Promise.withResolvers<void>();
