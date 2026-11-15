@@ -4110,7 +4110,10 @@ async function loadedToolConversation({ paneId, processes, screen, home }: {
     if (!await stillAsWeighed(paneId, processes, screen, home, new Set(loaded.keys()))) return null;
     for (const [path, before] of files) {
       const now = statSync(path);
-      if (now.ino !== before.ino || now.dev !== before.dev || now.size !== before.size || now.mtimeMs !== before.mtimeMs || now.ctimeMs !== before.ctimeMs) return null;
+      // Completed items survive an append to their own rollout; a competitor's new records must be weighed.
+      const appended = path === found && now.size > before.size;
+      if (now.ino !== before.ino || now.dev !== before.dev || !appended
+        && (now.size !== before.size || now.mtimeMs !== before.mtimeMs || now.ctimeMs !== before.ctimeMs)) return null;
     }
     const now = await loadedRollouts(home);
     return now?.get(found)?.offered && [...now.keys()].every((path) => loaded.has(path)) ? found : null;
