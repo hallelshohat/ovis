@@ -1148,6 +1148,13 @@ describe("Codex unmarked final answers", () => {
     expect(await resolve()).toBe(path);
   });
 
+  heldIt("keeps a finished prompt separate from later steering recorded on the same turn", async () => {
+    expect(await resolve()).toBe(path);
+    appendFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "item_completed", turn_id: "turn-1",
+      item: { type: "UserMessage", content: [{ type: "input_text", text: "Now verify the implementation." }] } } }) + "\n");
+    expect(await resolve()).toBe(path);
+  });
+
   heldIt("recovers after more than sixteen MiB of older prompts without retaining superseded turns", async () => {
     const old = Array.from({ length: 5 }, (_, at) => records({ prompt: "Historical requirements. " + "x".repeat(2 * 1024 * 1024), answer: "Earlier work finished." })
       .map((entry) => ({ ...entry, payload: { ...entry.payload, turn_id: `old-${at}` } }))).flat();
