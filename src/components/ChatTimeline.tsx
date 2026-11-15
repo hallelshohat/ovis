@@ -17,8 +17,6 @@ export interface ChatTimelineProps<Row extends ChatTimelineRow> {
   scroller: RefObject<HTMLDivElement | null>;
   listRef: RefObject<LegendListRef | null>;
   following: RefObject<boolean>;
-  /** A turn works and motion is welcome: following the end glides. */
-  smoothFollow: boolean;
   memories: Map<string, ChatRowMemory>;
   header: ReactNode;
   footer: ReactNode;
@@ -28,7 +26,7 @@ export interface ChatTimelineProps<Row extends ChatTimelineRow> {
 }
 
 /** One scroll owner; selected and focused rows stay real DOM nodes outside its window. */
-export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, smoothFollow, memories, header, footer, label, onScroll, renderRow }: ChatTimelineProps<Row>) {
+export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source, scroller, listRef, following, memories, header, footer, label, onScroll, renderRow }: ChatTimelineProps<Row>) {
   const [selectionKeys, setSelectionKeys] = useState<string[]>([]);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   useLayoutEffect(() => {
@@ -103,25 +101,17 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     };
   }, [scroller, positions, rowKeys]);
 
-  // A glide aims at the end it saw; content that grew meanwhile leaves it short. Where it stops, a
-  // reader still following is put at the end at once.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = scroller.current;
-    if (node === null || !smoothFollow) return;
-    const settle = () => {
-      if (following.current && !manualLayout.current && node.scrollHeight - node.clientHeight - node.scrollTop > 1) listRef.current?.scrollToEnd({ animated: false });
-    };
-    // `in` narrows the element to never: the DOM types always declare onscrollend
-    if ("onscrollend" in (node as object)) {
-      node.addEventListener("scrollend", settle);
-      return () => node.removeEventListener("scrollend", settle);
-    }
-    // Safari before 26 fires no scrollend: settle once the scroll events have been quiet a moment
-    let quiet: ReturnType<typeof setTimeout> | undefined;
-    const scrolled = () => { clearTimeout(quiet); quiet = setTimeout(settle, 150); };
-    node.addEventListener("scroll", scrolled, { passive: true });
-    return () => { clearTimeout(quiet); node.removeEventListener("scroll", scrolled); };
-  }, [scroller, listRef, following, smoothFollow]);
+    const content = node?.firstElementChild;
+    if (!node || !content) return;
+    // Row measurements precede the list's layout; follow its committed height before paint.
+    const observer = new ResizeObserver(() => {
+      if (following.current && !manualLayout.current) node.scrollTop = node.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [scroller, following]);
 
   useLayoutEffect(() => {
     const transcript = scroller.current?.querySelector<HTMLElement>(".chat-transcript");
@@ -167,13 +157,5 @@ export function ChatTimeline<Row extends ChatTimelineRow>({ rows, scope, source,
     ListFooterComponent={<div className="chat-virtual-footer">{footer}</div>}
     onScroll={onScroll}
     onLoad={() => { if (following.current) listRef.current?.scrollToEnd({ animated: false }); }}
-    onItemSizeChanged={() => {
-      if (!following.current || manualLayout.current) return;
-      // The browser's own glide yields to any scroll the reader or a jump makes next; the list's
-      // animated scroll keeps retrying toward the end and would pull them back.
-      const node = scroller.current;
-      if (smoothFollow && node !== null) node.scrollTo({ top: node.scrollHeight - node.clientHeight, behavior: "smooth" });
-      else listRef.current?.scrollToEnd({ animated: false });
-    }}
   />;
 }

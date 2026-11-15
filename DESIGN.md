@@ -1855,6 +1855,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   its own box.
   Thinking renders as a folded block only when **Show thinking** is enabled.
 - Auto-follow stops when the reader scrolls up; later output raises a **New messages** pill.
+  Streamed output follows the list's measured content height before paint, without animation or
+  a later snap. This follows Paseo's reading-anchor behavior: output leaves a reader's paragraph
+  in place, and the existing Jump to latest control resumes following. Manual disclosure changes
+  keep the opened content in view.
   A message sent from this browser's message box resumes it once the bridge accepts it at once
   (a receipt with no pending item, no refusal and no uncertain answer): the view goes to the end
   and follows the turn and its reply there. Agent of Empires re-pins its view on any prompt, local,

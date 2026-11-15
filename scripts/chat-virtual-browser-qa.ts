@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright-core";
+import { chromePath } from "./chrome-path.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
 import type {} from "./chat-virtual-fixture.tsx";
 
@@ -21,11 +22,14 @@ let wholeReads = 0;
 let newestStart = 0;
 let beginsAtOrigin = false;
 let slideReads = 0;
+let streaming = false;
+let appended = 0;
 const WHOLE_OUTPUT = `FULL TOOL OUTPUT\n${"detail ".repeat(250)}\nFULL OUTPUT END`;
 const olderEvents = new EventTarget();
 const olderReleases: Array<() => void> = [];
 function turn(index: number, machine: string): ConversationTurn {
-  const text = `${machine} E${epoch} ROW-${index}\n\n${"Variable height paragraph. ".repeat(Math.abs(index) % 5 + 1)}${index === 999 ? `\n\nREVISION-${revision}` : ""}`;
+  const growth = streaming && index === 999 ? `\n\n${"Streaming paragraph. ".repeat(revision * 8)}\n\n\`\`\`ts\n${"const streamed = true;\n".repeat(revision)}\`\`\`` : "";
+  const text = `${machine} E${epoch} ROW-${index}\n\n${"Variable height paragraph. ".repeat(Math.abs(index) % 5 + 1)}${index === 999 ? `\n\nREVISION-${revision}` : ""}${growth}`;
   const parts: ConversationTurn["parts"] = [{ kind: "text", text }];
   if (index === 497) parts.unshift({ kind: "tool", name: "Read", summary: "fixture tool", input: "{}", output: "preview only", output_ref: "fixture-output", output_size: WHOLE_OUTPUT.length });
   return {
@@ -62,6 +66,21 @@ async function update(page: Page) {
   const response = page.waitForResponse((response) => response.url().includes("/conversation?") && !new URL(response.url()).searchParams.has("before"));
   await page.evaluate(() => window.chatQa.refresh());
   await (await response).finished();
+}
+async function recordScroll(page: Page) {
+  return page.evaluateHandle(() => {
+    const node = document.querySelector(".chat-view");
+    if (!node) throw new Error("Chat scroller missing");
+    const frames: { top: number; gap: number }[] = [];
+    const measure = () => ({ top: node.scrollTop, gap: node.scrollHeight - node.clientHeight - node.scrollTop });
+    let frame = 0;
+    const sample = () => { frames.push(measure()); frame = requestAnimationFrame(sample); };
+    // ResizeObserver runs after animation callbacks: retain the final layout before each paint.
+    const resize = new ResizeObserver(() => { if (frames.length) frames[frames.length - 1] = measure(); });
+    if (node.firstElementChild) resize.observe(node.firstElementChild);
+    sample();
+    return { stop: () => { cancelAnimationFrame(frame); resize.disconnect(); return frames; } };
+  });
 }
 async function shot(page: Page, name: string) {
   if (evidence) await page.screenshot({ path: join(evidence, `chat-virtual-${name}.png`) });
@@ -148,17 +167,18 @@ try {
       });
       return Response.json({
         source: "omp-transcript", history_id: `${machine}:${epoch}`, cursor: older ? page === 0 ? "older:1" : null : newestStart ? "window:2" : beginsAtOrigin ? null : "older:0",
-        turns: Array.from({ length: older ? 20 : 1000 }, (_, index) => turn(older ? index - (page + 1) * 20 : index + newestStart, machine)),
+        turns: Array.from({ length: older ? 20 : 1000 + appended }, (_, index) => turn(older ? index - (page + 1) * 20 : index + newestStart, machine)),
       });
     }
     if (url.pathname === "/") return new Response('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chat virtualization QA</title><link rel="stylesheet" href="/chat-virtual-fixture.css"></head><body><div id="root"></div><script type="module" src="/chat-virtual-fixture.js"></script></body></html>', { headers: { "content-type": "text/html" } });
-    return new Response(Bun.file(join(root, url.pathname.slice(1))));
+    const file = Bun.file(join(root, url.pathname.slice(1)));
+    return await file.exists() ? new Response(file) : new Response(null, { status: 404 });
   } });
-  browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
+  browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
   for (const [width, theme] of [[1440, "dark"], [1440, "light"], [390, "dark"], [390, "light"]] as const) {
     revision = 0; epoch = 1; holdOlder = false; olderReads = 0; wholeReads = 0;
     newestStart = 0; beginsAtOrigin = false; slideReads = 0;
-    const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, colorScheme: theme, locale: "en-US" });
+    const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, hasTouch: width === 390, isMobile: width === 390, colorScheme: theme, locale: "en-US" });
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await context.addInitScript((theme) => localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme })), theme);
     const page = await context.newPage();
@@ -234,6 +254,59 @@ try {
       await settleBottom(page);
     }
     console.log(`PASS ${width} ${theme}: upward wheel, document navigation and dragging stop follow; downward input and clicks do not`);
+
+    for (const reducedMotion of ["no-preference", "reduce"] as const) {
+      await page.emulateMedia({ reducedMotion });
+      streaming = true; revision = 0;
+      await page.reload();
+      await page.getByText("REVISION-0", { exact: true }).waitFor();
+      await settleBottom(page);
+      const trace = await recordScroll(page);
+      for (revision = 1; revision <= 20; revision++) {
+        await update(page);
+        await page.getByText(`REVISION-${revision}`, { exact: true }).waitFor();
+        await settleBottom(page);
+      }
+      const frames = await trace.evaluate((trace) => trace.stop());
+      await trace.dispose();
+      assert.ok(frames.every(({ gap }) => gap <= 1), `streaming paints at the bottom: ${JSON.stringify(frames.filter(({ gap }) => gap > 1))}`);
+      assert.ok(frames.every(({ top }, index) => index === 0 || top >= frames[index - 1]!.top - 1), "growing output never bounces upward");
+
+      const box = await page.locator(".chat-view").boundingBox();
+      assert.ok(box);
+      const cdp = await context.newCDPSession(page);
+      await cdp.send("Input.synthesizeScrollGesture", { x: box.x + box.width / 2, y: box.y + box.height / 3, yDistance: 300, speed: 500, gestureSourceType: width === 390 ? "touch" : "mouse" });
+      await cdp.detach();
+      await page.getByRole("button", { name: "Jump to latest", exact: true }).waitFor();
+      const reading = await metrics(page);
+      assert.ok(reading.anchor && reading.bottom > 1);
+      const readingTrace = await recordScroll(page);
+      for (revision = 21; revision <= 25; revision++) await update(page);
+      await page.getByText("REVISION-25", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "New messages" }).waitFor();
+      const readingFrames = await readingTrace.evaluate((trace) => trace.stop());
+      await readingTrace.dispose();
+      assert.ok(readingFrames.every(({ top }) => Math.abs(top - reading.top) <= 1), "streamed growth leaves the reader's scroll offset alone");
+      const anchorY = await page.evaluate((key) => [...document.querySelectorAll<HTMLElement>("[data-chat-row]")].find((row) => row.dataset.chatRow === key)?.getBoundingClientRect().top, reading.anchor.key);
+      assert.ok(anchorY !== undefined && Math.abs(anchorY - reading.anchor.y) <= 1, "streamed growth preserves the visible reading anchor");
+      await page.getByRole("button", { name: "New messages" }).click();
+      await settleBottom(page);
+      const appendTrace = await recordScroll(page);
+      for (appended = 1; appended <= 4; appended++) {
+        await update(page);
+        await page.getByText(`local E1 ROW-${999 + appended}`, { exact: true }).waitFor();
+        await settleBottom(page);
+      }
+      const appendFrames = await appendTrace.evaluate((trace) => trace.stop());
+      await appendTrace.dispose();
+      assert.ok(appendFrames.every(({ gap }) => gap <= 1), `new rows paint at the bottom: ${JSON.stringify(appendFrames.filter(({ gap }) => gap > 1))}`);
+      appended = 0;
+      console.log(`PASS ${width} ${theme} ${reducedMotion}: ${frames.length} streaming frames pinned; ${readingFrames.length} reading frames steady after ${width === 390 ? "touch" : "wheel"} input`);
+    }
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    streaming = false;
+    await page.reload();
+    await settleBottom(page);
 
     for (revision = 1; revision <= 100; revision++) {
       await update(page);
@@ -479,6 +552,7 @@ try {
   }
   console.log("chat virtual: initial, streaming, manual follow and row restoration OK");
 } catch (error) {
+  console.error("Chat fixture state:", { revision, streaming, appended });
   if (evidence && activePage && !activePage.isClosed()) {
     try { await activePage.screenshot({ path: join(evidence, "chat-virtual-failed.png") }); }
     catch (captureError) { console.error("Chat failure capture:", String(captureError)); }
