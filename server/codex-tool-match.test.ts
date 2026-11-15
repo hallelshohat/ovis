@@ -48,6 +48,13 @@ describe("Codex native command screen ownership", () => {
     expect(resolve(screen.replace(commands[1]!, commands[0]!), [{ ...candidate, text: single }])).toBeNull();
   });
 
+  it("matches rerun commands after an older occurrence of a later visible command", () => {
+    const earlier = { ...events[1], payload: { ...events[1]!.payload, item: { ...events[1]!.payload.item, id: "earlier-second-command" } } };
+    const text = [earlier, ...events].map((event) => JSON.stringify(event)).join("\n");
+    expect(resolve(screen, [{ ...candidate, text }])).toBe("own");
+    expect(resolve(screen, [{ ...candidate, text: [earlier, events[0]].map((event) => JSON.stringify(event)).join("\n") }])).toBeNull();
+  });
+
   it("does not treat snippets in another command's output as matching command/output pairs", () => {
     const elsewhere = { path: "elsewhere", text: JSON.stringify({ ...events[0], payload: { ...events[0]!.payload, item: {
       ...events[0]!.payload.item, command: ["/bin/zsh", "-lc", "cat unrelated-source.ts"], aggregated_output: outputs.join("\n"),

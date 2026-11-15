@@ -1206,6 +1206,37 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     expect(await resolve()).toBeNull();
   });
 
+  heldIt("finds rerun commands despite an older occurrence of the second visible command", async () => {
+    await resumedWithSuccessors();
+    otherFolderThread();
+    await loaded(thread, other);
+    const records = nativeCommands();
+    const earlier = { ...records[1]!, payload: { ...records[1]!.payload, item: { ...records[1]!.payload.item, id: "earlier-second-command" } } };
+    ownThread([said("agent_message", answer), earlier, ...records]);
+    screen = toolScreen();
+    expect(await resolve()).toBe(path);
+    const chat = await conversationModule.paneConversation(root, home);
+    expect(chat.source).toBe("codex-transcript");
+    expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: answer });
+  });
+
+  heldIt("recovers the sole resumed owner when commands fall outside the native tail", async () => {
+    await resumedWithSuccessors();
+    ownThread([said("agent_message", answer), ...nativeCommands()]);
+    await loaded(thread);
+    screen = toolScreen();
+    expect(await resolve()).toBe(path);
+    appendFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "token_count", padding: "x".repeat(2 * 1024 * 1024) } }) + "\n");
+    expect(await resolve()).toBe(path);
+    const chat = await conversationModule.paneConversation(root, home);
+    expect(chat.source).toBe("codex-transcript");
+    expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: answer });
+    otherFolderThread();
+    await loaded(other);
+    expect(await resolve()).toBeNull();
+    await expect(conversationModule.paneConversation(root, home)).rejects.toThrow("no_session_path");
+  });
+
   for (const sameFolder of [false, true]) {
     heldIt(`finds native commands after a picker resume in ${sameFolder ? "the same" : "another"} folder`, async () => {
       await resumedWithSuccessors();
