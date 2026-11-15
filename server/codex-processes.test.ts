@@ -1195,6 +1195,28 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     expect(chat.turns.flatMap((turn) => turn.parts)).not.toContainEqual({ kind: "text", text: answer });
   });
 
+  for (const entity of ["&amp;", "&#38;", "&#x26;"]) {
+    heldIt(`refuses rendered entity twins using ${entity}`, async () => {
+      await resumedWithSuccessors();
+      const plain = "The preparation jobs passed, including independent cleanup & inventory. The measured speedup remains 1.34× while the remaining checks continue.";
+      const formatted = plain.replace("1.34×", "**1.34×**");
+      ownThread([said("user_message", "Check this project's preparation jobs."), said("agent_message", formatted.replace("&", entity))]);
+      const twin = otherFolderThread([
+        { type: "user_message", message: "Check another project's preparation jobs." },
+        { type: "agent_message", message: "This is the unrelated conversation's earlier answer." },
+        { type: "agent_message", message: formatted },
+      ]);
+      const db = new Database(join(home, "state_5.sqlite"));
+      try { db.query("UPDATE threads SET cwd = ? WHERE id = ?").run(root, other); }
+      finally { db.close(); }
+      writeFileSync(twin, fs.readFileSync(twin, "utf8").replace(join(root, "elsewhere"), root));
+      await loaded(thread, other);
+      screen = screen.replace("• Working", `• ${plain}\n\n• Working`);
+      expect(await resolve()).toBeNull();
+      await expect(conversationModule.paneConversation(root, home)).rejects.toThrow("no_session_path");
+    });
+  }
+
   for (const sameFolder of [false, true]) {
     heldIt(`refuses stale argv after a picker resume in ${sameFolder ? "the same" : "another"} folder`, async () => {
       await resumedWithSuccessors();
