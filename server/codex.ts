@@ -3689,8 +3689,8 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
     if (tied !== null) {
       if (!await stillAsWeighed(paneId, processes, screen.text, home, tied.known)) return null;
       if (tied.files?.some(({ path, stat: before }) => {
-        const now = statSync(path);
-        return now.dev !== before.dev || now.ino !== before.ino || now.size !== before.size
+        const now = statSync(path, { throwIfNoEntry: false });
+        return now === undefined || now.dev !== before.dev || now.ino !== before.ino || now.size !== before.size
           || now.mtimeMs !== before.mtimeMs || now.ctimeMs !== before.ctimeMs;
       })) return null;
       // Never remembered as a binding, as short answers never were: the next lookup asks the screen again. A
