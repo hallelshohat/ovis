@@ -2710,6 +2710,9 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
     try { fresh = await paneTranscript(paneId, codexHome, undefined, devinDbPath, opencodeDb, hermesHome, grokHome, museData); }
     catch (error) {
       if (error instanceof ConversationNotStarted) return await onNotStarted(error);
+      // Tool output may change during the read; an unproved Codex recheck is not an empty chat.
+      if (resolved.source === "codex-transcript" && page.before === undefined
+        && error instanceof ConversationUnavailable && error.message === "no_session_path") throw new ConversationReadPending();
       throw error;
     }
     if (fresh.source !== transcript.source || fresh.path !== transcript.path || !live()) throw new ConversationUnavailable("no_session_id");
