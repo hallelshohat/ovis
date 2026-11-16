@@ -72,7 +72,7 @@ it("keeps cold Chat and health responsive while a large competing history warms,
     expect(cold.status).toBe(503);
     expect(cold.headers.get("cache-control")).toContain("no-store");
     expect(coldMs).toBeLessThan(500);
-    await cold.arrayBuffer();
+    expect(await cold.json()).toMatchObject({ error: { code: "conversation_read_pending" } });
 
     const ping = performance.now();
     const health = await fetch(`${base}/api/health?scope=bridge`);
@@ -89,7 +89,7 @@ it("keeps cold Chat and health responsive while a large competing history warms,
       await setImmediate();
     }
     expect(ready).toBeDefined();
-    const body = z.object({ source: z.literal("codex-transcript"), turns: z.array(z.object({ parts: z.array(z.object({ kind: z.string(), text: z.string().optional() })) })) }).safeParse(await ready!.json());
+    const body = z.object({ source: z.literal("codex-transcript"), history_id: z.string(), turns: z.array(z.object({ parts: z.array(z.object({ kind: z.string(), text: z.string().optional() })) })) }).safeParse(await ready!.json());
     expect(body.success).toBe(true);
     if (!body.success) throw new Error("invalid Chat fixture response");
     expect(body.data.turns.flatMap((turn) => turn.parts).some((part) => part.text === answer)).toBe(true);
@@ -107,6 +107,17 @@ it("keeps cold Chat and health responsive while a large competing history warms,
     expect(growing.status).toBe(200);
     expect(appendMs).toBeLessThan(500);
     await growing.arrayBuffer();
+    const shown = `${url}&history_id=${encodeURIComponent(body.data.history_id)}`;
+    appendFileSync(peer, '{"type":"event_msg","payload":{"type":"agent_message","message":"');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const partial = await fetch(shown);
+      expect(partial.status).toBe(503);
+      expect(await partial.json()).toMatchObject({ error: { code: "conversation_read_pending" } });
+    }
+    appendFileSync(peer, 'Unrelated completed append."}}\n');
+    const recovered = await fetch(shown);
+    expect(recovered.status).toBe(200);
+    expect(await recovered.json()).toMatchObject({ history_id: body.data.history_id, turns: body.data.turns });
     console.log(JSON.stringify({ case: "history latency", coldMs, healthMs, readyMs, warmMs, appendMs }));
   } finally {
     app?.stop();

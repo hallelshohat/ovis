@@ -3869,6 +3869,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the ordinary cadence without a lens switch; rejected history stays hidden meanwhile. This
   follows T3 Code's separation of [transport health and data freshness](https://github.com/pingdotgg/t3code/blob/main/docs/internals/connection-runtime.md):
   an open socket alone does not prove the conversation is current. No code or new controls are borrowed.
+  A `conversation_read_pending` response is still loading, not a failure: initial reads keep the
+  placeholder; an open chat keeps its transcript, reading position and editable draft, with
+  `Loading conversation…` in the same status region. The existing serial refresh lane retries at
+  its one-second bound without a click. Pending turns do not prove a finish, an empty conversation
+  or a sent-message receipt; a rejected history still clears them. Leaving Chat stops the retries.
 
 ### Inspector (`.inspector`)
 - A column on the chrome's surface beside the work panel (`--inspector-w`), from `1200px`: its head

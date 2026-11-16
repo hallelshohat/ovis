@@ -9,6 +9,8 @@ import { compressResponse } from "../server/compress.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { appFaces } from "./app-faces.ts";
+import { openLens } from "./header-lens.ts";
 
 interface LoadingSample {
   opened: number;
@@ -92,6 +94,7 @@ async function checkChatLoading(): Promise<void> {
           localStorage.setItem(`ovis:view:${pane}`, "chat");
         }, panes.omp);
         const page = await context.newPage();
+        page.setDefaultTimeout(15_000);
         const chunkPattern = /\/assets\/ChatTimeline-[^/]+\.js$/;
         if (!throttled) {
           const chunkGate = new Promise<void>(resolve => { releaseChunk = resolve; });
@@ -178,23 +181,7 @@ async function checkChatLoading(): Promise<void> {
           await page.getByText("Waiting for the PC…", { exact: true }).waitFor();
           assert.equal(await page.locator(".chat-loading-placeholder").count(), 1, "a slow first read keeps its skeleton");
           await page.unroute(conversationRoute);
-          let pendingReads = 0;
-          await page.route(conversationRoute, route => {
-            pendingReads++;
-            return route.fulfill({ status: 503, json: { error: { code: "conversation_read_pending", message: "The conversation could not be read; try again shortly." } } });
-          });
-          await page.goto(url);
-          await page.getByRole("button", { name: "Try again", exact: true }).click({ trial: true });
-          assert.equal(await page.locator(".chat-loading-placeholder").count(), 0, "a failed read exposes its retry");
-          await page.waitForResponse(() => pendingReads >= 2, { timeout: 15_000 });
-          await page.getByRole("button", { name: "Try again", exact: true }).click({ trial: true });
-          assert.equal(await page.locator(".chat-loading-placeholder").count(), 0, "repeated pending responses never restore an indefinite loading state");
-          assert.equal(await page.getByText("Loading conversation…", { exact: true }).count(), 0);
-          assert.equal(await page.locator(".chat-unavailable-reason").count(), 0, "pending lookup does not claim a new, unwritten session");
-          if (evidence) await page.screenshot({ path: join(evidence, `pending-retry-${viewport.width}.png`) });
-          await page.unroute(conversationRoute);
-          await latestVisible(page);
-          console.log(`PASS repeated Codex pending reads show a finite retry state and recover automatically at ${viewport.width}px`);
+          await checkPendingRecovery({ page, url, evidence, width: viewport.width });
         }
         assert.deepEqual(errors, [], "no browser errors");
         console.log(`PASS chat loading, composer stability, latest-first rendering, short and working chats at ${viewport.width}px`);
@@ -208,6 +195,100 @@ async function checkChatLoading(): Promise<void> {
     forgetTranscriptState();
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+async function checkPendingRecovery({ page, url, evidence, width }: {
+  page: Page; url: string; evidence: string | undefined; width: number;
+}): Promise<void> {
+  const pattern = "**/api/pane/conversation?*";
+  const pending = { error: { code: "conversation_read_pending", message: "The conversation could not be read; try again shortly." } };
+  const composer = page.getByRole("textbox", { name: "Message", exact: true });
+  const view = page.locator('.chat-view[role="log"]');
+  for (const cold of [true, false]) {
+    let reads = 0;
+    const started: number[] = [];
+    await page.route(pattern, route => {
+      reads++;
+      started.push(performance.now());
+      return route.fulfill({ status: 503, json: pending });
+    });
+    const first = page.waitForResponse(response => response.url().includes("/api/pane/conversation?") && response.status() === 503);
+    if (cold) await page.goto(url);
+    await composer.fill("Keep this draft through pending reads");
+    if (!cold) {
+      const viewport = await view.boundingBox();
+      assert.ok(viewport);
+      await page.mouse.move(viewport.x + viewport.width / 2, viewport.y + viewport.height / 2);
+      await page.mouse.wheel(0, -240);
+      await page.getByRole("button", { name: "Jump to latest", exact: true }).waitFor();
+    }
+    await appFaces(page);
+    const top = await view.evaluate(el => el.scrollTop);
+    const box = await composer.boundingBox();
+    const rows = await view.locator("[data-chat-row]").allTextContents();
+    await first;
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    if (evidence) await page.screenshot({ path: join(evidence, `pending-first-${cold ? "cold" : "live"}-${width}.png`) });
+    assert.equal(await page.locator(".chat-failure").count(), 0, "pending is not a conversation failure");
+    await page.waitForResponse(() => reads >= 3, { timeout: 5000 });
+    assert.ok(started[2]! - started[0]! < 5000, "pending retries do not wait for the ten-second push backstop");
+    await page.getByText("Loading conversation…", { exact: true }).waitFor();
+    assert.equal(await page.locator(".chat-loading-placeholder").count(), cold ? 1 : 0);
+    assert.equal(await page.locator(".chat-failure").count(), 0);
+    assert.equal(await page.locator(".chat-unavailable-reason").count(), 0);
+    assert.equal(await page.locator(".chat-frame[data-pane-content]").count(), 0, "pending does not mark the conversation read");
+    assert.equal(await composer.inputValue(), "Keep this draft through pending reads");
+    assert.deepEqual(await composer.boundingBox(), box, "pending does not move the composer");
+    assert.equal(await composer.evaluate(el => el === document.activeElement), true);
+    if (!cold) {
+      assert.deepEqual(await view.locator("[data-chat-row]").allTextContents(), rows, "pending keeps the shown rows");
+      const after = await view.evaluate(el => el.scrollTop);
+      assert.ok(Math.abs(after - top) <= 1, `pending keeps the reading position (${top} -> ${after})`);
+    }
+    if (evidence) await page.screenshot({ path: join(evidence, `pending-${cold ? "cold" : "live"}-${width}.png`) });
+    const recovered = page.waitForResponse(response => response.url().includes("/api/pane/conversation?") && response.status() === 200);
+    await page.unroute(pattern);
+    await recovered;
+    await page.getByText("Loading conversation…", { exact: true }).waitFor({ state: "hidden" });
+    assert.equal(await page.locator(".chat-failure").count(), 0);
+    assert.equal(await composer.inputValue(), "Keep this draft through pending reads");
+    if (cold) await latestVisible(page);
+  }
+
+  let rejected = false, partials = 0, ready = false;
+  await page.route(pattern, route => {
+    if (!rejected) {
+      rejected = true;
+      return route.fulfill({ status: 409, json: { error: { code: "history_changed", message: "Synthetic history switch" } } });
+    }
+    if (!ready) { partials++; return route.fulfill({ status: 503, json: pending }); }
+    return route.fulfill({ json: { source: "codex-transcript", history_id: "replacement", cursor: null,
+      turns: [{ role: "assistant", parts: [{ kind: "text", text: "Only the replacement conversation." }] }] } });
+  });
+  await page.waitForResponse(() => partials >= 3, { timeout: 15_000 });
+  assert.equal(await view.locator("[data-chat-row]").count(), 0, "pending after a rejected history never revives its old turns");
+  assert.equal(await page.locator(".chat-failure").count(), 0);
+  ready = true;
+  await page.getByText("Only the replacement conversation.", { exact: true }).waitFor();
+  await page.unroute(pattern);
+
+  await page.route(pattern, route => route.fulfill({ status: 500, json: { error: { code: "internal_error", message: "Synthetic unreadable conversation" } } }));
+  await page.goto(url);
+  await page.getByRole("button", { name: "Try again", exact: true }).waitFor();
+  assert.equal(await page.locator(".chat-failure").count(), 1, "a genuine failure still alarms");
+  await page.unroute(pattern);
+
+  let hiddenReads = 0;
+  await page.route(pattern, route => { hiddenReads++; return route.fulfill({ status: 503, json: pending }); });
+  await page.goto(url);
+  await page.waitForResponse(() => hiddenReads >= 3, { timeout: 5000 });
+  await page.clock.install();
+  await openLens(page, "terminal");
+  const stoppedAt = hiddenReads;
+  await page.clock.runFor(3000);
+  assert.equal(hiddenReads, stoppedAt, "leaving Chat cancels its pending retries");
+  await page.unroute(pattern);
+  console.log(`PASS cold and mid-session pending recovery, history replacement, real failure and cancellation at ${width}px`);
 }
 
 function exchange(index: number): string {
