@@ -218,7 +218,7 @@ describe("Codex native command screen ownership", () => {
     const conflict = (index: number) => codexToolActivityConflict({ screen: shown(index), segments: [{ path, end: statSync(path).size }] });
     const opened = spyOn(files, "open");
     try {
-      writeFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated output: check && true; A & B; &#97 and &unfinished." } }) + "\n");
+      writeFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Ran 1 test across 1 file. Check && true; A & B; &#97 and &unfinished." } }) + "\n");
       for (let index = 0; index < 70; index++) expect(await conflict(index)).toBe(false);
       opened.mockClear();
       expect(await conflict(69)).toBe(false);
@@ -239,7 +239,7 @@ describe("Codex native command screen ownership", () => {
 
   it("finishes a large peer index even when no request repeats a tool screen", async () => {
     const root = mkdtempSync(join(tmpdir(), "ovis-tool-moving-screen-")), path = join(root, "peer.jsonl");
-    const filler = JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated archive && true. ".repeat(60_000) } }) + "\n";
+    const filler = JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Ran 1 test across 1 file. Unrelated archive && true. ".repeat(60_000) } }) + "\n";
     const changing = (sequence: number) => screen.replaceAll("/work/integration", `/work/running-${sequence}`);
     try {
       writeFileSync(path, filler.repeat(64));
@@ -259,12 +259,37 @@ describe("Codex native command screen ownership", () => {
     } finally { await resetCodexHistoryScans(); rmSync(root, { recursive: true, force: true }); }
   }, 15_000);
 
+  it("batches contiguous quote candidates with shared long command prefixes as output changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-tool-quote-ranges-")), path = join(root, "peer.jsonl");
+    const long = "bun run verify --project /work/" + "shared-command-prefix/".repeat(8);
+    const quotation = body.replaceAll(commands[0]!, long + "one").replaceAll(commands[1]!, long + "two");
+    const changing = (sequence: number) => screen.replaceAll(commands[0]!, long + "one").replaceAll(commands[1]!, long + "two")
+      .replace(outputs[0]!, outputs[0]! + ` iteration ${sequence}`).replace(outputs[1]!, outputs[1]! + ` iteration ${sequence}`);
+    const conflict = (sequence: number) => codexToolActivityConflict({ screen: changing(sequence), segments: [{ path, end: statSync(path).size }] });
+    const opened = spyOn(files, "open");
+    try {
+      writeFileSync(path, (JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: quotation } }) + "\n").repeat(1200));
+      const until = performance.now() + 10_000;
+      while (await conflict(0)) {
+        expect(performance.now()).toBeLessThan(until);
+        await setImmediate();
+      }
+      for (let sequence = 1; sequence <= 4; sequence++) {
+        opened.mockClear();
+        expect(await conflict(sequence)).toBe(false);
+        expect(opened.mock.calls.length).toBeLessThanOrEqual(2);
+      }
+      appendFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: changing(5) } }) + "\n");
+      expect(await conflict(5)).toBe(true);
+    } finally { await resetCodexHistoryScans(); opened.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+  }, 15_000);
+
   it("checks indexed native outputs and encoded quotes with the same exact rules as complete histories", async () => {
     const root = mkdtempSync(join(tmpdir(), "ovis-tool-index-"));
     const padding = JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "padding", output: "é🙂".repeat(30_000) } }) + "\n";
     const quoted = (message: string) => JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message } }) + "\n";
     const histories = [candidate.text, quoted(body), quoted(body.replaceAll("Ran", "R&#97;n")), quoted(body.replaceAll("Ran", "&#82;&#x61;&nopf;")),
-      quoted(body.replaceAll("Ran", "Ｒａｎ")), quoted(outputs.join("\n")),
+      quoted(body.replaceAll("Ran", "Ｒａｎ")), quoted(body.replaceAll("bun", "ｂｕｎ")), quoted("Ran"), quoted("Ran 1 test across 1 file."), quoted(outputs.join("\n")),
       candidate.text.replaceAll("/work/integration", "/work/unrelated")];
     try {
       const own = join(root, "own.jsonl");
@@ -272,10 +297,12 @@ describe("Codex native command screen ownership", () => {
       for (const [at, text] of histories.entries()) {
         const path = join(root, `${at}.jsonl`);
         writeFileSync(path, padding + text);
-        const conflict = await codexToolActivityConflict({ screen, segments: [{ path, end: statSync(path).size }] });
-        expect(conflict).toBe(resolve(screen, [candidate, { path: "peer", text }]) === null);
-        const owner = await matchCodexToolHistories({ screen, candidates: [own, path].map((path) => ({ path, segments: [{ path, end: statSync(path).size }] })) });
-        expect(owner).toBe(conflict ? null : own);
+        for (const shown of [screen, screen.replace(commands[0]!, "bun run verify…").replace(commands[1]!, "git diff…")]) {
+          const conflict = await codexToolActivityConflict({ screen: shown, segments: [{ path, end: statSync(path).size }] });
+          expect(conflict).toBe(resolve(shown, [candidate, { path: "peer", text }]) === null);
+          const owner = await matchCodexToolHistories({ screen: shown, candidates: [own, path].map((path) => ({ path, segments: [{ path, end: statSync(path).size }] })) });
+          expect(owner).toBe(conflict ? null : own);
+        }
       }
     } finally { await resetCodexHistoryScans(); rmSync(root, { recursive: true, force: true }); }
   });

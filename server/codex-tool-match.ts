@@ -69,6 +69,7 @@ const conflicts = new Map<string, Map<string, CodexHistoryScan<Evidence>>>();
 const KEPT_SCREENS = 64;
 
 const TOOL_ENTITY = /&(?:#\d+|#[xX][\da-fA-F]+|[A-Za-z][A-Za-z0-9]+);/;
+const QUOTE_PREFIX_CHARS = 64;
 const MIN_PAIRS = 2;
 const MIN_OUTPUT = 64;
 const MIN_DISTINCT = 12;
@@ -78,15 +79,14 @@ type Preview = { command: string; clipped: boolean; output: string; words: strin
 const newEvidence = () => ({ matches: new Set<number>(), calls: new Set<string>(), quoted: new Set<number>(), pending: new Map<string, PendingCall[]>() });
 type Evidence = ReturnType<typeof newEvidence>;
 type PendingCall = { command: string; native: boolean };
-interface ToolHistoryIndex { commands: Map<string, CodexHistorySpan[]>; quotes: CodexHistorySpan[]; pending: Map<string, PendingCall[]> }
-const newToolIndex = (): ToolHistoryIndex => ({ commands: new Map(), quotes: [], pending: new Map() });
+interface ToolHistoryIndex { commands: Map<string, CodexHistorySpan[]>; quotes: Map<string, CodexHistorySpan[]>; encodedQuotes: CodexHistorySpan[]; pending: Map<string, PendingCall[]> }
+const newToolIndex = (): ToolHistoryIndex => ({ commands: new Map(), quotes: new Map(), encodedQuotes: [], pending: new Map() });
 
 function indexToolLine({ index, line, span }: { index: ToolHistoryIndex; line: string; span: CodexHistorySpan }): boolean {
   const read = readToolLine(line);
   if (read === null) return false;
   const { part, strings, completed } = read;
-  // An entity can stand for the letters in "Ran"; keep its record for the exact comparison too.
-  if (strings.some((text) => letters(text).includes("Ran") || TOOL_ENTITY.test(text))) index.quotes.push(span);
+  indexQuoteSpans({ index, strings, span });
   if (part?.kind === "tool" && part.name === "exec_command" && completed) {
     const command = compact(part.summary), spans = index.commands.get(command) ?? [];
     spans.push(span);
@@ -94,6 +94,21 @@ function indexToolLine({ index, line, span }: { index: ToolHistoryIndex; line: s
   }
   updatePendingCalls({ pending: index.pending, read });
   return true;
+}
+
+function indexQuoteSpans({ index, strings, span }: { index: ToolHistoryIndex; strings: readonly string[]; span: CodexHistorySpan }): void {
+  const prefixes = new Set<string>();
+  for (const text of strings) {
+    const plain = letters(text);
+    for (let at = plain.indexOf("Ran"); at >= 0; at = plain.indexOf("Ran", at + 3)) prefixes.add(plain.slice(at, at + QUOTE_PREFIX_CHARS));
+  }
+  for (const prefix of prefixes) {
+    const spans = index.quotes.get(prefix) ?? [];
+    spans.push(span);
+    index.quotes.set(prefix, spans);
+  }
+  // Entities can supply the marker or command; their exact comparison remains conservative.
+  if (strings.some((text) => TOOL_ENTITY.test(text))) index.encodedQuotes.push(span);
 }
 
 function updatePendingCalls({ pending, read }: { pending: Map<string, PendingCall[]>; read: NonNullable<ReturnType<typeof readToolLine>> }): void {
@@ -117,12 +132,23 @@ function hasPending({ pending, shown }: { pending: Map<string, PendingCall[]>; s
 }
 
 function toolSpans({ index, shown, paths }: { index: ToolHistoryIndex; shown: readonly Preview[]; paths: readonly string[] }): CodexHistorySpan[] {
-  const selected = [...index.quotes];
+  const selected = [...index.encodedQuotes];
+  const prefixes = shown.map((preview) => `Ran${letters(preview.command)}`);
+  for (const [prefix, spans] of index.quotes) {
+    // Short/clipped commands and truncated index keys only filter; weighLine decides the match.
+    if (prefixes.some((command) => prefix.startsWith(command) || command.startsWith(prefix))) selected.push(...spans);
+  }
   for (const [command, spans] of index.commands) {
     if (shown.some((preview) => commandMatches({ command, preview }))) selected.push(...spans);
   }
-  return [...new Map(selected.map((span) => [`${span.path}\0${span.start}`, span])).values()]
-    .sort((left, right) => paths.indexOf(left.path) - paths.indexOf(right.path) || left.start - right.start);
+  const ordered = selected.sort((left, right) => paths.indexOf(left.path) - paths.indexOf(right.path) || left.start - right.start);
+  const ranges: CodexHistorySpan[] = [];
+  for (const span of ordered) {
+    const previous = ranges.at(-1);
+    if (previous?.path === span.path && span.start <= previous.end) previous.end = Math.max(previous.end, span.end);
+    else ranges.push({ ...span });
+  }
+  return ranges;
 }
 
 function toolPreviews(screen: string): Preview[] {
