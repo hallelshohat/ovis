@@ -68,6 +68,7 @@ const indexes = new Map<string, CodexHistoryScan<ToolHistoryIndex>>();
 const conflicts = new Map<string, Map<string, CodexHistoryScan<Evidence>>>();
 const KEPT_SCREENS = 64;
 
+const TOOL_ENTITY = /&(?:#\d+|#[xX][\da-fA-F]+|[A-Za-z][A-Za-z0-9]+);/;
 const MIN_PAIRS = 2;
 const MIN_OUTPUT = 64;
 const MIN_DISTINCT = 12;
@@ -85,7 +86,7 @@ function indexToolLine({ index, line, span }: { index: ToolHistoryIndex; line: s
   if (read === null) return false;
   const { part, strings, completed } = read;
   // An entity can stand for the letters in "Ran"; keep its record for the exact comparison too.
-  if (strings.some((text) => letters(text).includes("Ran") || text.includes("&"))) index.quotes.push(span);
+  if (strings.some((text) => letters(text).includes("Ran") || TOOL_ENTITY.test(text))) index.quotes.push(span);
   if (part?.kind === "tool" && part.name === "exec_command" && completed) {
     const command = compact(part.summary), spans = index.commands.get(command) ?? [];
     spans.push(span);
@@ -211,7 +212,7 @@ function commandMatches({ preview, command }: { preview: Preview; command: strin
 function mayQuoteOutput({ text, shown }: { text: string; shown: readonly Preview[] }): boolean {
   const plain = letters(text);
   if (shown.some((preview) => plain.includes(`Ran${letters(preview.command)}`) && plain.includes(letters(preview.output)))) return true;
-  const pieces = text.split(/&(?:#\d+|#[xX][\da-fA-F]+|[A-Za-z][A-Za-z0-9]+);/);
+  const pieces = text.split(TOOL_ENTITY);
   if (pieces.length === 1) return false;
   // Reuse the message matcher's bounded entity comparison for Markdown quoting tool rows.
   const encoded = pieces.map(letters).join(ENTITY), steps = { left: ENTITY_STEPS };

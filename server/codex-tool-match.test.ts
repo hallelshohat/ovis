@@ -218,7 +218,7 @@ describe("Codex native command screen ownership", () => {
     const conflict = (index: number) => codexToolActivityConflict({ screen: shown(index), segments: [{ path, end: statSync(path).size }] });
     const opened = spyOn(files, "open");
     try {
-      writeFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated output." } }) + "\n");
+      writeFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated output: check && true; A & B; &#97 and &unfinished." } }) + "\n");
       for (let index = 0; index < 70; index++) expect(await conflict(index)).toBe(false);
       opened.mockClear();
       expect(await conflict(69)).toBe(false);
@@ -239,7 +239,7 @@ describe("Codex native command screen ownership", () => {
 
   it("finishes a large peer index even when no request repeats a tool screen", async () => {
     const root = mkdtempSync(join(tmpdir(), "ovis-tool-moving-screen-")), path = join(root, "peer.jsonl");
-    const filler = JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated archive. ".repeat(60_000) } }) + "\n";
+    const filler = JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated archive && true. ".repeat(60_000) } }) + "\n";
     const changing = (sequence: number) => screen.replaceAll("/work/integration", `/work/running-${sequence}`);
     try {
       writeFileSync(path, filler.repeat(64));
@@ -263,7 +263,7 @@ describe("Codex native command screen ownership", () => {
     const root = mkdtempSync(join(tmpdir(), "ovis-tool-index-"));
     const padding = JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "padding", output: "é🙂".repeat(30_000) } }) + "\n";
     const quoted = (message: string) => JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message } }) + "\n";
-    const histories = [candidate.text, quoted(body), quoted(body.replaceAll("Ran", "R&#97;n")),
+    const histories = [candidate.text, quoted(body), quoted(body.replaceAll("Ran", "R&#97;n")), quoted(body.replaceAll("Ran", "&#82;&#x61;&nopf;")),
       quoted(body.replaceAll("Ran", "Ｒａｎ")), quoted(outputs.join("\n")),
       candidate.text.replaceAll("/work/integration", "/work/unrelated")];
     try {

@@ -46,7 +46,7 @@ async function checkCodexPendingRecovery(): Promise<void> {
         writeFileSync(paths[index]!, JSON.stringify({ type: "session_meta", payload: { id, cwd, source: "cli" } }) + "\n");
       }
     } finally { db.close(); }
-    const archive = JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated archive: abcdefghijklmnopqrstuvwxyz 0123456789. ".repeat(18_000) } }) + "\n";
+    const archive = JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated archive && true: abcdefghijklmnopqrstuvwxyz 0123456789. ".repeat(18_000) } }) + "\n";
     for (const peer of paths.slice(1)) for (let record = 0; record < 256; record++) appendFileSync(peer, archive);
     writeFileSync(join(root, "writer.py"), replayWriter());
     writer = Bun.spawn(["python3", join(root, "writer.py"), root, ...ids], { stdout: "pipe", stderr: "inherit" });
@@ -164,7 +164,7 @@ def append(identity, payload):
     with open(os.path.join(home, 'sessions', 'rollout-' + identity + '.jsonl'), 'a') as out:
         out.write(json.dumps({'type': 'event_msg', 'timestamp': '2026-11-16T10:00:00Z', 'payload': payload}) + '\n')
 def completed(sequence):
-    command = 'printf recovery_probe_' + str(sequence)
+    command = 'printf recovery_probe_' + str(sequence) + ' && true'
     output = 'Probe' + str(sequence) + ' abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 verified'
     append(own, {'type': 'item_completed', 'item': {'type': 'CommandExecution', 'id': 'probe-' + str(sequence), 'command': ['/bin/sh', '-c', command], 'cwd': root, 'parsed_cmd': [], 'status': 'completed', 'aggregated_output': output, 'exit_code': 0}})
     return '• Ran ' + command + '\n  └ ' + output
