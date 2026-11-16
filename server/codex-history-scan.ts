@@ -9,12 +9,16 @@ export interface CodexHistoryScan<T> {
   value: T;
 }
 
+export interface CodexHistorySpan { path: string; start: number; end: number }
+type ScanSegment = HistorySegment & { start?: number };
+type Each<T> = (value: T, line: string, span: CodexHistorySpan) => boolean;
+
 /** A caller waits briefly; identical requests share the checked background scan. */
 export async function scanCodexHistory<T>({ key, segments, cache, initial, each }: {
-  key: string; segments: readonly HistorySegment[]; cache: Map<string, CodexHistoryScan<T>>;
-  initial: () => T; each: (value: T, line: string) => boolean;
+  key: string; segments: readonly ScanSegment[]; cache: Map<string, CodexHistoryScan<T>>;
+  initial: () => T; each: Each<T>;
 }): Promise<CodexHistoryScan<T> | null> {
-  const cacheKey = JSON.stringify([key, segments.map(({ path }) => path)]);
+  const cacheKey = JSON.stringify([key, segments.map(({ path, start }) => [path, start ?? 0])]);
   let pending = pendingByCache.get(cache);
   if (!pending) {
     pending = new Map();
@@ -43,23 +47,20 @@ export async function scanCodexHistory<T>({ key, segments, cache, initial, each 
   const shared = pending.get(cacheKey) ?? load();
   pending.set(cacheKey, shared);
   void shared.then(() => { if (pending.get(cacheKey) === shared) pending.delete(cacheKey); });
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const complete = await waitForScan(shared);
+  const result = complete ? cache.get(cacheKey) : undefined;
+  // A caller asking for an append may have joined the earlier prefix's in-flight scan.
+  if (!result || !matchesRequest({ files: result.files, segments })) return null;
   try {
-    const complete = await Promise.race([
-      shared,
-      new Promise<boolean>((done) => { timer = setTimeout(() => done(false), WAIT_MS); }),
-    ]);
-    const result = complete ? cache.get(cacheKey) : undefined;
-    // A caller asking for an append may have joined the earlier prefix's in-flight scan.
-    if (!result || !matchesRequest({ files: result.files, segments })) return null;
-    try {
-      for (const [at, file] of result.files.entries()) {
-        readBound([[file.path, segments[at]!.identity ?? file.stat]], () => checkBoundFile(file.path, file.stat));
-      }
-      return { files: structuredClone(result.files), value: structuredClone(result.value) };
-    } catch { return null; }
-  } finally { clearTimeout(timer); }
+    for (const [at, file] of result.files.entries()) {
+      readBound([[file.path, segments[at]!.identity ?? file.stat]], () => checkBoundFile(file.path, file.stat));
+    }
+    return { files: structuredClone(result.files), value: structuredClone(result.value) };
+  } catch { return null; }
 }
+
+/** Omitted records must still be valid; callers separately weigh appends beyond this indexed prefix. */
+export const isCodexHistoryCurrent = (scan: CodexHistoryScan<unknown>): Promise<boolean> => waitForScan(indexedPrefixCurrent(scan.files));
 
 /** Reset invalidates queued and running work before clearing the owning caches. */
 export async function resetCodexHistoryScans(): Promise<void> {
@@ -82,7 +83,7 @@ const ACTIVE = 2;
 const WAITING = 32;
 const KEPT = 64;
 
-interface HistoryFile { path: string; end: number; stat: Stats; header: string; delimited: boolean }
+interface HistoryFile extends CodexHistorySpan { stat: Stats; header: string; delimited: boolean }
 interface Job { abort: AbortController; run: (signal: AbortSignal) => Promise<boolean>; promise: Promise<boolean>; done: (success: boolean) => void }
 let pendingByCache = new WeakMap<object, Map<string, Promise<boolean>>>();
 // Reset reaches live caches without retaining projections evicted by their owner.
@@ -93,8 +94,18 @@ let active = 0;
 let resetEpoch = 0;
 let capacity = Promise.withResolvers<void>();
 
-function matchesRequest({ files, segments }: { files: readonly HistoryFile[]; segments: readonly HistorySegment[] }): boolean {
-  return files.length === segments.length && files.every((file, at) => file.path === segments[at]!.path && file.end === segments[at]!.end);
+async function waitForScan(pending: Promise<boolean>): Promise<boolean> {
+  const epoch = resetEpoch;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const complete = await Promise.race([pending, new Promise<boolean>((done) => { timer = setTimeout(() => done(false), WAIT_MS); })]);
+    return complete && epoch === resetEpoch;
+  } finally { clearTimeout(timer); }
+}
+
+function matchesRequest({ files, segments }: { files: readonly HistoryFile[]; segments: readonly ScanSegment[] }): boolean {
+  return files.length === segments.length && files.every((file, at) => file.path === segments[at]!.path
+    && file.start === (segments[at]!.start ?? 0) && file.end === segments[at]!.end);
 }
 
 async function unchangedFiles(files: readonly HistoryFile[]): Promise<boolean> {
@@ -102,6 +113,17 @@ async function unchangedFiles(files: readonly HistoryFile[]): Promise<boolean> {
     for (const file of files) {
       const now = await stat(file.path);
       if (!now.isFile() || !sameIdentity({ left: now, right: file.stat }) || !unchanged({ left: now, right: file.stat })) return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
+async function indexedPrefixCurrent(files: readonly HistoryFile[]): Promise<boolean> {
+  try {
+    for (const file of files) {
+      const now = await stat(file.path);
+      if (!now.isFile() || !sameIdentity({ left: now, right: file.stat })
+        || !unchanged({ left: now, right: file.stat }) && !(now.size > file.stat.size && file.delimited)) return false;
     }
     return true;
   } catch { return false; }
@@ -144,23 +166,23 @@ function start(job: Job): void {
 }
 
 async function scanHistory<T>({ segments, known, initial, each, signal, invalidate }: {
-  segments: readonly HistorySegment[]; known: CodexHistoryScan<T> | undefined;
-  initial: () => T; each: (value: T, line: string) => boolean; signal: AbortSignal; invalidate: () => void;
+  segments: readonly ScanSegment[]; known: CodexHistoryScan<T> | undefined;
+  initial: () => T; each: Each<T>; signal: AbortSignal; invalidate: () => void;
 }): Promise<CodexHistoryScan<T> | null> {
   try {
     const files: HistoryFile[] = [];
     for (const segment of segments) files.push(await snapshot({ segment, signal }));
     const continued = known !== undefined && files.length === known.files.length && files.every((file, at) => {
       const before = known.files[at]!;
-      return sameIdentity({ left: file.stat, right: before.stat }) && file.header === before.header && file.end >= before.end
+      return sameIdentity({ left: file.stat, right: before.stat }) && file.header === before.header && file.start === before.start && file.end >= before.end
         && (at === files.length - 1 || file.end === before.end)
         && (unchanged({ left: file.stat, right: before.stat }) || file.stat.size > before.stat.size && before.delimited);
     });
     if (!continued) invalidate();
     const value = continued ? structuredClone(known.value) : initial();
     for (const [at, file] of files.entries()) {
-      const from = continued ? known.files[at]!.end : 0;
-      if (!await scanLines({ file, from, each: (line) => each(value, line), signal })) return null;
+      const from = continued ? known.files[at]!.end : file.start;
+      if (!await scanLines({ file, from, each: (line, span) => each(value, line, span), signal })) return null;
     }
     for (const file of files) {
       const now = await stat(file.path);
@@ -172,7 +194,7 @@ async function scanHistory<T>({ segments, known, initial, each, signal, invalida
   } catch { if (!signal.aborted) invalidate(); return null; }
 }
 
-async function snapshot({ segment, signal }: { segment: HistorySegment; signal: AbortSignal }): Promise<HistoryFile> {
+async function snapshot({ segment, signal }: { segment: ScanSegment; signal: AbortSignal }): Promise<HistoryFile> {
   signal.throwIfAborted();
   const file = await open(segment.path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
@@ -180,7 +202,9 @@ async function snapshot({ segment, signal }: { segment: HistorySegment; signal: 
     const info = await file.stat();
     signal.throwIfAborted();
     readBound([[segment.path, segment.identity ?? info]], () => checkBoundFile(segment.path, info));
-    if (!info.isFile() || segment.end > info.size || segment.end < 0) throw new Error("Incomplete Codex history");
+    const start = segment.start ?? 0;
+    if (!info.isFile() || !Number.isSafeInteger(start) || !Number.isSafeInteger(segment.end)
+      || start < 0 || segment.end > info.size || segment.end < start) throw new Error("Incomplete Codex history");
     const head = Buffer.alloc(Math.min(segment.end, HEADER_BYTES));
     const { bytesRead } = await file.read(head, 0, head.length, 0);
     signal.throwIfAborted();
@@ -189,12 +213,12 @@ async function snapshot({ segment, signal }: { segment: HistorySegment; signal: 
     const tail = segment.end === 0 ? null : await file.read(last, 0, 1, segment.end - 1);
     signal.throwIfAborted();
     if (tail !== null && tail.bytesRead !== 1) throw new Error("Incomplete Codex history");
-    return { path: segment.path, end: segment.end, stat: info, header: head.toString("utf8").split("\n")[0]!, delimited: tail === null || last[0] === 10 };
+    return { path: segment.path, start, end: segment.end, stat: info, header: head.toString("utf8").split("\n")[0]!, delimited: tail === null || last[0] === 10 };
   } finally { await file.close(); }
 }
 
 async function scanLines({ file, from, each, signal }: {
-  file: HistoryFile; from: number; each: (line: string) => boolean; signal: AbortSignal;
+  file: HistoryFile; from: number; each: (line: string, span: CodexHistorySpan) => boolean; signal: AbortSignal;
 }): Promise<boolean> {
   if (from === file.end) return true;
   signal.throwIfAborted();
@@ -205,11 +229,13 @@ async function scanLines({ file, from, each, signal }: {
     readBound([[file.path, file.stat]], () => checkBoundFile(file.path, info));
     if (!info.isFile() || info.size < file.end) return false;
     const buffer = Buffer.alloc(CHUNK_BYTES);
-    let pieces: Buffer[] = [], length = 0, slice = performance.now();
-    const weigh = (piece: Buffer): boolean => {
+    let pieces: Buffer[] = [], length = 0, slice = performance.now(), lineStart = from;
+    const weigh = ({ piece, end }: { piece: Buffer; end: number }): boolean => {
       const line = pieces.length === 0 ? piece.toString("utf8") : Buffer.concat([...pieces, piece], length + piece.length).toString("utf8");
       pieces = []; length = 0;
-      return line.trim() === "" || each(line);
+      const span = { path: file.path, start: lineStart, end };
+      lineStart = end;
+      return line.trim() === "" || each(line, span);
     };
     for (let offset = from; offset < file.end;) {
       const { bytesRead } = await opened.read(buffer, 0, Math.min(buffer.length, file.end - offset), offset);
@@ -218,7 +244,7 @@ async function scanLines({ file, from, each, signal }: {
       offset += bytesRead;
       let start = 0;
       for (let end = buffer.indexOf(10); end >= 0 && end < bytesRead; end = buffer.indexOf(10, start)) {
-        if (!weigh(buffer.subarray(start, end))) return false;
+        if (!weigh({ piece: buffer.subarray(start, end), end: offset - bytesRead + end + 1 })) return false;
         start = end + 1;
         if (performance.now() - slice >= SLICE_MS) {
           await setImmediate();
@@ -231,7 +257,7 @@ async function scanLines({ file, from, each, signal }: {
         length += bytesRead - start;
       }
     }
-    return length === 0 || weigh(Buffer.alloc(0));
+    return length === 0 || weigh({ piece: Buffer.alloc(0), end: file.end });
   } finally { await opened.close(); }
 }
 

@@ -3874,6 +3874,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   `Loading conversation…` in the same status region. The existing serial refresh lane retries at
   its one-second bound without a click. Pending turns do not prove a finish, an empty conversation
   or a sent-message receipt; a rejected history still clears them. Leaving Chat stops the retries.
+  Codex tool recovery indexes native commands and possible quotations once per history prefix,
+  retaining byte ranges instead of large outputs. Changing tool previews reuse that index; exact
+  output, peer, process and screen checks still decide ownership. Tools advancing during a process
+  check must prove the newer screen belongs to that same conversation. Peer appends extend the proof
+  for the checked screen. A temporarily unproved check after parsing stays pending rather than
+  replacing an open conversation with an empty fallback.
 
 ### Inspector (`.inspector`)
 - A column on the chrome's surface beside the work panel (`--inspector-w`), from `1200px`: its head

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
 import * as files from "node:fs/promises";
-import { appendFileSync, mkdtempSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, renameSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { z } from "zod";
-import { resetCodexHistoryScans, scanCodexHistory, type CodexHistoryScan } from "./codex-history-scan.ts";
+import { isCodexHistoryCurrent, resetCodexHistoryScans, scanCodexHistory, type CodexHistoryScan, type CodexHistorySpan } from "./codex-history-scan.ts";
 
 let root: string;
 let path: string;
@@ -44,6 +44,41 @@ it("reuses a delimited prefix after append and gives each caller independent evi
   appendFileSync(path, '{"n":2}\n');
   expect((await scan())?.value).toEqual([1, 2]);
   expect(lines).toBe(2);
+});
+
+it("indexes byte spans across UTF-8 chunks and reads only the selected record", async () => {
+  const first = JSON.stringify({ n: 1, text: "é🙂".repeat(20_000) }) + "\n";
+  const second = '{"n":2}\n';
+  writeFileSync(path, first + second);
+  const spans = new Map<string, CodexHistoryScan<CodexHistorySpan[]>>();
+  const indexed = await eventually(() => scanCodexHistory({ key: "spans", segments: [{ path, end: statSync(path).size }], cache: spans,
+    initial: () => [], each: (value, _line, span) => { value.push(span); return true; } }));
+  expect(indexed.value).toEqual([{ path, start: 0, end: Buffer.byteLength(first) },
+    { path, start: Buffer.byteLength(first), end: Buffer.byteLength(first + second) }]);
+  const selected = (start: number) => scanCodexHistory({ key: "selected", segments: [{ path, start, end: statSync(path).size }], cache, initial: () => [], each });
+  expect((await selected(Buffer.byteLength(first)))?.value).toEqual([2]);
+  expect(lines).toBe(1);
+  expect((await selected(0))?.value).toEqual([1, 2]);
+  appendFileSync(path, '{"n":3}\n');
+  expect((await selected(Buffer.byteLength(first)))?.value).toEqual([2, 3]);
+  expect(await selected(-1)).toBeNull();
+  expect(await selected(statSync(path).size + 1)).toBeNull();
+  await resetCodexHistoryScans();
+  expect(spans.size).toBe(0);
+  expect((await selected(Buffer.byteLength(first)))?.value).toEqual([2, 3]);
+});
+
+it("never continues an indexed range after its file is replaced or its final record is partial", async () => {
+  writeFileSync(path, '{"n":0}\n{"n":1}\n');
+  const read = () => scanCodexHistory({ key: "selected", segments: [{ path, start: 8, end: statSync(path).size }], cache, initial: () => [], each });
+  expect((await read())?.value).toEqual([1]);
+  appendFileSync(path, '{"n":');
+  expect(await read()).toBeNull();
+  appendFileSync(path, '2}\n');
+  expect((await read())?.value).toEqual([1, 2]);
+  writeFileSync(join(root, "replacement"), '{"n":9}\n{"n":3}\n');
+  renameSync(join(root, "replacement"), path);
+  expect((await read())?.value).toEqual([3]);
 });
 
 it("accepts a complete final record without a newline but rereads it on growth", async () => {
@@ -85,6 +120,8 @@ it("checks large records in full and preserves their prefix across an incomplete
 it("invalidates same-size rewrites, truncations, replacements and missing files", async () => {
   expect((await scan())?.value).toEqual([1]);
   writeFileSync(path, '{"n":2}\n');
+  // Make the rewrite observable on filesystems that coalesce immediate write timestamps.
+  utimesSync(path, new Date(), new Date(Date.now() + 1000));
   expect((await scan())?.value).toEqual([2]);
   truncateSync(path, 0);
   expect((await scan())?.value).toEqual([]);
@@ -152,7 +189,7 @@ it("does not admit expired foreground checks when queue capacity returns", async
     gate.resolve();
     await eventually(async () => cache.size === 34 ? true : null);
     expect(lines).toBe(34);
-    for (let index = 34; index < 40; index++) expect(cache.has(JSON.stringify([String(index), [path]]))).toBe(false);
+    for (let index = 34; index < 40; index++) expect(cache.has(JSON.stringify([String(index), [[path, 0]]]))).toBe(false);
   } finally { gate.resolve(); open.mockRestore(); }
 });
 
@@ -251,10 +288,42 @@ it("checks inherited segment cuts and keeps the retained cache bounded", async (
 it("refuses a rewrite during projection without contaminating cached evidence", async () => {
   const result = await scanCodexHistory({ key: "changing", segments: [{ path, end: 8 }], cache, initial: () => [], each: (value, line) => {
     writeFileSync(path, '{"n":2}\n');
+    utimesSync(path, new Date(), new Date(Date.now() + 1000));
     return each(value, line);
   } });
   expect(result).toBeNull();
   expect(cache.size).toBe(0);
+});
+
+it("bounds validation after an indexed read when a file's stat stalls", async () => {
+  const indexed = await scan();
+  expect(indexed).not.toBeNull();
+  const gate = Promise.withResolvers<void>();
+  const stat = spyOn(files, "stat").mockImplementation(async () => { await gate.promise; throw new Error("stat unavailable"); });
+  try {
+    const started = performance.now();
+    expect(await isCodexHistoryCurrent(indexed!)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(500);
+    const checking = isCodexHistoryCurrent(indexed!);
+    await resetCodexHistoryScans();
+    gate.resolve();
+    expect(await checking).toBe(false);
+  } finally { gate.resolve(); stat.mockRestore(); }
+});
+
+it("keeps indexed complete records valid during an append, but not a rewrite or a joined final line", async () => {
+  const indexed = await scan();
+  appendFileSync(path, '{"n":2}\n');
+  expect(await isCodexHistoryCurrent(indexed!)).toBe(true);
+  writeFileSync(path, '{"n":3}\n{"n":2}\n');
+  const rewritten = await scan();
+  writeFileSync(path, '{"n":4}\n{"n":2}\n');
+  utimesSync(path, new Date(), new Date(Date.now() + 1000));
+  expect(await isCodexHistoryCurrent(rewritten!)).toBe(false);
+  writeFileSync(path, '{"n":1}');
+  const undelimited = await scan();
+  appendFileSync(path, '0');
+  expect(await isCodexHistoryCurrent(undelimited!)).toBe(false);
 });
 
 it("does not retain a cache after its owner releases it", () => {

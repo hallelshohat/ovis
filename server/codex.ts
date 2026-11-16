@@ -23,7 +23,7 @@ import { codexComposer, FOOTER } from "./codex-steering.ts";
 import { codexStartScreenUnused } from "./start-screen.ts";
 import { codexDisplayEvent, codexNativeItem } from "./codex-items.ts";
 import { codexInputSessions } from "../shared/codex-chunks.ts";
-import { codexToolActivityConflict, hasCodexToolActivity, matchCodexToolActivity } from "./codex-tool-match.ts";
+import { codexToolActivityConflict, hasCodexToolActivity, matchCodexToolHistories } from "./codex-tool-match.ts";
 import { resetCodexHistoryScans } from "./codex-history-scan.ts";
 import { deepStrings, stringsIn } from "../shared/json-text.ts";
 import { ENTITY, ENTITY_STEPS, throughEntities } from "../shared/entity-text.ts";
@@ -4040,7 +4040,7 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   if (screen !== null && !agent.nestedTerminal && !agent.unlabelled && open.size === 0
     && !codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))
     && hasCodexToolActivity(screen.text)) {
-    const found = await loadedToolConversation({ paneId, processes, screen: screen.text, home });
+    const found = await loadedToolConversation({ paneId, processes, home });
     // Tool evidence is never remembered; a picker resume can leave the previous thread loaded.
     boundRollouts.delete(paneId);
     if (found !== null || resumedPath === null) return found;
@@ -4110,32 +4110,44 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
 
 const TOOL_REVALIDATIONS = 3;
 
-async function loadedToolConversation({ paneId, processes, screen, home }: {
-  paneId: string; processes: string; screen: string; home: string;
+async function loadedToolConversation({ paneId, processes, home }: {
+  paneId: string; processes: string; home: string;
 }): Promise<string | null> {
   try {
+    const candidates = await loadedRollouts(home);
+    if (candidates === null) return null;
+    const before = new Map([...candidates.values()].flatMap(({ segments }) => segments.map(({ path }) => [path, statSync(path)] as const)));
+    // Earlier discovery may outlast several tools; weigh a fresh screen against these histories.
+    let screen = (await paneRead({ paneId, source: "recent", lines: 400, stripAnsi: true })).text;
+    const found = await matchCodexToolHistories({ screen, candidates: [...candidates].map(([path, { segments }]) => ({ path, segments })) });
+    if (found === null || !candidates.get(found)?.offered) return null;
+    const ownFiles = new Set(candidates.get(found)!.segments.map(({ path }) => path));
+    const [now, running] = await Promise.all([paneRead({ paneId, source: "recent", lines: 400, stripAnsi: true }), codexProcessesOf(paneId)]);
+    if (running.key !== processes) return null;
+    const current = await loadedRollouts(home);
+    if (!current?.get(found)?.offered) return null;
+    // Tools may advance during process checks; prove the new screen belongs to the same conversation.
+    screen = now.text;
+    if (await matchCodexToolHistories({ screen, candidates: [...current].map(([path, { segments }]) => ({ path, segments })) }) !== found) return null;
     for (let attempt = 0; attempt < TOOL_REVALIDATIONS; attempt++) {
       const loaded = await loadedRollouts(home);
-      if (loaded === null) return null;
+      if (!loaded?.get(found)?.offered) return null;
       const files = new Map([...loaded.values()].flatMap(({ segments }) => segments.map(({ path }) => [path, statSync(path)] as const)));
       if ([...loaded].some(([path, { segments }]) => segments.at(-1)?.end !== files.get(path)?.size)) return null;
-      const candidates = [...loaded.keys()].map((path) => ({ path, text: historyTailWithLead(path, 1024 * 1024, home).text }));
-      const found = matchCodexToolActivity({ screen, candidates });
-      if (found === null || !loaded.get(found)?.offered) return null;
       // Start every peer's bounded scan; all must prove no conflict before the pane can bind.
       const conflicts = await Promise.all([...loaded].filter(([path]) => path !== found)
         .map(([, { segments }]) => codexToolActivityConflict({ screen, segments })));
       if (conflicts.some(Boolean)) return null;
-      if (!await stillAsWeighed(paneId, processes, screen, home, new Set(loaded.keys()))) return null;
       let grew = false;
-      for (const [path, before] of files) {
-        const now = statSync(path);
+      for (const [path, snapshot] of files) {
+        const now = statSync(path), earlier = ownFiles.has(path) ? before.get(path)! : snapshot;
         // Completed items survive an append to their own rollout; a competitor's new records must be weighed.
-        const appended = now.size > before.size;
-        if (now.ino !== before.ino || now.dev !== before.dev || !appended
-          && (now.size !== before.size || now.mtimeMs !== before.mtimeMs || now.ctimeMs !== before.ctimeMs)) return null;
+        const appended = now.size > earlier.size;
+        if (now.ino !== earlier.ino || now.dev !== earlier.dev || !appended
+          && (now.size !== earlier.size || now.mtimeMs !== earlier.mtimeMs || now.ctimeMs !== earlier.ctimeMs)) return null;
         if (appended && path !== found) grew = true;
       }
+      // Extend the peers' proof for the screen already checked; rereading it would chase every new tool.
       if (grew) continue;
       const now = await loadedRollouts(home);
       return now?.get(found)?.offered && [...now.keys()].every((path) => loaded.has(path)) ? found : null;

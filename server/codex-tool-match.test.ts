@@ -4,7 +4,7 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync, statSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { codexToolActivityConflict, matchCodexToolActivity } from "./codex-tool-match.ts";
+import { codexToolActivityConflict, matchCodexToolActivity, matchCodexToolHistories } from "./codex-tool-match.ts";
 import { resetCodexHistoryScans } from "./codex-history-scan.ts";
 
 describe("Codex native command screen ownership", () => {
@@ -212,7 +212,7 @@ describe("Codex native command screen ownership", () => {
     }, screenCount === 4 && total === 32 && !warmed ? 50_000 : 10_000);
   }
 
-  it("bounds retained screen projections and resets every live screen cache", async () => {
+  it("reuses peer evidence as tool screens change, and resets its history index", async () => {
     const root = mkdtempSync(join(tmpdir(), "ovis-tool-screen-cache-")), path = join(root, "peer.jsonl");
     const shown = (index: number) => screen.replaceAll("/work/integration", `/work/cache-owner-${index}`);
     const conflict = (index: number) => codexToolActivityConflict({ screen: shown(index), segments: [{ path, end: statSync(path).size }] });
@@ -224,16 +224,79 @@ describe("Codex native command screen ownership", () => {
       expect(await conflict(69)).toBe(false);
       expect(opened).not.toHaveBeenCalled();
       expect(await conflict(0)).toBe(false);
-      expect(opened).toHaveBeenCalledTimes(2);
+      expect(opened).not.toHaveBeenCalled();
       await resetCodexHistoryScans();
       opened.mockClear();
       expect(await conflict(69)).toBe(false);
       expect(await conflict(0)).toBe(false);
-      expect(opened).toHaveBeenCalledTimes(4);
+      expect(opened).toHaveBeenCalledTimes(2);
     } finally {
       await resetCodexHistoryScans();
       opened.mockRestore();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("finishes a large peer index even when no request repeats a tool screen", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-tool-moving-screen-")), path = join(root, "peer.jsonl");
+    const filler = JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Unrelated archive. ".repeat(60_000) } }) + "\n";
+    const changing = (sequence: number) => screen.replaceAll("/work/integration", `/work/running-${sequence}`);
+    try {
+      writeFileSync(path, filler.repeat(64));
+      await resetCodexHistoryScans();
+      let sequence = 0, refused = true;
+      const started = performance.now();
+      while (refused && performance.now() - started < 10_000) {
+        appendFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "token_count", sequence } }) + "\n");
+        refused = await codexToolActivityConflict({ screen: changing(sequence++), segments: [{ path, end: statSync(path).size }] });
+        await setImmediate();
+      }
+      expect(sequence).toBeGreaterThan(1);
+      expect(refused).toBe(false);
+      expect(await codexToolActivityConflict({ screen: changing(sequence++), segments: [{ path, end: statSync(path).size }] })).toBe(false);
+      appendFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: changing(sequence) } }) + "\n");
+      expect(await codexToolActivityConflict({ screen: changing(sequence), segments: [{ path, end: statSync(path).size }] })).toBe(true);
+    } finally { await resetCodexHistoryScans(); rmSync(root, { recursive: true, force: true }); }
+  }, 15_000);
+
+  it("checks indexed native outputs and encoded quotes with the same exact rules as complete histories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-tool-index-"));
+    const padding = JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "padding", output: "é🙂".repeat(30_000) } }) + "\n";
+    const quoted = (message: string) => JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message } }) + "\n";
+    const histories = [candidate.text, quoted(body), quoted(body.replaceAll("Ran", "R&#97;n")),
+      quoted(body.replaceAll("Ran", "Ｒａｎ")), quoted(outputs.join("\n")),
+      candidate.text.replaceAll("/work/integration", "/work/unrelated")];
+    try {
+      const own = join(root, "own.jsonl");
+      writeFileSync(own, candidate.text);
+      for (const [at, text] of histories.entries()) {
+        const path = join(root, `${at}.jsonl`);
+        writeFileSync(path, padding + text);
+        const conflict = await codexToolActivityConflict({ screen, segments: [{ path, end: statSync(path).size }] });
+        expect(conflict).toBe(resolve(screen, [candidate, { path: "peer", text }]) === null);
+        const owner = await matchCodexToolHistories({ screen, candidates: [own, path].map((path) => ({ path, segments: [{ path, end: statSync(path).size }] })) });
+        expect(owner).toBe(conflict ? null : own);
+      }
+    } finally { await resetCodexHistoryScans(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("does not leave a quoted pending call unresolved when its unquoted completion was omitted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-tool-index-pending-")), path = join(root, "peer.jsonl");
+    const call = JSON.stringify({ type: "response_item", payload: { type: "function_call", call_id: "legacy", name: "exec_command", arguments: JSON.stringify({ command: commands[0], note: "Ran unrelated command" }) } }) + "\n";
+    const completed = JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "legacy", output: "Done." } }) + "\n";
+    const read = () => codexToolActivityConflict({ screen, segments: [{ path, end: statSync(path).size }] });
+    try {
+      writeFileSync(path, call);
+      expect(await read()).toBe(true);
+      appendFileSync(path, completed);
+      expect(await read()).toBe(false);
+      const native = { ...events[0]!, payload: { type: "item_started", item: { ...events[0]!.payload.item, status: "in_progress", aggregated_output: "" } } };
+      appendFileSync(path, JSON.stringify(native) + "\n");
+      expect(await read()).toBe(true);
+      appendFileSync(path, JSON.stringify(events[0]) + "\n");
+      expect(await read()).toBe(false);
+      appendFileSync(path, JSON.stringify(events[1]) + "\n");
+      expect(await read()).toBe(true);
+    } finally { await resetCodexHistoryScans(); rmSync(root, { recursive: true, force: true }); }
   });
 });
