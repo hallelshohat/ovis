@@ -53,7 +53,7 @@ import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
 import { askedQuestions } from "../../shared/askQuestions.ts";
 import { forgetWaitingBaseline, observeNativeWaiting, settleWaitingSends, waitingBaseline, waitingKey } from "../lib/sentWaiting.ts";
-import { SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
+import { ChatInputKind, SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";
@@ -1284,7 +1284,7 @@ export const Turn = memo(function Turn({ paneId, turn, rowKey, live, waiting, sh
         {text.length > 0 && <UserMessage text={text} skills={userSkills} />}
         <div className="chat-turn-meta">{time}{text.length > 0 && <CopyButton text={text} label={t("Copy message")} onResult={copied} />}</div>
       </div>
-      {turn.input_kind && <p className="chat-input-kind">{t(turn.input_kind === "steering" ? "Steering · current turn" : "Queued · next turn")}</p>}
+      {turn.input_kind && <ChatInputKind kind={turn.input_kind} />}
       {copyError}
       {outcome !== null && <OutcomeChip outcome={outcome} actions={outcomeActions} />}
       {/* the skill this message invoked (omp, omo, pi): the runtime recorded its instructions with it */}

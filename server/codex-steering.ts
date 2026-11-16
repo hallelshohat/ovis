@@ -1,13 +1,9 @@
 import { stripVTControlCharacters } from "node:util";
 
-export interface CodexSteeringContext { agent: string | null; working: boolean; screen: string }
-interface SteeringIO {
-  read: () => Promise<CodexSteeringContext>;
-  /** Read-only proof that Codex already consumed this submission. */
-  accepted?: () => Promise<boolean>;
-  /** presses `key`; `fresh` is asked again when herdr is reached, and a stale write is withheld */
-  press: (key: string, fresh: () => boolean) => Promise<void>;
-  restarting: () => void;
+interface AgySteeringIO {
+  text: string;
+  read: () => Promise<{ agent: string | null; working: boolean; screen: string }>;
+  press: (fresh: () => boolean) => Promise<void>;
   now?: () => number;
   wait?: (ms: number) => Promise<void>;
 }
@@ -121,44 +117,17 @@ export function agySteeringPending(screen: string, text: string): boolean {
   return !!sent && (shown === sent || (cut !== null && cut.index > 0 && sent.startsWith(shown.slice(0, cut.index))));
 }
 
-// Codex's Escape ends its turn and starts one with the message (`restart`); agy's alt+m adds it to the turn at work
-const SEND_NOW: Record<string, { pending: (screen: string, text: string) => boolean; key: string; restart: boolean }> = {
-  codex: { pending: codexSteeringPending, key: "Escape", restart: true },
-  agy: { pending: agySteeringPending, key: "alt+m", restart: false },
-};
-
-/** Enter can leave steering pending until a tool boundary. Only Send now may send it at once, and only for `text`. */
-export async function interruptCodexSteering(explicit: boolean, text: string, submitted: CodexSteeringContext, io: SteeringIO): Promise<void> {
-  const agent = submitted.agent;
-  const steer = agent !== null && Object.hasOwn(SEND_NOW, agent) ? SEND_NOW[agent] : undefined;
-  if (!explicit || !steer || !submitted.working) return;
-  const now = io.now ?? Date.now;
-  const wait = io.wait ?? Bun.sleep;
+/** Send the matching message from agy's queue while its composer is empty. */
+export async function sendAgyQueuedNow({ text, read, press, now = Date.now, wait = Bun.sleep }: AgySteeringIO): Promise<void> {
   const deadline = now() + 1500;
-  const unconfirmed = () => new Error("Immediate delivery was not confirmed. Check the terminal before sending again.");
-  // The pane can already be holding identical text from its terminal, underneath our paste.
-  if (agent === "codex" && codexSteeringPending(submitted.screen, text, true)) throw unconfirmed();
-  try {
-    while (now() < deadline) {
-      if (await io.accepted?.()) return;
-      // The caller rechecks live identity, lease, authority and interactive prompts in this read.
-      const current = await io.read();
-      if (current.agent !== agent) throw unconfirmed();
-      if (now() >= deadline) break;
-      if (!current.working) return;
-      if (steer.pending(current.screen, text)) {
-        if (steer.restart) io.restarting();
-        // the RPC's connect is awaited: by the time herdr is written to, the deadline may have passed
-        await io.press(steer.key, () => now() < deadline);
-        return;
-      }
-      await wait(Math.min(50, deadline - now()));
+  while (now() < deadline) {
+    const current = await read();
+    if (current.agent !== "agy") throw new Error("Immediate delivery was not confirmed. Check the terminal before sending again.");
+    if (now() >= deadline || !current.working) return;
+    if (agySteeringPending(current.screen, text)) {
+      await press(() => now() < deadline);
+      return;
     }
-    // agy may already have taken Enter or kept it in its own queue.
-    if (steer.restart) throw unconfirmed();
-  } catch (error) {
-    // A consumed message may open a new prompt or outlast a read; its receipt authorizes no key.
-    if (await io.accepted?.()) return;
-    throw error;
+    await wait(Math.min(50, deadline - now()));
   }
 }

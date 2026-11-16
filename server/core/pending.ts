@@ -36,8 +36,8 @@ import { PendingInputs, samePendingIdentity, type FirstMessageAsk, type PendingI
 import { NO_AGENT_MESSAGE, PASTED_NOT_SENT_MESSAGE, submitNotTyped } from "../../shared/submit-outcome.ts";
 import { processStartedAtAsync } from "../process-start.ts";
 import { agentProcessInFront } from "../agent-process.ts";
-import { agentProcesses, readCommandTranscript } from "../conversation.ts";
-import { codexDeliveryAccepted, type CodexLiteralDeliveryAnchor } from "../codex-delivery.ts";
+import { agentProcesses } from "../conversation.ts";
+import { sendAgyQueuedNow } from "../codex-steering.ts";
 import { isShellAgentKind, SHELL_AGENTS } from "../shell-agent.ts";
 import { capturePiDeliveryAnchorRetrying, matchPiDeliveries, PiReceiptCapacity, piRecordText, type PiDeliveryAnchor, type PiReceiptReservation } from "../pi-delivery.ts";
 import { isPiProcess, piTranscriptPath, piUnwrittenHeaderId } from "../pi.ts";
@@ -46,7 +46,6 @@ import { captureCodexDelivery, CodexDeliveries, type CodexDeliveryAnchor } from 
 import { codexConsumedReplay, rememberCodexConsumed } from "../codex-consumed.ts";
 import { codexOpenRollout, paneCodexHomePlaced } from "../codex.ts";
 import { RECEIPT_RESUME_ID } from "../../shared/receipt-resume.ts";
-import { interruptCodexSteering } from "../codex-steering.ts";
 import type { OmoStatus } from "../omo-status.ts";
 import { heldOmoProcess } from "../omo.ts";
 import { startOpenCodeWatch, openCodeSkillsToType, type OpenCodeWatch, skillsNotAttached } from "../opencode-native.ts";
@@ -752,7 +751,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
   }
 
   async function dispatchPendingText(owner: Client, paneId: string, text: string, lease: PendingLease, identity: PendingIdentity,
-    automatic: boolean, arrivedAt: number, committing: (working: boolean, restarting?: boolean, readMark?: number) => void = () => {}, interruptWorkingCodex = false,
+    automatic: boolean, arrivedAt: number, committing: (working: boolean) => void = () => {}, sendNow = false,
     requestId = 0, agentOnly = false, queued = false,
     row: { withdrawn?: () => boolean; waiting?: (waits: boolean) => void; uncertain?: () => void } = {}, nativeItem?: PendingItem): Promise<SubmitReply> {
     let wrote = false;
@@ -777,7 +776,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         if (status === "unknown") throw new HerdrError("agent_not_ready", "The ACP agent is not ready");
         authorizePending(owner, paneId, lease);
         if (row.withdrawn?.() || Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) throw new HerdrError("submit_timeout", "The message expired before delivery");
-        committing(false, false, mark);
+        committing(false);
         wrote = true;
         await child.client.submit(text);
         return { ok: true };
@@ -839,7 +838,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       let attached: string[] = [];
       let prompt: PromptPiece[] = [{ pasted: closeMention(sent) }];
       watch = startOpenCodeWatch(context.pane, command, options.openCodeStateDir);
-      if (interruptWorkingCodex && nativeItem && context.working && context.agentInFront && context.identity.agent === "codex"
+      if (sendNow && nativeItem && context.working && context.agentInFront && context.identity.agent === "codex"
         && !context.collapsed && !command && !/(?:^|\s)[!/@$]\S*/u.test(text) && sent === text && closeMention(sent) === text) {
         const argv = context.processes?.foreground_processes?.find((p) => p.pid === context.identity.processPid)?.argv ?? [];
         const target = options.codexServers?.steerTarget(paneId, argv);
@@ -855,7 +854,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
             authorizePending(owner, paneId, lease);
             if (row.withdrawn?.() || Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS))
               throw new HerdrError("submit_timeout", "The message expired before delivery");
-            committing(true, false, pending.mark(paneId));
+            committing(true);
             wrote = true;
           });
           if (reply === "accepted") { noteSubmitted(paneId, text, command, at); return { ok: true }; }
@@ -869,7 +868,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
           }
           // No steer went. Start the terminal path from its first guard, without trying the RPC again.
           return await dispatchPendingText(owner, paneId, text, lease, identity, automatic, arrivedAt, committing,
-            interruptWorkingCodex, requestId, agentOnly, queued, row);
+            sendNow, requestId, agentOnly, queued, row);
         }
       }
       if (Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) throw new HerdrError("submit_timeout", "The pending message waited too long; nothing was typed");
@@ -939,18 +938,13 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         }
         throw error;
       };
-      // the pane's event count as the read before the Enter began: whether a status came since that read (committing)
-      let enterMark = pending.mark(paneId);
       let beforeEnter = await pendingContext(owner, paneId, lease, identity, true, agentOnly).catch(enterRefused);
       if (automatic && (beforeEnter.working || queueHeld(paneId, false))) enterRefused(new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed"));
       authorizePending(owner, paneId, lease);
       // Status is deliberately not evidence: Pi can report idle/done while its TUI is staging an automatic-compaction input.
       const beforeCapturePid = beforeEnter.identity.processPid;
       const piAnchor = piTracked ? await preparePiReceipt(paneId, beforeEnter.identity).catch(() => null) : undefined;
-      const codexAnchor: CodexLiteralDeliveryAnchor | null | undefined = interruptWorkingCodex && beforeEnter.identity.agent === "codex" && beforeEnter.working
-        ? await readCommandTranscript(paneId, options.codexHome).catch(() => null) : undefined;
-      if (piAnchor !== undefined || codexAnchor !== undefined) {
-        enterMark = pending.mark(paneId);
+      if (piAnchor !== undefined) {
         beforeEnter = await pendingContext(owner, paneId, lease, identity, true, agentOnly).catch(enterRefused);
         if (automatic && (beforeEnter.working || queueHeld(paneId, false))) enterRefused(new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed"));
         await stillInFront(paneId, beforeCapturePid, identity, agentOnly).catch(enterRefused);
@@ -968,7 +962,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (resumed()) refuseResumed();
       authorizePending(owner, paneId, lease);
       const steering = !automatic && beforeEnter.working;
-      committing(steering, false, enterMark);
+      committing(steering);
       // Claude Code queues what Enter commits during a turn; Ctrl+Enter sends it now (#737). herdr
       // encodes the key as the pane asked, and as a plain CR for a program that asked for nothing.
       const sentAt = Date.now();
@@ -982,7 +976,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // the screen after its Enter says whether Grok queued the message, also from a Grok read at rest: another client
       // can start a turn before the Enter, and in minimal mode herdr does not tell a running turn. Compared with the
       // queue as read right before that Enter, with this delivery's paste in the prompt
-      if (interruptWorkingCodex && beforeEnter.identity.agent === "grok") {
+      if (sendNow && beforeEnter.identity.agent === "grok") {
         // the queue Enter already went: every failure here is submit_changed (wrote is set), never enterRefused's
         // paste left unsent, or a retry would queue the message twice.
         await sendGrokQueuedNow({
@@ -1009,23 +1003,20 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (receiptText !== undefined) {
         try { recordPiTyped(owner, paneId, requestId, receiptText, beforeEnter.identity, piAnchor, piReservation, piTemplate); } catch {}
       }
-      let statusAtRead = pending.current(paneId);
-      await interruptCodexSteering(interruptWorkingCodex, closeMention(text), { agent: beforeEnter.identity.agent, working: beforeEnter.working, screen: beforeEnter.screen }, {
-        accepted: codexAnchor ? async () => codexDeliveryAccepted({ anchor: codexAnchor,
-          current: await readCommandTranscript(paneId, options.codexHome, { after: codexAnchor }).catch(() => null), text: closeMention(sent) }) : undefined,
-        read: async () => {
-          const status = pending.current(paneId);
-          const current = await pendingContext(owner, paneId, lease, identity, true);
-          // no key into a masked prompt that came up during the read's last process check
-          await noMaskedPrompt(paneId, lease.sighting.facts().cols, identity);
-          statusAtRead = status;
-          return { agent: current.identity.agent, working: current.working, screen: current.screen };
-        },
-        restarting: () => committing(true, true),
-        // herdr has no compare-and-send: the screen can change between this read and the write, so the
-        // write is refused when the lease, the deadline or the pane's status moved meanwhile
-        press: (key, fresh) => paneSendKeys(paneId, [key], undefined, () => allowed() && fresh() && pending.current(paneId) === statusAtRead),
-      });
+      if (!automatic && !queued && beforeEnter.identity.agent === "agy" && beforeEnter.working) {
+        let statusAtRead = pending.current(paneId);
+        await sendAgyQueuedNow({
+          text: closeMention(sent),
+          read: async () => {
+            const status = pending.current(paneId);
+            const current = await pendingContext(owner, paneId, lease, identity, true);
+            await noMaskedPrompt(paneId, lease.sighting.facts().cols, identity);
+            statusAtRead = status;
+            return { agent: current.identity.agent, working: current.working, screen: current.screen };
+          },
+          press: (fresh) => paneSendKeys(paneId, ["alt+m"], undefined, () => allowed() && fresh() && pending.current(paneId) === statusAtRead),
+        });
+      }
       noteSubmitted(paneId, sent, command, sentAt);
       if (command) watch?.commit(command, prompt, attached);
       return { ok: true };
@@ -1041,13 +1032,13 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       return { ok: false, ...fault, ...(unannounced ? { unannounced } : {}) };
     } finally { piCapacity.release(piReservation); }
   }
-  async function dispatchPending(item: PendingItem, automatic: boolean, arrivedAt: number, interruptWorkingCodex = false, by: Client | null = isClient(item.owner) ? item.owner : null): Promise<SubmitReply> {
+  async function dispatchPending(item: PendingItem, automatic: boolean, arrivedAt: number, sendNow = false, by: Client | null = isClient(item.owner) ? item.owner : null): Promise<SubmitReply> {
     let reply: SubmitReply;
     try {
       if (by === null) throw new HerdrError("input_not_ready", "No connection has the pane attached to type the message");
       const lease = item.lease ?? pendingLease(by, item.paneId);
       reply = await dispatchPendingText(by, item.paneId, item.message.text, lease, item.identity,
-        automatic, arrivedAt, (working, restarting, readMark) => pending.committing(item, working, restarting, readMark), interruptWorkingCodex, item.message.request_id, item.message.agent_only === true, false,
+        automatic, arrivedAt, (working) => pending.committing(item, working), sendNow, item.message.request_id, item.message.agent_only === true, false,
         { withdrawn: () => withdrawn.has(item), waiting: (waits) => pending.sendingWaitsFor(item, waits ? "omp_starting" : undefined) }, item);
     } catch (error) {
       reply = { ok: false, ...pendingFault(error, options.herdrFailure) };

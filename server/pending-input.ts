@@ -57,7 +57,7 @@ type Removed = { id: string; outcome: "sent" | "discarded" | "consumed" | "dismi
  * turn's start; one that never shows ends the wait without holding the queue, as the Enter joined the turn that ended.
  * `since`: when the Enter was committed.
  */
-interface TurnGate { by: string; committed: boolean; sawWorking: boolean; completed: boolean; deadline: number | null; restart?: "interruption" | "working"; joined?: number; lenient?: true; since?: number }
+interface TurnGate { by: string; committed: boolean; sawWorking: boolean; completed: boolean; deadline: number | null; joined?: number; lenient?: true; since?: number }
 const ready = (status: AgentStatus | undefined) => status === "idle" || status === "done";
 export const PENDING_START_TIMEOUT_MS = 10_000;
 export const MAX_PENDING_PER_OWNER = 32;
@@ -269,25 +269,15 @@ export class PendingInputs<Owner, Lease> {
     return true;
   }
 
-  /** `readMark`: `mark()` as the caller's last read before this Enter began; no status came since it when it still is */
-  committing(item: PendingRecord<Owner, Lease>, steeringWorkingTurn = false, restartingWorkingTurn = false, readMark?: number): void {
+  /** Status cycles before the committing key belong to earlier work, never this submission. */
+  committing(item: PendingRecord<Owner, Lease>, steeringWorkingTurn = false): void {
     if (this.records.get(item.message.id) !== item || !item.inFlight) return;
     const by = item.message.id, now = this.now();
-    const earlier = this.gates.get(item.paneId);
-    // an earlier Send now's Codex restart not yet seen to start keeps its wait: a working read before it is the turn Escape ends.
-    // A steering read at work made after its ready was seen (no status came since it) is the restarted turn itself, which this
-    // Enter joins
-    const joinsRestart = steeringWorkingTurn && earlier?.restart === "working" && readMark === this.mark(item.paneId);
-    const restarting = earlier?.committed && !earlier.completed && earlier.by !== by && earlier.restart !== undefined && !joinsRestart ? earlier : undefined;
-    let gate: TurnGate;
-    if (restartingWorkingTurn) gate = { by, committed: true, sawWorking: false, completed: false, deadline: now + this.startTimeoutMs, restart: "interruption", since: now };
-    // its own start timeout: the earlier one's, maybe passed already, would end this Enter's wait before its turn could show.
-    // Read at rest before this Enter, after the earlier one's Escape: that is the ready the interruption waits for
-    else if (restarting) gate = { ...restarting, by, since: now, deadline: now + this.startTimeoutMs,
-      ...(!steeringWorkingTurn && restarting.restart === "interruption" ? { restart: "working" as const } : {}) };
-    else if (steeringWorkingTurn) gate = { by, committed: true, sawWorking: true, completed: false, deadline: null, joined: now + this.startTimeoutMs, since: now };
-    else gate = { by, committed: true, sawWorking: false, completed: false, deadline: now + this.startTimeoutMs, since: now };
+    const gate: TurnGate = steeringWorkingTurn
+      ? { by, committed: true, sawWorking: true, completed: false, deadline: null, joined: now + this.startTimeoutMs, since: now }
+      : { by, committed: true, sawWorking: false, completed: false, deadline: now + this.startTimeoutMs, since: now };
     this.gates.set(item.paneId, gate);
+
   }
 
   /**
@@ -400,16 +390,6 @@ export class PendingInputs<Owner, Lease> {
     this.statuses.set(paneId, status);
     const gate = this.gates.get(paneId);
     if (!gate?.committed) return;
-    // Escape may expose ready before the submitted steering starts its replacement turn.
-    // Neither that readiness nor another old-working snapshot can drain the next message.
-    if (gate.restart === "interruption") {
-      if (ready(status)) gate.restart = "working";
-      return;
-    }
-    if (gate.restart === "working") {
-      if (status !== "working") return;
-      delete gate.restart;
-    }
     if (status === "working") { gate.sawWorking = true; gate.deadline = null; delete gate.lenient; }
     if (ready(status) && gate.sawWorking) {
       if (gate.joined !== undefined && at < gate.joined) {

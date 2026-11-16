@@ -1,7 +1,7 @@
 // The queue's turn gate (#4118): once the queue has typed a message and its Enter, it types no further message of the
 // pane until statuses that came after that Enter have shown the turn to start and to finish. A pane with Codex in
-// front and one page, as in pending-left-lease.test.ts: the real createPendingDelivery, PendingInputs and
-// interruptCodexSteering, with herdr's client faked. `on.keys` is what herdr and the agent do as a key lands.
+// front and one page, as in pending-left-lease.test.ts: the real createPendingDelivery and PendingInputs,
+// with herdr's client faked. `on.keys` is what herdr and the agent do as a key lands.
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -131,50 +131,22 @@ describe("the queue's turn gate (#4118)", () => {
     expect(d.typed).toEqual(["paste:X", "Enter", "paste:Y", "Enter"]);
   });
 
-  it("C: a second Send now during a Codex restart keeps waiting for the restarted turn to start", async () => {
+  it("C: Send now leaves Codex's running turn active even when its steering panel appears", async () => {
     const d = pane();
     d.event("working");
     await d.queue("X");
     await d.queue("Y");
-    await d.queue("Z");
-    // Send now on X: after its Enter Codex shows it in the steering panel, and Escape is pressed
     d.on.keys = (keys) => {
       if (keys.includes("Enter")) d.now.screen = steeringPanel("X");
-      if (keys.includes("Escape")) d.now.screen = "";
     };
-    await d.sendNow("X");
-    await d.settled();
-    expect(d.typed).toEqual(["paste:X", "Enter", "Escape"]);
-    // Send now on Y while herdr still reads working; herdr's idle for the interruption is applied after Y's Enter
-    d.on.keys = (keys) => {
-      if (!keys.includes("Enter")) return;
-      d.now.status = "idle";
-      d.event("idle");
-    };
-    await d.sendNow("Y");
-    await d.settled();
-    expect(d.typed).toEqual(["paste:X", "Enter", "Escape", "paste:Y", "Enter"]);
-    expect(d.rows()).toEqual(["Z queued"]);
-    await d.turnSeen();
-    expect(d.typed).toEqual(["paste:X", "Enter", "Escape", "paste:Y", "Enter", "paste:Z", "Enter"]);
-  });
 
-  it("C control: without the second Send now, the interruption's idle types nothing", async () => {
-    const d = pane();
-    d.event("working");
-    await d.queue("X");
-    await d.queue("Y");
-    d.on.keys = (keys) => {
-      if (keys.includes("Enter")) d.now.screen = steeringPanel("X");
-      if (keys.includes("Escape")) d.now.screen = "";
-    };
     await d.sendNow("X");
     await d.settled();
-    d.now.status = "idle";
-    d.event("idle");
-    await d.settled();
-    expect(d.typed).toEqual(["paste:X", "Enter", "Escape"]);
+    expect(d.typed).toEqual(["paste:X", "Enter"]);
     expect(d.rows()).toEqual(["Y queued"]);
+
+    await d.turnSeen();
+    expect(d.typed).toEqual(["paste:X", "Enter", "paste:Y", "Enter"]);
   });
 
   it("E: a message sent to the queue right behind the queue's Enter waits behind that Enter's turn", async () => {
@@ -295,96 +267,6 @@ describe("the queue's turn gate (#4118)", () => {
     pending.status("p", "idle");
     // once fixed: null, until X's own turn is seen
     expect(pending.next("p")?.message.text).toBe("Y");
-  });
-
-  it("gives a Send now over a Codex restart whose start timeout passed a start timeout of its own", () => {
-    let clock = 0;
-    const pending = new PendingInputs<string, null>(() => {}, () => clock, 10);
-    const identity = { agent: "codex", terminalId: "p", session: null };
-    pending.status("p", "working");
-    const x = pending.enqueue("a", "p", 1, "X", null, identity);
-    const y = pending.enqueue("a", "p", 2, "Y", null, identity);
-    expect(pending.claim(x, false)).toBe(true);
-    pending.committing(x, true, true);
-    clock = 10;
-    expect(pending.expire()).toEqual([]);
-    pending.settle(x);
-    expect(pending.claim(y, false)).toBe(true);
-    pending.committing(y);
-    pending.settle(y);
-    expect(pending.expire()).toEqual([]);
-    pending.enqueue("a", "p", 3, "Z", null, identity);
-    pending.status("p", "idle");
-    expect(pending.next("p")).toBeNull();
-  });
-
-  it("takes a Send now's read at rest after a Codex restart's Escape as that restart's ready, so the turn after it ends the wait", () => {
-    let clock = 0;
-    const pending = new PendingInputs<string, null>(() => {}, () => clock, 10);
-    const identity = { agent: "codex", terminalId: "p", session: null };
-    pending.status("p", "working");
-    const x = pending.enqueue("a", "p", 1, "X", null, identity);
-    const y = pending.enqueue("a", "p", 2, "Y", null, identity);
-    const z = pending.enqueue("a", "p", 3, "Z", null, identity);
-    expect(pending.claim(x, false)).toBe(true);
-    pending.committing(x, true, true);
-    pending.settle(x);
-    expect(pending.claim(y, false)).toBe(true);
-    pending.committing(y);
-    pending.settle(y);
-    pending.status("p", "working");
-    clock = 10;
-    expect(pending.expire()).toEqual([]);
-    expect(z.message.state).toBe("queued");
-    pending.status("p", "idle");
-    expect(pending.next("p")).toBe(z);
-  });
-
-  it("takes a Send now's read at work after a Codex restart's ready as the restarted turn it joins, and waits for that turn's end", () => {
-    let clock = 0;
-    const pending = new PendingInputs<string, null>(() => {}, () => clock, 10);
-    const identity = { agent: "codex", terminalId: "p", session: null };
-    pending.status("p", "working");
-    const x = pending.enqueue("a", "p", 1, "X", null, identity);
-    const y = pending.enqueue("a", "p", 2, "Y", null, identity);
-    const z = pending.enqueue("a", "p", 3, "Z", null, identity);
-    expect(pending.claim(x, false)).toBe(true);
-    pending.committing(x, true, true);
-    pending.settle(x);
-    pending.status("p", "idle");
-    expect(pending.claim(y, false)).toBe(true);
-    // read at work after that ready, with no status since
-    pending.committing(y, true, false, pending.mark("p"));
-    pending.settle(y);
-    clock = 10;
-    expect(pending.expire()).toEqual([]);
-    expect(z.message.state).toBe("queued");
-    pending.status("p", "working");
-    pending.status("p", "idle");
-    expect(pending.next("p")).toBe(z);
-  });
-
-  it("takes a Send now's read at work made before a Codex restart's ready as the turn Escape ended, not the restarted one", () => {
-    let clock = 0;
-    const pending = new PendingInputs<string, null>(() => {}, () => clock, 10);
-    const identity = { agent: "codex", terminalId: "p", session: null };
-    pending.status("p", "working");
-    const x = pending.enqueue("a", "p", 1, "X", null, identity);
-    const y = pending.enqueue("a", "p", 2, "Y", null, identity);
-    pending.enqueue("a", "p", 3, "Z", null, identity);
-    expect(pending.claim(x, false)).toBe(true);
-    pending.committing(x, true, true);
-    pending.settle(x);
-    expect(pending.claim(y, false)).toBe(true);
-    // Y's read at work begins; the interruption's ready comes before its Enter
-    const readMark = pending.mark("p");
-    pending.status("p", "idle");
-    pending.committing(y, true, false, readMark);
-    pending.settle(y);
-    // a ready well after Y's Enter, the restarted turn never seen
-    clock = 11;
-    pending.status("p", "idle");
-    expect(pending.next("p")).toBeNull();
   });
 
   it("takes a reconcile's ready asked for after the Enter but before a later reading of the turn as no end of that turn", () => {

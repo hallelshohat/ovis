@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createCodexTranscriptParser, parseCodexTranscript } from "./codex.ts";
 import { codexNativeItem } from "./codex-items.ts";
-import { codexToolImage, transcriptToolOutput } from "./conversation.ts";
+import { codexToolImage, forgetTranscriptState, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 import type { ConversationPart } from "../shared/protocol.ts";
 import { parseConversationMetadata } from "./conversation-metadata.ts";
 import { visibleWorkParts } from "../src/lib/workBlocks.ts";
@@ -124,6 +124,148 @@ it("keeps repeated identical steering sends while pairing all three recording so
   const turns = parseCodexTranscript(entries.map((entry) => JSON.stringify({ ...entry, timestamp: "2026-11-08T08:30:00Z" })).join("\n"));
   expect(turns).toHaveLength(2);
   expect(turns[1]).toMatchObject({ role: "user", native_turn_id: "same-task", input_kind: "steering" });
+});
+
+it.each(["same-task", "replacement-task"])("labels a message after interruption, including reused turn IDs (%s)", (nextId) => {
+  const parser = createCodexTranscriptParser();
+  const write = (payload: object) => parser.write(JSON.stringify({ type: "event_msg", timestamp: "2026-11-15T16:00:00Z", payload }) + "\n");
+  write({ type: "task_started", turn_id: "same-task" });
+  write({ type: "user_message", message: "start" });
+  write({ type: "turn_aborted", turn_id: "same-task", reason: "interrupted" });
+  write({ type: "task_started", turn_id: nextId });
+  write({ type: "user_message", message: "follow up" });
+  expect(parser.snapshot().at(-1)).toMatchObject({ role: "user", native_turn_id: nextId, input_kind: "interrupted" });
+  write({ type: "user_message", message: "steer again" });
+  expect(parser.snapshot().at(-1)?.input_kind).toBe("steering");
+});
+
+it("does not carry steering across a completed task with a reused ID", () => {
+  const payloads = [
+    { type: "task_started", turn_id: "task" }, { type: "user_message", message: "start" },
+    { type: "task_complete", turn_id: "task" }, { type: "task_started", turn_id: "task" },
+    { type: "user_message", message: "new task" },
+  ];
+  const turns = parseCodexTranscript(payloads.map((payload) => JSON.stringify({ type: "event_msg", payload })).join("\n"));
+  expect(turns.at(-1)?.input_kind).toBeUndefined();
+});
+
+it("keeps identical messages on opposite sides of an interruption separate", () => {
+  const payloads = [
+    { type: "task_started", turn_id: "first" }, { type: "user_message", message: "repeat" },
+    { type: "turn_aborted", turn_id: "first", reason: "interrupted" }, { type: "task_started", turn_id: "second" },
+    { type: "item_completed", turn_id: "second", item: { type: "UserMessage", id: "next", content: [{ type: "text", text: "repeat" }] } },
+  ];
+  const turns = parseCodexTranscript(payloads.map((payload) => JSON.stringify({ type: "event_msg", timestamp: "2026-11-15T16:00:00Z", payload })).join("\n"));
+  expect(turns.filter((turn) => turn.role === "user")).toHaveLength(2);
+  expect(turns.at(-1)?.input_kind).toBe("interrupted");
+});
+
+it("does not call an unclassified abort an interruption", () => {
+  const payloads = [
+    { type: "task_started", turn_id: "task" }, { type: "user_message", message: "start" },
+    { type: "turn_aborted", turn_id: "task" }, { type: "task_started", turn_id: "task" },
+    { type: "user_message", message: "retry" },
+  ];
+  const turns = parseCodexTranscript(payloads.map((payload) => JSON.stringify({ type: "event_msg", payload })).join("\n"));
+  expect(turns.at(-1)?.input_kind).toBeUndefined();
+});
+
+it.each(["task_complete", "turn_aborted"])("does not take another task's %s for an end to current steering", (type) => {
+  const payloads = [
+    { type: "task_started", turn_id: "current" }, { type: "user_message", message: "start" },
+    { type, turn_id: "other", reason: "interrupted" }, { type: "user_message", message: "follow up" },
+  ];
+  const turns = parseCodexTranscript(payloads.map((payload) => JSON.stringify({ type: "event_msg", payload })).join("\n"));
+  expect(turns.at(-1)).toMatchObject({ native_turn_id: "current", input_kind: "steering" });
+});
+
+it("distinguishes the recorded Codex 0.169 interrupt-and-resubmit from accepted steering", () => {
+  const turns = parseCodexTranscript(readFileSync(fixture("0.169.0-interrupted"), "utf8"));
+  const copies = turns.filter((turn) => turn.role === "user" && turn.parts.some((part) => part.kind === "text" && part.text.startsWith("STEER_ovis:")));
+  expect(copies).toHaveLength(2);
+  expect(copies[0]?.input_kind).toBe("steering");
+  expect(copies[1]?.input_kind).toBe("interrupted");
+  expect(copies[0]?.native_turn_id).not.toBe(copies[1]?.native_turn_id);
+});
+
+it("keeps interruption labels across cached and cold conversation pages", () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-interrupted-page-"));
+  try {
+    const path = join(root, "rollout.jsonl");
+    writeFileSync(path, readFileSync(fixture("0.169.0-interrupted"), "utf8"));
+    const live = transcriptPage("codex-transcript", path);
+    expect(live.turns.at(-1)?.input_kind).toBe("interrupted");
+    const payloads = [
+      { type: "task_complete", turn_id: live.turns.at(-1)?.native_turn_id },
+      { type: "task_started", turn_id: "next-task" }, { type: "user_message", message: "next task" },
+    ];
+    appendFileSync(path, payloads.map((payload) => JSON.stringify({ type: "event_msg", payload }) + "\n").join(""));
+    const settled = transcriptPage("codex-transcript", path);
+    expect(settled.turns.at(-2)?.input_kind).toBe("interrupted");
+    expect(settled.turns.at(-1)?.input_kind).toBeUndefined();
+    forgetTranscriptState();
+    expect(transcriptPage("codex-transcript", path).turns).toEqual(settled.turns);
+    expect(live.turns.at(-1)?.input_kind).toBe("interrupted");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each([1, 10])("keeps interruption labels at cold page boundaries with %i prompts", (prompts) => {
+  const root = mkdtempSync(join(tmpdir(), "codex-interrupted-boundary-"));
+  try {
+    const path = join(root, "rollout.jsonl");
+    const recording = readFileSync(fixture("0.169.0-interrupted"), "utf8");
+    const replacement = parseCodexTranscript(recording).at(-1)!;
+    expect(replacement.input_kind).toBe("interrupted");
+    const later = Array.from({ length: prompts * 2 - 1 }, (_, index) => [
+      { type: "task_started", turn_id: `later-${index}` },
+      { type: "user_message", message: `Later task ${index}` },
+      { type: "agent_message", message: `Later answer ${index}` },
+      { type: "task_complete", turn_id: `later-${index}` },
+    ].map((payload) => JSON.stringify({ type: "event_msg", payload }) + "\n").join(""));
+    writeFileSync(path, recording);
+    expect(transcriptPage("codex-transcript", path, { prompts }).turns.at(-1)).toEqual(replacement);
+    appendFileSync(path, JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: replacement.native_turn_id } }) + "\n" + later.slice(0, prompts - 1).join(""));
+    const warm = transcriptPage("codex-transcript", path, { prompts });
+    expect(warm.turns[0]).toMatchObject({ native_turn_id: replacement.native_turn_id, input_kind: "interrupted" });
+    forgetTranscriptState();
+    const cold = transcriptPage("codex-transcript", path, { prompts });
+    expect(cold.turns).toEqual(warm.turns);
+    if (cold.cursor === null) throw new Error("The interruption must be on an older page");
+    const preceding = transcriptPage("codex-transcript", path, { prompts, before: cold.cursor });
+    expect(preceding.turns.some((turn) => turn.input_kind === "steering")).toBe(true);
+    expect(transcriptPage("codex-transcript", path, { prompts }).turns).toEqual(cold.turns);
+
+    appendFileSync(path, later.slice(prompts - 1).join(""));
+    forgetTranscriptState();
+    const newest = transcriptPage("codex-transcript", path, { prompts });
+    expect(newest.turns.every((turn) => turn.input_kind === undefined)).toBe(true);
+    if (newest.cursor === null) throw new Error("The replacement message must be on an older page");
+    forgetTranscriptState();
+    const older = transcriptPage("codex-transcript", path, { prompts, before: newest.cursor });
+    expect(older.turns).toEqual(cold.turns);
+    expect(older.turns[0]).toMatchObject({ native_turn_id: replacement.native_turn_id, input_kind: "interrupted" });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each([
+  { type: "task_complete", turn_id: "previous" },
+  { type: "turn_aborted", turn_id: "previous" },
+  { type: "turn_aborted", turn_id: "previous", reason: "unknown" },
+  { type: "turn_aborted", turn_id: "other", reason: "interrupted" },
+])("does not infer interruption from a preceding page's outcome: %j", (outcome) => {
+  const root = mkdtempSync(join(tmpdir(), "codex-outcome-boundary-"));
+  try {
+    const path = join(root, "rollout.jsonl");
+    const payloads = [
+      { type: "task_started", turn_id: "previous" }, { type: "user_message", message: "previous" }, outcome,
+      { type: "task_started", turn_id: "current" }, { type: "user_message", message: "current" },
+    ];
+    writeFileSync(path, payloads.map((payload) => JSON.stringify({ type: "event_msg", payload }) + "\n").join(""));
+    forgetTranscriptState();
+    const current = transcriptPage("codex-transcript", path, { prompts: 1 }).turns[0];
+    expect(current?.native_turn_id).toBe("current");
+    expect(current?.input_kind).toBeUndefined();
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 it("retrieves a native command's whole output when its timeline preview is cut", () => {
