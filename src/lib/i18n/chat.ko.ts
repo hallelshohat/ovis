@@ -277,6 +277,7 @@ export const CHAT_KO: Record<string, string> = {
   "started {time}": "{time}에 시작",
   "stopped": "중지됨",
   "Steering · current turn": "추가 지시 · 현재 턴",
+  "Sent after interruption": "중단 후 전송됨",
   "Queued · next turn": "대기 중 · 다음 턴",
   "Codex status": "Codex 상태",
 };

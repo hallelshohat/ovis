@@ -197,7 +197,10 @@ export function codexCallFailed(output: string): boolean {
   return code !== null && code[1] !== "0";
 }
 
-interface CodexParseState {
+/** Input outcome carried from settled tasks into the separately parsed live task. */
+export interface CodexInputState { interrupted?: boolean }
+
+interface CodexParseState extends CodexInputState {
   turns: ConversationTurn[];
   tools: Map<string, Extract<ConversationPart, { kind: "tool" }>>;
   messages: { role: string; text: string; sources: Set<string>; ts: string; part: Extract<ConversationPart, { kind: "text" }>; turn: ConversationTurn }[];
@@ -226,6 +229,8 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
       : withoutMemoryCitations(text.replace(/^\s*<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_plan>\s*$/, "$1"));
     if (!body.trim() && images.length === 0) return;
     const duplicate = messages.slice(-8).reverse().find((other) => other.role === role && other.text === body
+      && (!state.activeTurnId || !other.turn.native_turn_id || other.turn.native_turn_id === state.activeTurnId)
+      && (role !== "user" || !state.interrupted && (!state.activeTurnId || state.userTurnId === state.activeTurnId))
       && !other.sources.has(source) && (other.ts === ts || Math.abs(Date.parse(other.ts) - Date.parse(ts)) <= 1000));
     if (duplicate) {
       duplicate.sources.add(source);
@@ -238,8 +243,9 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
     const part: Extract<ConversationPart, { kind: "text" }> = { kind: "text", text: body, ...(phase ? { phase } : {}) };
     const turn: ConversationTurn = role === "user" ? { role, ts: ts || null, parts: [...images, ...(body.trim() ? [part] : [])],
       ...(state.activeTurnId ? { native_turn_id: state.activeTurnId,
-        ...(state.userTurnId === state.activeTurnId ? { input_kind: "steering" as const } : {}) } : {}) } : assistant(ts);
-    if (role === "user") { turns.push(turn); state.userTurnId = state.activeTurnId; }
+        ...(state.userTurnId === state.activeTurnId ? { input_kind: "steering" as const } : {}) } : {}),
+      ...(state.interrupted ? { input_kind: "interrupted" as const } : {}) } : assistant(ts);
+    if (role === "user") { turns.push(turn); state.userTurnId = state.activeTurnId; state.interrupted = false; }
     else turn.parts.push(part);
     messages.push({ role, text: body, sources: new Set([source]), ts, part, turn });
     if (messages.length > 8) messages.shift();
@@ -307,15 +313,19 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
         }
         // a turn that failed (a usage limit, a refused request) records why on its end, and nothing else: no answer
         // of the turn read as running only, as its items are (a sub-agent's turn ends in its own record)
-        const failure = payload.type === "task_complete" && (!payload.turn_id || (state.activeTurnId ? payload.turn_id === state.activeTurnId : !payload.root_turn_id || payload.turn_id === payload.root_turn_id))
+        const endsCurrentTask = (payload.type === "task_complete" || payload.type === "turn_aborted")
+          && (!payload.turn_id || (state.activeTurnId ? payload.turn_id === state.activeTurnId : !payload.root_turn_id || payload.turn_id === payload.root_turn_id));
+        const failure = payload.type === "task_complete" && endsCurrentTask
           ? string(record(payload.error).message) : "";
         if (failure) assistant(ts).parts.push({ kind: "text", text: `Error: ${failure}`, failed: true });
-        if (payload.type === "task_complete" || payload.type === "turn_aborted") {
+        if (endsCurrentTask) {
           const turn = turns.at(-1);
           if (turn?.role === "assistant" && ts) turn.end_ts = ts;
           if (turn?.native_turn_id) turn.turn_complete = true;
           state.startedAt = undefined;
           state.activeTurnId = undefined;
+          state.userTurnId = undefined;
+          state.interrupted = payload.type === "turn_aborted" && payload.reason === "interrupted";
         }
         if (payload.type === "user_message" && (!payload.kind || payload.kind === "plain")) {
           message("user", contentText(payload.message, true), "event", ts, undefined, codexImageParts(entry));
@@ -411,9 +421,11 @@ export function createCodexTranscriptParser(state: CodexParseState = { turns: []
   };
 }
 
-export function parseCodexTranscript(text: string, maxTurns = 100): ConversationTurn[] {
-  const parser = createCodexTranscriptParser();
+export function parseCodexTranscript(text: string, maxTurns = 100, input: CodexInputState = {}): ConversationTurn[] {
+  const state: CodexParseState = { ...input, turns: [], tools: new Map(), messages: [] };
+  const parser = createCodexTranscriptParser(state);
   parser.write(text);
+  input.interrupted = state.interrupted;
   return parser.snapshot().slice(-maxTurns);
 }
 

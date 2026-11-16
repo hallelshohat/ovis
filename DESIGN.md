@@ -6474,7 +6474,12 @@ recorded order among its tools. Runtime errors count in the summary's failure ba
 
 Native queued and steering messages use the existing sent-message store. Each transcript receipt
 replaces one waiting bubble; steering keeps the native task identity and does not add a completion
-divider before the continued reply. Chat uses its existing Claude-style activity and metadata UI
+divider before the continued reply. Codex Send now follows the native TUI's Enter behavior: one
+paste and Enter, without the Escape that interrupts and resubmits. The live native panel or an
+uninterrupted transcript task confirms **Steering · current turn**; native Tab queues show
+**Queued · next turn**. A message following a recorded interruption shows **Sent after interruption**,
+including when Codex reuses a task ID. An absent panel alone proves neither steering nor interruption.
+Chat uses its existing Claude-style activity and metadata UI
 instead of copying the terminal's Working timer, tips, model/path and keyboard shortcuts. Actual
 warnings, update notices and explicit `/status` output remain near the composer. Plan confirmation
 uses the existing prompt card and guarded answer route.

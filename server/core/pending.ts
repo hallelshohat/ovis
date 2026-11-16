@@ -39,7 +39,6 @@ import { isShellAgentKind, SHELL_AGENTS } from "../shell-agent.ts";
 import { capturePiDeliveryAnchorRetrying, matchPiDeliveries, PiReceiptCapacity, piRecordText, type PiDeliveryAnchor, type PiReceiptReservation } from "../pi-delivery.ts";
 import { isPiProcess, piTranscriptPath, piUnwrittenHeaderId } from "../pi.ts";
 import { PendingRequestBook } from "../pending-requests.ts";
-import { interruptCodexSteering } from "../codex-steering.ts";
 import type { OmoStatus } from "../omo-status.ts";
 import { heldOmoProcess } from "../omo.ts";
 import { startOpenCodeWatch, openCodeSkillsToType, type OpenCodeWatch, skillsNotAttached } from "../opencode-native.ts";
@@ -657,7 +656,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
   }
 
   async function dispatchPendingText(owner: Client, paneId: string, text: string, lease: PendingLease, identity: PendingIdentity,
-    automatic: boolean, arrivedAt: number, committing: (working: boolean, restarting?: boolean, readMark?: number) => void = () => {}, interruptWorkingCodex = false,
+    automatic: boolean, arrivedAt: number, committing: (working: boolean) => void = () => {},
     requestId = 0, agentOnly = false, queued = false,
     row: { withdrawn?: () => boolean; waiting?: (waits: boolean) => void } = {}): Promise<SubmitReply> {
     let wrote = false;
@@ -868,23 +867,6 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (receiptText !== undefined) {
         try { recordPiTyped(owner, paneId, requestId, receiptText, beforeEnter.identity, piAnchor, piReservation, piTemplate); } catch {}
       }
-      let statusAtRead = pending.current(paneId);
-      await interruptCodexSteering(interruptWorkingCodex, closeMention(text), { agent: beforeEnter.identity.agent, working: beforeEnter.working, screen: beforeEnter.screen }, {
-        accepted: codexAnchor ? async () => codexDeliveryAccepted({ anchor: codexAnchor,
-          current: await readCommandTranscript(paneId, options.codexHome, { after: codexAnchor }).catch(() => null), text: closeMention(sent) }) : undefined,
-        read: async () => {
-          const status = pending.current(paneId);
-          const current = await pendingContext(owner, paneId, lease, identity, true);
-          // no Escape into a masked prompt that came up during the read's last process check
-          await noMaskedPrompt(paneId, lease.sighting.facts().cols, identity);
-          statusAtRead = status;
-          return { agent: current.identity.agent, working: current.working, screen: current.screen };
-        },
-        restarting: () => committing(true, true),
-        // herdr has no compare-and-send: the screen can change between this read and the write, so the
-        // write is refused when the lease, the deadline or the pane's status moved meanwhile
-        escape: (fresh) => paneSendKeys(paneId, ["Escape"], undefined, () => allowed() && fresh() && pending.current(paneId) === statusAtRead),
-      });
       noteSubmitted(paneId, sent, command, sentAt);
       if (command) watch?.commit(command, prompt, attached);
       return { ok: true };
@@ -899,13 +881,13 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       return { ok: false, ...fault, ...(unannounced ? { unannounced } : {}) };
     } finally { piCapacity.release(piReservation); }
   }
-  async function dispatchPending(item: PendingItem, automatic: boolean, arrivedAt: number, interruptWorkingCodex = false, by: Client | null = isClient(item.owner) ? item.owner : null): Promise<SubmitReply> {
+  async function dispatchPending(item: PendingItem, automatic: boolean, arrivedAt: number, by: Client | null = isClient(item.owner) ? item.owner : null): Promise<SubmitReply> {
     let reply: SubmitReply;
     try {
       if (by === null) throw new HerdrError("input_not_ready", "No connection has the pane attached to type the message");
       const lease = item.lease ?? pendingLease(by, item.paneId);
       reply = await dispatchPendingText(by, item.paneId, item.message.text, lease, item.identity,
-        automatic, arrivedAt, (working, restarting, readMark) => pending.committing(item, working, restarting, readMark), interruptWorkingCodex, item.message.request_id, item.message.agent_only === true, false,
+        automatic, arrivedAt, (working) => pending.committing(item, working), item.message.request_id, item.message.agent_only === true, false,
         { withdrawn: () => withdrawn.has(item), waiting: (waits) => pending.sendingWaitsFor(item, waits ? "omp_starting" : undefined) });
     } catch (error) {
       reply = { ok: false, ...pendingFault(error, options.herdrFailure) };
@@ -955,7 +937,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (await awaitsOmp(item)) return;
       if (!pending.claim(item, true)) return;
       dispatched = true;
-      await dispatchPending(item, true, arrivedAt, false, by);
+      await dispatchPending(item, true, arrivedAt, by);
       takenWithPane(item, arrivedAt);
     }).catch((error) => console.warn("pending message:", pendingFault(error, options.herdrFailure).code)).finally(() => {
       pendingDrains.delete(paneId);
@@ -1416,7 +1398,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
               if (message.delivery === "queue" && !pending.waiting(message.pane_id) && !typedWhileOmpStarted(message.pane_id)) {
                 const sendingAt = new Date().toISOString();
                 const typed = await dispatchPendingText(client, message.pane_id, text, lease!, context.identity, false, arrivedAt,
-                  (working) => pending.typedAtOnce(message.pane_id, working), false, message.id, agentOnly, true);
+                  (working) => pending.typedAtOnce(message.pane_id, working), message.id, agentOnly, true);
                 if (typed.ok || typed.code !== "pending_wait") return typed.ok ? { ...typed, sending_at: sendingAt } : typed;
                 waited = true;
               }
@@ -1621,7 +1603,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
                 if (!pending.claim(item, false)) return { ok: false, code: "pending_busy", message: "This message is already being sent" };
                 if (isClient(item.owner)) item.lease = lease!;
                 dispatched = true;
-                return await dispatchPending(item, false, arrivedAt, true, client);
+                return await dispatchPending(item, false, arrivedAt, client);
               } catch (error) { return { ok: false, ...pendingFault(error, options.herdrFailure) }; }
             }, message.resend_generation, (code) => code === "submit_changed");
           if (!dispatched && pending.get(client, item.paneId, item.message.id) === item && pending.claim(item, false))

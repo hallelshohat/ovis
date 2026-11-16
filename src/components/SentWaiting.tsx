@@ -1,11 +1,22 @@
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { CircleAlert, Clock, X } from "lucide-react";
+import type { ConversationTurn } from "../../shared/protocol.ts";
 
 import { agentDisplayLabel } from "../lib/compose.ts";
 import { useT } from "../lib/i18n.ts";
 import { agentName } from "../lib/runtimeMove.ts";
 import { shouldFoldUserMessage } from "../lib/userMessageFold.ts";
 import { clearMachineWaitingSends, currentWaitingSends, dismissWaitingSend, expireWaitingSends, markUnanswered, restingSince, subscribeWaitingSends, WAITING_HINT_MS, WAITING_SEND_MS, WAITING_STUCK_MS, waitingKey, type WaitingSend } from "../lib/sentWaiting.ts";
+
+export function ChatInputKind({ kind }: { kind: NonNullable<ConversationTurn["input_kind"]> }) {
+  const t = useT();
+  const labels = {
+    steering: t("Steering · current turn"),
+    queued: t("Queued · next turn"),
+    interrupted: t("Sent after interruption"),
+  } satisfies Record<NonNullable<ConversationTurn["input_kind"]>, string>;
+  return <p className="chat-input-kind">{labels[kind]}</p>;
+}
 
 /**
  * The sends this browser made to a pane that its transcript does not hold yet. A lost connection
@@ -70,7 +81,7 @@ export function SentWaitingList({ sends, paneKey, resting = false, agent = null,
             <span className="chat-sent-late" role="img" aria-label={late} title={late}><Clock aria-hidden="true" /></span>
           </div>}
         </div>
-        {send.native && <p className="chat-input-kind">{t(send.native === "steering" ? "Steering · current turn" : "Queued · next turn")}</p>}
+        {send.native && <ChatInputKind kind={send.native} />}
       </div>;
     })}
   </div>;
