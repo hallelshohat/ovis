@@ -1,15 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
 
-export interface CodexSteeringContext { agent: string | null; working: boolean; screen: string }
-interface SteeringIO {
-  read: () => Promise<CodexSteeringContext>;
-  /** sends Escape; `fresh` is asked again when herdr is reached, and a stale write is withheld */
-  escape: (fresh: () => boolean) => Promise<void>;
-  restarting: () => void;
-  now?: () => number;
-  wait?: (ms: number) => Promise<void>;
-}
-
 const STEERING_HINT = "Messages to be submitted after next tool call (press esc to interrupt and send immediately)";
 const compact = (text: string) => text.replace(/\s/g, "");
 function lastLine<T>(lines: T[], matches: (line: T) => boolean): number {
@@ -90,27 +80,4 @@ export function codexSteeringPending(screen: string, text: string): boolean {
   const sent = compact(text);
   if (!sent || !shown) return false;
   return cut ? sent.startsWith(shown) : shown === sent;
-}
-
-/** Enter can leave steering pending until a tool boundary. Only Send now may interrupt it, and only for `text`. */
-export async function interruptCodexSteering(explicit: boolean, text: string, submitted: CodexSteeringContext, io: SteeringIO): Promise<void> {
-  if (!explicit || submitted.agent !== "codex" || !submitted.working) return;
-  const now = io.now ?? Date.now;
-  const wait = io.wait ?? Bun.sleep;
-  const deadline = now() + 1500;
-  const unconfirmed = () => new Error("Codex immediate delivery was not confirmed. Check the terminal before sending again.");
-  while (now() < deadline) {
-    // The caller rechecks live identity, lease, authority and interactive prompts in this read.
-    const current = await io.read();
-    if (now() >= deadline || current.agent !== "codex") throw unconfirmed();
-    if (!current.working) return;
-    if (codexSteeringPending(current.screen, text)) {
-      io.restarting();
-      // the RPC's connect is awaited: by the time herdr is written to, the deadline may have passed
-      await io.escape(() => now() < deadline);
-      return;
-    }
-    await wait(Math.min(50, deadline - now()));
-  }
-  throw unconfirmed();
 }

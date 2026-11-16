@@ -47,7 +47,7 @@ import { authorizedTranscript } from "./transcript-store.ts";
 import type { ConversationMetadata, ConversationTurn, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import { herdrRpc, herdrSocketPath, paneProcessInfo, paneRead, paneScrollInfo, sessionSnapshot, type ProcessInfo } from "./herdr/client.ts";
 import { resolveAgent } from "./pane-context.ts";
-import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, type HistorySegment, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHomePlaced, paneCodexProcess, parseCodexTranscript, readRange } from "./codex.ts";
+import { codexFreshSession, codexHistorySegments, createCodexTranscriptParser, type CodexInputState, type HistorySegment, codexOutputText, codexTranscriptPath, defaultCodexHome, forgetAllCodexState, forgetCodexStateFor, paneCodexHomePlaced, paneCodexProcess, parseCodexTranscript, readRange } from "./codex.ts";
 import { codexNativeItem } from "./codex-items.ts";
 import { awaited, CODEX_IMAGE_REF, CODEX_TOOL_IMAGE_REF, codexOutputPicture, codexTranscriptImage, DataUrlPictureScan, finish, finishAsync, forgetOmpBlobTypes, InlinePictureScan, MAX_IMAGE_BYTES, ompBlobAnchor, ompBlobDigest, ompBlobPictureSteps, type Steps } from "./codex-images.ts";
 import { type Held, heldOpenPlatform, openHeldDirectory } from "./held-open.ts";
@@ -1065,6 +1065,7 @@ interface SettledTurns {
   start: number;
   end: number;
   turns: ConversationTurn[];
+  codexInput: CodexInputState;
   metadata: ConversationMetadata;
   /** the bytes just before `end` (see LiveScan.tail) */
   tail: string;
@@ -1262,7 +1263,7 @@ function subagentsOnPage(path: string, text: string): ReadonlyMap<string, Subage
   return ids.size === 0 ? undefined : subagentDetails(path, ids);
 }
 
-function parseTurns(source: RecognizedConversation["source"], path: string, text: string, taskTitles?: Map<string, string>, noticed?: Set<string>, baseOffset?: number): ConversationTurn[] {
+function parseTurns(source: RecognizedConversation["source"], path: string, text: string, taskTitles?: Map<string, string>, noticed?: Set<string>, baseOffset?: number, codexInput?: CodexInputState): ConversationTurn[] {
   if (source === "copilot-transcript") return parseCopilotTranscript(text, Infinity, baseOffset);
   if (source === "grok-transcript") {
     try { return parseGrokTranscript(text, path); } catch (error) {
@@ -1284,7 +1285,7 @@ function parseTurns(source: RecognizedConversation["source"], path: string, text
       throw error;
     }
   }
-  return source === "codex-transcript" ? parseCodexTranscript(text, Infinity)
+  return source === "codex-transcript" ? parseCodexTranscript(text, Infinity, codexInput)
     : source === "claude-transcript" ? parseClaudeTranscript(text, Infinity, { subagents: subagentsOnPage(path, text), noticed })
       : parseOmpTranscript(text, Infinity, ompReading(source, path, taskTitles));
 }
@@ -1364,7 +1365,7 @@ function incrementalLiveTurn(path: string, stream: TranscriptStream, source: Inc
   }
   if (!cached) {
     const subagents = source === "claude-transcript" ? { ids: new Set<string>(), details: new Map<string, SubagentDetail>() } : undefined;
-    const parser = source === "codex-transcript" ? createCodexTranscriptParser()
+    const parser = source === "codex-transcript" ? createCodexTranscriptParser({ ...before.codexInput, turns: [], tools: new Map(), messages: [] })
       : source === "claude-transcript" ? createClaudeTranscriptParser({ subagents: subagents!.details, noticed: new Set(before.noticed) })
       : createOmpTranscriptParser(ompReading(source, path, new Map(before.taskTitles)));
     cached = { source, id: stream.id, start, pageStart: before.start, prefixBoundary: before.tail, scanned: start,
@@ -1462,12 +1463,12 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
       const to = Math.min(start, kept.observedEnd);
       if (to > from) parseTurns(source, path, readStream(stream, from, to).toString("utf8"), inherited, undefined, from);
     }
-    settled = { source, id: stream.id, start, end: start, turns: [], metadata: parseConversationMetadata(`${head}
+    settled = { source, id: stream.id, start, end: start, turns: [], codexInput: codexInputBefore({ stream, source, start }), metadata: parseConversationMetadata(`${head}
 `, source, undefined, piAgentDir), tail: bytesBefore(stream, start), taskTitles: new Map(inherited), noticed: new Set(), inherited, observedEnd: stream.length, piAgentDir };
   }
   if (settled.end < last) {
     const text = readStream(stream, settled.end, last).toString("utf8");
-    settled = { ...settled, end: last, turns: [...settled.turns, ...parseTurns(source, path, text, settled.taskTitles, settled.noticed, settled.end)], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir), tail: bytesBefore(stream, last) };
+    settled = { ...settled, end: last, turns: [...settled.turns, ...parseTurns(source, path, text, settled.taskTitles, settled.noticed, settled.end, settled.codexInput)], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir), tail: bytesBefore(stream, last) };
   }
   settled.observedEnd = stream.length;
   rememberPage(settledTurns, key, settled, 8);
@@ -1479,6 +1480,15 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
   // the live turn is parsed again on every poll: its titles and completions are kept only
   // once it settles, so a read titles a task exactly as a cold read of the same bytes does
   return { turns: [...settled.turns, ...parseTurns(source, path, text, new Map(settled.taskTitles), new Set(settled.noticed), last)], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir) };
+}
+
+/** The preceding task can end on another page, even when no earlier page was cached. */
+function codexInputBefore({ stream, source, start }: { stream: TranscriptStream; source: RecognizedConversation["source"]; start: number }): CodexInputState {
+  const input: CodexInputState = {};
+  if (source !== "codex-transcript" || start <= stream.floor) return input;
+  const previous = pageBefore(stream, source, start, { widen: true, prompts: 1 });
+  parseCodexTranscript(previous.bytes.toString("utf8"), 1, input);
+  return input;
 }
 
 /** Retention diagnostics only: counts/budget adherence, never transcript contents. */
@@ -3032,6 +3042,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   let head = "";
   let cursor: string | null;
   let live: { turns: ConversationTurn[]; metadata: ConversationMetadata } | null = null;
+  let codexInput: CodexInputState | undefined;
   try {
     if (page.before !== undefined) {
       const before = parseCursor(stream, page.before);
@@ -3068,6 +3079,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
       }
     }
     if (live === null && page.before === undefined && start > stream.floor) head = metadataHead(path, stream, source, start);
+    if (live === null) codexInput = codexInputBefore({ stream, source, start });
     cursor = formatCursor(stream, start);
   } catch (error) {
     // another file than one the page is bound to (openBound) is pending, not a missing transcript
@@ -3080,7 +3092,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
   // bounds the turns, so none are cut: they must meet the next page exactly.
   // a page is parsed in stretches (before and after the newest turn start), and OmO's goal wait is
   // only ever the conversation's last word: on an older page, or anywhere but the end, it is over
-  const parsed = live?.turns ?? parseTurns(source, path, text, undefined, undefined, start);
+  const parsed = live?.turns ?? parseTurns(source, path, text, undefined, undefined, start, codexInput);
   const turns = parsed.some((turn, index) => turn.parts[0]?.kind === "goal_wait" && (page.before !== undefined || index < parsed.length - 1))
     ? parsed.filter((turn, index) => turn.parts[0]?.kind !== "goal_wait" || (page.before === undefined && index === parsed.length - 1))
     : parsed;

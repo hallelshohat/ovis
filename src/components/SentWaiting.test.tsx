@@ -7,7 +7,7 @@ import type { Machine } from "../../shared/machines.ts";
 import { paneLifetimes } from "../lib/paneLifetime.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 import { currentWaitingSends, forgetWaitingSends, rememberWaitingSend, settleWaitingSends, WAITING_HINT_MS, waitingBaseline, waitingKey, type WaitingSend } from "../lib/sentWaiting.ts";
-import { SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
+import { ChatInputKind, SentWaitingList, useWaitingSends } from "./SentWaiting.tsx";
 
 const at = Date.parse("2026-10-29T03:00:00Z");
 const send: WaitingSend = { id: 1, pane: "local:p1", text: "fix the flaky test", at, after: null };
@@ -32,6 +32,14 @@ afterEach(() => { setSystemTime(); });
 test("shows native steering and queue states beside the message", () => {
   expect(textWithoutTags(render(at, [{ ...send, native: "steering" }]))).toContain("Steering · current turn");
   expect(textWithoutTags(render(at, [{ ...send, native: "queued" }]))).toContain("Queued · next turn");
+});
+
+test("labels a transcript message sent after interruption without claiming steering", () => {
+  const markup = withEnglish(() => renderToStaticMarkup(createElement(SettingsProvider, {
+    children: createElement(ChatInputKind, { kind: "interrupted" }),
+  })));
+  expect(textWithoutTags(markup)).toBe("Sent after interruption");
+  expect(markup).not.toContain("Steering");
 });
 
 describe("SentWaitingList", () => {

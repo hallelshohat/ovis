@@ -275,6 +275,7 @@ export const CHAT_JA: Record<string, string> = {
   "started {time}": "{time} に開始",
   "stopped": "停止",
   "Steering · current turn": "追加指示 · 現在のターン",
+  "Sent after interruption": "中断後に送信",
   "Queued · next turn": "待機中 · 次のターン",
   "Codex status": "Codex の状態",
 };
