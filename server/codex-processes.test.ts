@@ -1490,7 +1490,7 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     expect(chat.turns.flatMap((turn) => turn.parts).some((part) => part.kind === "tool" && part.output === commandOutputs[0])).toBe(true);
   });
 
-  heldIt("recovers the sole resumed owner when commands fall outside the native tail", async () => {
+  heldIt("indexes commands outside the native tail and still refuses a conflicting loaded peer", async () => {
     await resumedWithSuccessors();
     ownThread([said("agent_message", answer), ...nativeCommands()]);
     await loaded(thread);
@@ -1501,8 +1501,10 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     const chat = await conversationModule.paneConversation(root, home);
     expect(chat.source).toBe("codex-transcript");
     expect(chat.turns.flatMap((turn) => turn.parts)).toContainEqual({ kind: "text", text: answer });
-    otherFolderThread();
+    const peer = otherFolderThread();
     await loaded(other);
+    expect(await resolve()).toBe(path);
+    appendFileSync(peer, JSON.stringify(said("agent_message", toolScreen())) + "\n");
     expect(await resolve()).toBeNull();
     await expect(conversationModule.paneConversation(root, home)).rejects.toMatchObject({ name: "ConversationReadPending" });
   });
@@ -1567,6 +1569,30 @@ describe("a resumed Codex chat beside unloaded newer sessions", () => {
     try { expect(await resolve()).toBe(path); expect(reads).toBeGreaterThan(1); }
     finally { spy.mockRestore(); }
   });
+
+  for (const sameOwner of [true, false]) {
+    heldIt(`${sameOwner ? "recovers" : "refuses"} when new tools on the final screen belong to ${sameOwner ? "the same" : "another"} conversation`, async () => {
+      await resumedWithSuccessors();
+      ownThread(nativeCommands());
+      const peer = otherFolderThread();
+      await loaded(thread, other);
+      screen = toolScreen();
+      const read = herdrClient.paneRead;
+      let reads = 0;
+      const spy = spyOn(herdrClient, "paneRead").mockImplementation(async (args) => {
+        if (args.paneId === root && ++reads === 3) {
+          const next = nativeCommands().map((record) => ({ ...record, payload: { ...record.payload, item: {
+            ...record.payload.item, id: record.payload.item.id + "-next", command: record.payload.item.command.map((arg) => arg.replace("verify", "verify-next").replace("diff", "diff-next")),
+          } } }));
+          appendFileSync(sameOwner ? path : peer, next.map((record) => JSON.stringify(record)).join("\n") + "\n");
+          screen = toolScreen().replace("verify", "verify-next").replace("diff", "diff-next");
+        }
+        return read(args);
+      });
+      try { expect(await resolve()).toBe(sameOwner ? path : null); expect(reads).toBeGreaterThanOrEqual(3); }
+      finally { spy.mockRestore(); }
+    });
+  }
 
   for (const conflicting of [false, true]) {
     heldIt(`${conflicting ? "refuses" : "recovers"} native commands after a competitor appends ${conflicting ? "matching" : "unrelated"} records`, async () => {

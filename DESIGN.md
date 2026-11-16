@@ -3895,6 +3895,19 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   the ordinary cadence without a lens switch; rejected history stays hidden meanwhile. This
   follows T3 Code's separation of [transport health and data freshness](https://github.com/pingdotgg/t3code/blob/main/docs/internals/connection-runtime.md):
   an open socket alone does not prove the conversation is current. No code or new controls are borrowed.
+  A `conversation_read_pending` response is still loading, not a failure: initial reads keep the
+  placeholder; an open chat keeps its transcript, reading position and editable draft, with
+  `Loading conversation…` in the same status region. The existing serial refresh lane retries at
+  its one-second bound without a click. Pending turns do not prove a finish, an empty conversation
+  or a sent-message receipt; a rejected history still clears them. Leaving Chat stops the retries.
+  Codex tool recovery indexes native commands and possible quotations once per history prefix,
+  retaining byte ranges and quotation command prefixes instead of large outputs. Ordinary test
+  summaries do not select every historical output. Candidate ranges in the same file share handles
+  and a 64 KiB read buffer even across metadata gaps; only selected bytes reach the projection. Changing
+  tool previews reuse that index; exact output, peer, process and screen checks still decide ownership.
+  Tools advancing during a process check must prove the newer screen belongs to that same conversation.
+  Peer appends extend the proof for the checked screen. A temporarily unproved check after parsing
+  stays pending rather than replacing an open conversation with an empty fallback.
 
 ### Inspector (`.inspector`)
 - A column on the chrome's surface beside the work panel (`--inspector-w`), from `1200px`: its head
