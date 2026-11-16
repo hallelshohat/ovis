@@ -57,8 +57,11 @@ it("keeps cold Chat and health responsive while a large competing history warms,
   } });
   // Discovery is already covered by the native binding contracts. The costly conflict scan,
   // HTTP pending response, transcript parser and retry below are the production implementations.
-  const resolver = spyOn(codex, "codexTranscriptPath").mockImplementation(async () =>
-    await codexToolActivityConflict({ screen, segments: [{ path: peer, end: statSync(peer).size }] }) ? null : path);
+  let recheckReads = -1;
+  const resolver = spyOn(codex, "codexTranscriptPath").mockImplementation(async () => {
+    if (recheckReads >= 0 && ++recheckReads === 2) { recheckReads = -1; return null; }
+    return await codexToolActivityConflict({ screen, segments: [{ path: peer, end: statSync(peer).size }] }) ? null : path;
+  });
   let app: ReturnType<typeof createServer> | undefined;
   try {
     process.env["HERDR_SOCKET"] = socketPath;
@@ -72,7 +75,7 @@ it("keeps cold Chat and health responsive while a large competing history warms,
     expect(cold.status).toBe(503);
     expect(cold.headers.get("cache-control")).toContain("no-store");
     expect(coldMs).toBeLessThan(500);
-    await cold.arrayBuffer();
+    expect(await cold.json()).toMatchObject({ error: { code: "conversation_read_pending" } });
 
     const ping = performance.now();
     const health = await fetch(`${base}/api/health?scope=bridge`);
@@ -89,7 +92,7 @@ it("keeps cold Chat and health responsive while a large competing history warms,
       await setImmediate();
     }
     expect(ready).toBeDefined();
-    const body = z.object({ source: z.literal("codex-transcript"), turns: z.array(z.object({ parts: z.array(z.object({ kind: z.string(), text: z.string().optional() })) })) }).safeParse(await ready!.json());
+    const body = z.object({ source: z.literal("codex-transcript"), history_id: z.string(), turns: z.array(z.object({ parts: z.array(z.object({ kind: z.string(), text: z.string().optional() })) })) }).safeParse(await ready!.json());
     expect(body.success).toBe(true);
     if (!body.success) throw new Error("invalid Chat fixture response");
     expect(body.data.turns.flatMap((turn) => turn.parts).some((part) => part.text === answer)).toBe(true);
@@ -107,6 +110,24 @@ it("keeps cold Chat and health responsive while a large competing history warms,
     expect(growing.status).toBe(200);
     expect(appendMs).toBeLessThan(500);
     await growing.arrayBuffer();
+    const shown = `${url}&history_id=${encodeURIComponent(body.data.history_id)}`;
+    recheckReads = 0;
+    const lostRecheck = await fetch(shown);
+    expect(lostRecheck.status).toBe(503);
+    expect(await lostRecheck.json()).toMatchObject({ error: { code: "conversation_read_pending" } });
+    const retriedRecheck = await fetch(shown);
+    expect(retriedRecheck.status).toBe(200);
+    expect(await retriedRecheck.json()).toMatchObject({ history_id: body.data.history_id, turns: body.data.turns });
+    appendFileSync(peer, '{"type":"event_msg","payload":{"type":"agent_message","message":"');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const partial = await fetch(shown);
+      expect(partial.status).toBe(503);
+      expect(await partial.json()).toMatchObject({ error: { code: "conversation_read_pending" } });
+    }
+    appendFileSync(peer, 'Unrelated completed append."}}\n');
+    const recovered = await fetch(shown);
+    expect(recovered.status).toBe(200);
+    expect(await recovered.json()).toMatchObject({ history_id: body.data.history_id, turns: body.data.turns });
     console.log(JSON.stringify({ case: "history latency", coldMs, healthMs, readyMs, warmMs, appendMs }));
   } finally {
     app?.stop();
