@@ -3876,7 +3876,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   or a sent-message receipt; a rejected history still clears them. Leaving Chat stops the retries.
   Codex tool recovery indexes native commands and possible quotations once per history prefix,
   retaining byte ranges and quotation command prefixes instead of large outputs. Ordinary test
-  summaries do not select every historical output; adjacent candidates share one read. Changing
+  summaries do not select every historical output. Candidate ranges in the same file share handles
+  and a 64 KiB read buffer even across metadata gaps; only selected bytes reach the projection. Changing
   tool previews reuse that index; exact output, peer, process and screen checks still decide ownership.
   Tools advancing during a process check must prove the newer screen belongs to that same conversation.
   Peer appends extend the proof for the checked screen. A temporarily unproved check after parsing

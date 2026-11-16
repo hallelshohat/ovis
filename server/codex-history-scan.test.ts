@@ -68,6 +68,55 @@ it("indexes byte spans across UTF-8 chunks and reads only the selected record", 
   expect((await selected(Buffer.byteLength(first)))?.value).toEqual([2, 3]);
 });
 
+it("batches separated ranges by file and reuses one stat for their cached validation", async () => {
+  const segments: CodexHistorySpan[] = [], parts: string[] = [];
+  let end = 0;
+  for (let n = 0; n < 1200; n++) {
+    const line = JSON.stringify({ n }) + "\n", gap = '{"n":-1,"type":"token_count"}\n';
+    segments.push({ path, start: end, end: end + Buffer.byteLength(line) });
+    parts.push(line, gap);
+    end += Buffer.byteLength(line + gap);
+  }
+  writeFileSync(path, parts.join(""));
+  const opened = spyOn(files, "open"), stated = spyOn(files, "stat");
+  const read = (key: string) => scanCodexHistory({ key, segments, cache, initial: () => [], each });
+  try {
+    expect((await eventually(() => read("warm"))).value).toEqual(Array.from({ length: 1200 }, (_, n) => n));
+    for (let query = 0; query < 3; query++) {
+      opened.mockClear(); stated.mockClear();
+      expect((await read(String(query)))?.value).toEqual(Array.from({ length: 1200 }, (_, n) => n));
+      expect(opened).toHaveBeenCalledTimes(2);
+      expect(stated).toHaveBeenCalledTimes(1);
+    }
+    opened.mockClear(); stated.mockClear();
+    expect((await read("2"))?.value.length).toBe(1200);
+    expect(opened).not.toHaveBeenCalled();
+    expect(stated).toHaveBeenCalledTimes(1);
+  } finally { await resetCodexHistoryScans(); opened.mockRestore(); stated.mockRestore(); }
+});
+
+it("keeps UTF-8 ranges separate across large gaps and preserves caller path order", async () => {
+  const first = JSON.stringify({ n: 1, text: "é🙂".repeat(20_000) }) + "\n";
+  const gap = JSON.stringify({ n: 99, text: "x".repeat(2 * 1024 * 1024) }) + "\n";
+  const last = '{"n":2}';
+  writeFileSync(path, first + gap + last);
+  const other = join(root, "other.jsonl");
+  writeFileSync(other, '{"n":3}\n');
+  const segments = [{ path, start: 0, end: Buffer.byteLength(first) },
+    { path, start: Buffer.byteLength(first + gap), end: statSync(path).size }];
+  const read = () => scanCodexHistory({ key: "gaps", segments, cache, initial: () => [], each });
+  expect((await eventually(read)).value).toEqual([1, 2]);
+  appendFileSync(path, '\n{"n":4}\n');
+  segments[1]!.end = statSync(path).size;
+  expect((await read())?.value).toEqual([1, 2, 4]);
+  const ordered = [segments[0]!, { path: other, start: 0, end: statSync(other).size, identity: statSync(other) }, segments[1]!];
+  expect((await scanCodexHistory({ key: "order", segments: ordered, cache, initial: () => [], each }))?.value).toEqual([1, 3, 2, 4]);
+  expect((await scanCodexHistory({ key: "empty", segments: [{ path, start: segments[1]!.end, end: segments[1]!.end }], cache, initial: () => [], each }))?.value).toEqual([]);
+  renameSync(other, join(root, "old"));
+  writeFileSync(other, '{"n":8}\n');
+  expect(await scanCodexHistory({ key: "order", segments: ordered, cache, initial: () => [], each })).toBeNull();
+});
+
 it("never continues an indexed range after its file is replaced or its final record is partial", async () => {
   writeFileSync(path, '{"n":0}\n{"n":1}\n');
   const read = () => scanCodexHistory({ key: "selected", segments: [{ path, start: 8, end: statSync(path).size }], cache, initial: () => [], each });

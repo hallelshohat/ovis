@@ -259,6 +259,39 @@ describe("Codex native command screen ownership", () => {
     } finally { await resetCodexHistoryScans(); rmSync(root, { recursive: true, force: true }); }
   }, 15_000);
 
+  it("recovers repeated native commands separated by metadata while the screen advances", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-tool-repeated-")), path = join(root, "own.jsonl");
+    const output = (sequence: number) => outputs[0]! + ` Iteration ${sequence} complete.`;
+    const completed = (sequence: number) => JSON.stringify({ ...events[0], payload: { ...events[0]!.payload, item: {
+      ...events[0]!.payload.item, id: `repeat-${sequence}`, aggregated_output: output(sequence),
+    } } }) + "\n" + JSON.stringify({ type: "event_msg", payload: { type: "token_count", sequence } }) + "\n";
+    const shown = (sequence: number) => screen.replace(commands[1]!, commands[0]!)
+      .replace(outputs[0]!, output(sequence - 1)).replace(outputs[1]!, output(sequence));
+    const read = (sequence: number) => matchCodexToolHistories({ screen: shown(sequence), candidates: [{ path, segments: [{ path, end: statSync(path).size }] }] });
+    const opened = spyOn(files, "open");
+    try {
+      writeFileSync(path, Array.from({ length: 1201 }, (_, sequence) => completed(sequence)).join(""));
+      const until = performance.now() + 10_000;
+      while (await read(1200) !== path) {
+        expect(performance.now()).toBeLessThan(until);
+        await setImmediate();
+      }
+      for (let sequence = 1201; sequence <= 1212; sequence++) {
+        appendFileSync(path, completed(sequence));
+        opened.mockClear();
+        const start = performance.now(), owner = await read(sequence);
+        console.log(JSON.stringify({ case: "interleaved repeated commands", sequence, owner: owner === path,
+          ms: Math.round(performance.now() - start), opens: opened.mock.calls.length }));
+        expect(owner).toBe(path);
+        expect(opened.mock.calls.length).toBeLessThanOrEqual(4);
+        await setImmediate();
+      }
+      const peer = join(root, "peer.jsonl");
+      writeFileSync(peer, completed(1211) + completed(1212));
+      expect(await matchCodexToolHistories({ screen: shown(1212), candidates: [path, peer].map((path) => ({ path, segments: [{ path, end: statSync(path).size }] })) })).toBeNull();
+    } finally { await resetCodexHistoryScans(); opened.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+  }, 15_000);
+
   it("batches contiguous quote candidates with shared long command prefixes as output changes", async () => {
     const root = mkdtempSync(join(tmpdir(), "ovis-tool-quote-ranges-")), path = join(root, "peer.jsonl");
     const long = "bun run verify --project /work/" + "shared-command-prefix/".repeat(8);

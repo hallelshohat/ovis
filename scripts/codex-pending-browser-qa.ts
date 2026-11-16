@@ -164,9 +164,10 @@ def append(identity, payload):
     with open(os.path.join(home, 'sessions', 'rollout-' + identity + '.jsonl'), 'a') as out:
         out.write(json.dumps({'type': 'event_msg', 'timestamp': '2026-11-16T10:00:00Z', 'payload': payload}) + '\n')
 def completed(sequence):
-    command = 'printf recovery_probe_' + str(sequence) + ' && true'
+    command = 'printf recovery_probe && true'
     output = 'Probe' + str(sequence) + ' abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 verified\nRan 1 test across 1 file.'
     append(own, {'type': 'item_completed', 'item': {'type': 'CommandExecution', 'id': 'probe-' + str(sequence), 'command': ['/bin/sh', '-c', command], 'cwd': root, 'parsed_cmd': [], 'status': 'completed', 'aggregated_output': output, 'exit_code': 0}})
+    append(own, {'type': 'token_count', 'sequence': sequence})
     return '• Ran ' + command + '\n  └ ' + output.replace('\n', '\n    ')
 hold(own)
 hold(peer)
