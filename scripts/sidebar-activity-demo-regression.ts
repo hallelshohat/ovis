@@ -298,21 +298,11 @@ async function withPage(browser: Browser, settings: object, run: (page: Page) =>
 
 let url = "";
 
-async function tabStatuses({ page, mobile }: { page: Page; mobile: boolean }): Promise<Array<{ active: boolean; status: string | null }>> {
-  const drawer = page.locator('button[aria-controls="workspace-drawer"]');
-  const drawerOpen = mobile && await page.locator(".sidebar.is-open").count() > 0;
-  if (drawerOpen) await closeDrawer(page);
-  if (mobile) {
-    await page.locator(".app-header .context-tabs").click();
-    await page.locator('.row-sheet-item[data-item^="tab:"]').first().waitFor();
-  }
-  const statuses = await page.locator(mobile ? '.row-sheet-item[data-item^="tab:"]' : ".tab-strip-item").evaluateAll((items) => items.map((item) => ({
+async function tabStatuses(page: Page): Promise<Array<{ active: boolean; status: string | null }>> {
+  return await page.locator(".tab-strip-item").evaluateAll((items) => items.map((item) => ({
     active: item.classList.contains("is-active") || item.getAttribute("aria-current") === "true",
     status: item.querySelector(".tab-strip-dot")?.getAttribute("data-status") ?? null,
   })));
-  if (mobile) await page.locator(".row-sheet-cancel").click();
-  if (drawerOpen) await drawer.click();
-  return statuses;
 }
 
 async function closeDrawer(page: Page): Promise<void> {
@@ -367,7 +357,7 @@ try {
           }
           await workspace.and(page.locator('[data-status="done"]')).waitFor();
           assert.equal(await agent(page, API).locator(".sidebar-status").getAttribute("data-status"), "idle", "Claude's finish is already acknowledged");
-          assert.equal((await tabStatuses({ page, mobile })).find((tab) => tab.active)?.status, "done", "the tab agrees that both agents finished");
+          assert.equal((await tabStatuses(page)).find((tab) => tab.active)?.status, "done", "the tab agrees that both agents finished");
           const evidence = process.env["UI_EVIDENCE_DIR"];
           if (evidence) {
             mkdirSync(evidence, { recursive: true });
@@ -394,7 +384,7 @@ try {
             await window.sidebarFixture.finish(web, "done", 101);
           }, panes);
           await parent.locator(':scope > .workspace-header .sidebar-status[data-status="working"]').waitFor();
-          assert.equal((await tabStatuses({ page, mobile })).filter((tab) => !tab.active && tab.status === "working").length, 1,
+          assert.equal((await tabStatuses(page)).filter((tab) => !tab.active && tab.status === "working").length, 1,
             "an inactive tab's working agent keeps its workspace working");
           const fold = parent.locator(":scope > .workspace-header .workspace-toggle");
           await fold.click();
@@ -413,7 +403,7 @@ try {
           const workspace = page.locator(`.workspace-select[data-pane="${panes.web}"]`);
           if (mobile) await drawer.tap();
           await workspace.locator('.sidebar-status[data-status="working"]').waitFor();
-          assert.equal((await tabStatuses({ page, mobile })).find((tab) => tab.active)?.status, "working", "split tab combines both agents");
+          assert.equal((await tabStatuses(page)).find((tab) => tab.active)?.status, "working", "split tab combines both agents");
           if (!mobile) {
             const left = await split.boundingBox();
             const right = await page.locator(`.pane-frame[data-layout-pane="${panes.api}"]`).boundingBox();
@@ -435,7 +425,7 @@ try {
           }, panes);
           if (mobile) await drawer.tap();
           await workspace.locator('.sidebar-status[data-status="working"]').waitFor();
-          assert.equal((await tabStatuses({ page, mobile })).find((tab) => tab.active)?.status, "working", "a working sibling wins in either pane order");
+          assert.equal((await tabStatuses(page)).find((tab) => tab.active)?.status, "working", "a working sibling wins in either pane order");
           if (mobile) await closeDrawer(page);
           await agent(page, INFRA).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
           await page.evaluate(async ({ api, web }) => {
@@ -445,7 +435,7 @@ try {
           if (mobile) await drawer.tap();
           await workspace.locator('.sidebar-status[data-status="done"]').waitFor();
           await agent(page, WEB).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
-          assert.equal((await tabStatuses({ page, mobile })).find((tab) => tab.active)?.status, "done", "the completed tab stays done when selected");
+          assert.equal((await tabStatuses(page)).find((tab) => tab.active)?.status, "done", "the completed tab stays done when selected");
         }, mobile);
         console.log("PASS split workspace and tab stay working in either pane order, including mobile, inactive tabs and collapsed groups; all agents done completes the workspace; palette keeps pane statuses");
       }
