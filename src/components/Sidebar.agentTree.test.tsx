@@ -167,8 +167,9 @@ describe("Settings > Appearance > Agents under workspaces (#773)", () => {
     expect(selected).toEqual([]);
     expect(tree()).toEqual([["api"], ["web", "web:pi"]]);
     expect(selectOf("api").props["aria-expanded"]).toBe(false);
+    // folded, the row keeps the selected agent's place, the active agent's state and a count of what is put away
     expect(rowOf("api").props.className).toContain("has-selected-agent");
-    expect(selectOf("api").findAll((node) => node.props["data-status"] !== undefined).map((node) => node.props["data-status"])).toEqual(["blocked"]);
+    expect(selectOf("api").findAll((node) => node.props["data-status"] !== undefined).map((node) => node.props["data-status"])).toEqual(["working"]);
     expect(rowOf("api").findAll((node) => node.props.className === "workspace-fold-count").map(text)).toEqual(["+2"]);
     expect(JSON.parse(stored.get("ovis:workspace-agents-folded:local")!)).toEqual(["api"]);
     await act(async () => renderer!.unmount());
