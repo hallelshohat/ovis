@@ -301,7 +301,7 @@ let url = "";
 async function tabStatuses({ page, mobile }: { page: Page; mobile: boolean }): Promise<Array<{ active: boolean; status: string | null }>> {
   const drawer = page.locator('button[aria-controls="workspace-drawer"]');
   const drawerOpen = mobile && await page.locator(".sidebar.is-open").count() > 0;
-  if (drawerOpen) await drawer.click();
+  if (drawerOpen) await closeDrawer(page);
   if (mobile) {
     await page.locator(".app-header .context-tabs").click();
     await page.locator('.row-sheet-item[data-item^="tab:"]').first().waitFor();
@@ -313,6 +313,17 @@ async function tabStatuses({ page, mobile }: { page: Page; mobile: boolean }): P
   if (mobile) await page.locator(".row-sheet-cancel").click();
   if (drawerOpen) await drawer.click();
   return statuses;
+}
+
+async function closeDrawer(page: Page): Promise<void> {
+  const scrim = page.locator(".scrim.is-open");
+  const outside = await scrim.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return { x: rect.right - 8, y: rect.top + rect.height / 2 };
+  });
+  await page.waitForFunction(({ x, y }) => document.elementFromPoint(x, y)?.matches(".scrim.is-open"), outside);
+  await page.touchscreen.tap(outside.x, outside.y);
+  await page.locator("#workspace-drawer.is-open").waitFor({ state: "detached" });
 }
 
 try {
@@ -362,7 +373,7 @@ try {
             mkdirSync(evidence, { recursive: true });
             await page.screenshot({ path: join(evidence, `split-unread-finish-${mobile ? "phone" : "desktop"}.png`), animations: "disabled" });
           }
-          if (mobile) await drawer.tap();
+          if (mobile) await closeDrawer(page);
           await agent(page, WEB).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
           await page.keyboard.press("ControlOrMeta+Shift+J");
           await page.locator(`.pane-frame[data-layout-pane="${panes.web}"] .terminal-stack:not(.is-chat)[data-pane-content]`).waitFor();
@@ -395,7 +406,7 @@ try {
           await fold.click();
 
           await page.evaluate(({ api, web }) => window.sidebarFixture.split(api, web), panes);
-          if (mobile) await drawer.tap();
+          if (mobile) await closeDrawer(page);
           await agent(page, WEB).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
           const split = page.locator(`.pane-frame[data-layout-pane="${panes.web}"]`);
           await split.locator(".terminal-stack.is-chat").waitFor();
@@ -413,7 +424,7 @@ try {
             mkdirSync(evidence, { recursive: true });
             await page.screenshot({ path: join(evidence, `split-status-${mobile ? "phone" : "desktop"}.png`), animations: "disabled" });
           }
-          if (mobile) await drawer.tap();
+          if (mobile) await closeDrawer(page);
           await page.keyboard.press("ControlOrMeta+Shift+K");
           await page.locator(`.palette-pane[data-pane="${panes.web}"] [data-status="working"]`).waitFor();
           await page.locator(`.palette-pane[data-pane="${panes.api}"] [data-status="done"]`).waitFor();
@@ -425,7 +436,7 @@ try {
           if (mobile) await drawer.tap();
           await workspace.locator('.sidebar-status[data-status="working"]').waitFor();
           assert.equal((await tabStatuses({ page, mobile })).find((tab) => tab.active)?.status, "working", "a working sibling wins in either pane order");
-          if (mobile) await drawer.tap();
+          if (mobile) await closeDrawer(page);
           await agent(page, INFRA).locator(".agent-select").evaluate((button: HTMLElement) => button.click());
           await page.evaluate(async ({ api, web }) => {
             await window.sidebarFixture.finish(api, "done", 106);
@@ -743,14 +754,8 @@ try {
             mkdirSync(evidence, { recursive: true });
             await page.screenshot({ path: join(evidence, "finish-drawer-phone.png") });
           }
-          const scrim = page.locator(".scrim.is-open");
-          const outside = await scrim.evaluate((node) => {
-            const rect = node.getBoundingClientRect();
-            return { x: rect.right - 8, y: rect.top + rect.height / 2 };
-          });
-          await page.waitForFunction(({ x, y }) => document.elementFromPoint(x, y)?.matches(".scrim.is-open"), outside);
-          await page.touchscreen.tap(outside.x, outside.y);
-          await page.locator("#workspace-drawer.is-open").waitFor({ state: "detached" });
+          // the open drawer's head is the Ovis mark: a tap on the dimmed pane beside it closes it
+          await closeDrawer(page);
           await agent(page, INFRA).locator('.sidebar-status[data-status="idle"]').waitFor({ state: "attached" });
         }, true);
         console.log("PASS a phone drawer covering the selected pane preserves both DONE dots until uncovered");
