@@ -831,6 +831,9 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       committing(steering, false, enterMark);
       // Claude Code queues what Enter commits during a turn; Ctrl+Enter sends it now (#737). herdr
       // encodes the key as the pane asked, and as a plain CR for a program that asked for nothing.
+      // Grok queues that same Enter while a turn runs. Only Send now (neither automatic nor queued) then sends
+      // one more Enter, and only while the message is the one row queued (sendGrokQueuedNow); a queued request
+      // typed at once is not a Send now and stays queued behind the turn.
       const sentAt = Date.now();
       // Not seen: a task whose fire Claude has not written by then (the entry reaches the transcript some tens of milliseconds
       // after the task fires), or that fires while herdr hands the key to the pane
@@ -840,7 +843,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // the screen after its Enter says whether Grok queued the message, also from a Grok read at rest: another client
       // can start a turn before the Enter, and in minimal mode herdr does not tell a running turn. Compared with the
       // queue as read right before that Enter, with this delivery's paste in the prompt
-      if (interruptWorkingCodex && beforeEnter.identity.agent === "grok") {
+      if (!automatic && !queued && beforeEnter.identity.agent === "grok") {
         // the queue Enter already went: every failure here is submit_changed (wrote is set), never enterRefused's
         // paste left unsent, or a retry would queue the message twice.
         await sendGrokQueuedNow({
