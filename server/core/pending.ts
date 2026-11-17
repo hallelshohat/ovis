@@ -751,7 +751,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
   }
 
   async function dispatchPendingText(owner: Client, paneId: string, text: string, lease: PendingLease, identity: PendingIdentity,
-    automatic: boolean, arrivedAt: number, committing: (working: boolean) => void = () => {}, sendNow = false,
+    automatic: boolean, arrivedAt: number, committing: (working: boolean) => void = () => {},
     requestId = 0, agentOnly = false, queued = false,
     row: { withdrawn?: () => boolean; waiting?: (waits: boolean) => void; uncertain?: () => void } = {}, nativeItem?: PendingItem): Promise<SubmitReply> {
     let wrote = false;
@@ -976,7 +976,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       // the screen after its Enter says whether Grok queued the message, also from a Grok read at rest: another client
       // can start a turn before the Enter, and in minimal mode herdr does not tell a running turn. Compared with the
       // queue as read right before that Enter, with this delivery's paste in the prompt
-      if (sendNow && beforeEnter.identity.agent === "grok") {
+      if (!automatic && !queued && beforeEnter.identity.agent === "grok") {
         // the queue Enter already went: every failure here is submit_changed (wrote is set), never enterRefused's
         // paste left unsent, or a retry would queue the message twice.
         await sendGrokQueuedNow({
@@ -1032,13 +1032,13 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       return { ok: false, ...fault, ...(unannounced ? { unannounced } : {}) };
     } finally { piCapacity.release(piReservation); }
   }
-  async function dispatchPending(item: PendingItem, automatic: boolean, arrivedAt: number, sendNow = false, by: Client | null = isClient(item.owner) ? item.owner : null): Promise<SubmitReply> {
+  async function dispatchPending(item: PendingItem, automatic: boolean, arrivedAt: number, by: Client | null = isClient(item.owner) ? item.owner : null): Promise<SubmitReply> {
     let reply: SubmitReply;
     try {
       if (by === null) throw new HerdrError("input_not_ready", "No connection has the pane attached to type the message");
       const lease = item.lease ?? pendingLease(by, item.paneId);
       reply = await dispatchPendingText(by, item.paneId, item.message.text, lease, item.identity,
-        automatic, arrivedAt, (working) => pending.committing(item, working), sendNow, item.message.request_id, item.message.agent_only === true, false,
+        automatic, arrivedAt, (working) => pending.committing(item, working), item.message.request_id, item.message.agent_only === true, false,
         { withdrawn: () => withdrawn.has(item), waiting: (waits) => pending.sendingWaitsFor(item, waits ? "omp_starting" : undefined) }, item);
     } catch (error) {
       reply = { ok: false, ...pendingFault(error, options.herdrFailure) };
@@ -1089,7 +1089,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       if (await awaitsOmp(item)) return;
       if (!pending.claim(item, true)) return;
       dispatched = true;
-      await dispatchPending(item, true, arrivedAt, false, by);
+      await dispatchPending(item, true, arrivedAt, by);
       takenWithPane(item, arrivedAt);
     }).catch((error) => console.warn("pending message:", pendingFault(error, options.herdrFailure).code)).finally(() => {
       pendingDrains.delete(paneId);
@@ -1604,7 +1604,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
               if (noPiSession === undefined && message.delivery !== "hold" && !pending.waiting(message.pane_id) && !typedWhileOmpStarted(message.pane_id)) {
                 const sendingAt = new Date().toISOString();
                 const typed = await dispatchPendingText(client, message.pane_id, text, lease!, context.identity, false, arrivedAt,
-                  (working) => pending.typedAtOnce(message.pane_id, working), false, message.id, agentOnly, true, { uncertain: afterWriteFailure });
+                  (working) => pending.typedAtOnce(message.pane_id, working), message.id, agentOnly, true, { uncertain: afterWriteFailure });
                 if (typed.ok || typed.code !== "pending_wait") return typed.ok ? { ...typed, sending_at: sendingAt } : typed;
                 waited = true;
               }
@@ -1832,7 +1832,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
                 if (!pending.claim(item, false)) return { ok: false, code: "pending_busy", message: "This message is already being sent" };
                 if (isClient(item.owner)) item.lease = lease!;
                 dispatched = true;
-                return await dispatchPending(item, false, arrivedAt, true, client);
+                return await dispatchPending(item, false, arrivedAt, client);
               } catch (error) { return { ok: false, ...pendingFault(error, options.herdrFailure) }; }
             }, message.resend_generation, (code) => code === "submit_changed");
           if (!dispatched && pending.get(client, item.paneId, item.message.id) === item && pending.claim(item, false))
