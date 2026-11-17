@@ -23,7 +23,6 @@ import { codexComposer, FOOTER } from "./codex-steering.ts";
 import { codexStartScreenUnused } from "./start-screen.ts";
 import { codexDisplayEvent, codexNativeItem } from "./codex-items.ts";
 import { codexInputSessions } from "../shared/codex-chunks.ts";
-import { codexToolActivityConflict, hasCodexToolActivity, matchCodexToolActivity } from "./codex-tool-match.ts";
 import { resetCodexHistoryScans, scanCodexHistory, type CodexHistoryScan } from "./codex-history-scan.ts";
 import { codexToolActivityConflict, hasCodexToolActivity, matchCodexToolHistories } from "./codex-tool-match.ts";
 import { deepStrings, stringsIn } from "../shared/json-text.ts";
