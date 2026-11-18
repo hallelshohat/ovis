@@ -4519,17 +4519,19 @@ describe("a model drawn only in the history above the live screen", () => {
   it("names no model from an older Codex footer above a cleared live screen", async () => {
     const id = shown("codex", "working", "  >_ OpenAI Codex (v0.163.0)\n\n\u203a Ask Codex to do anything\n\n  GPT-6-Luna medium \u00b7 /tmp/project\n  ? for shortcuts\n", "\n\n\n\n\n\n\n");
     const answer = await paneConversation(id, join(root, ".codex")).catch((error: unknown) => error);
-    expect(answer).toBeInstanceOf(ConversationUnavailable);
-    expect((answer as ConversationUnavailable).screen).toBeUndefined();
+    expect(answer).toBeInstanceOf(ConversationReadPending);
+    expect(answer).not.toHaveProperty("screen");
   });
 
   it("names the model only when the viewport stayed at the bottom, with the same history, around its read", async () => {
     const frame = "  >_ OpenAI Codex (v0.163.0)\n\n\u203a Ask Codex to do anything\n\n  GPT-6.1-Sol low \u00b7 /tmp/project\n  ? for shortcuts\n";
     const named = async (scrolls: ([number, number] | null | "fail")[]) => {
-      const id = shown("codex", "working", "", frame, scrolls);
-      const answer = await paneConversation(id, join(root, ".codex")).catch((error: unknown) => error);
+      const id = shown("codex", "idle", "", frame, scrolls);
+      launchedAgents.launched(id, "codex");
+      const answer = await paneConversation(id, join(root, ".codex"));
+      launchedAgents.forget(id);
       for (const mock of mocks.splice(0)) mock.mockRestore();
-      return (answer as ConversationUnavailable).screen?.model ?? null;
+      return answer.metadata?.model ?? null;
     };
     expect(await named([[0, 30], [0, 30]])).toBe("gpt-6.1-sol");
     expect(await named([[3, 30], [0, 30]])).toBeNull();
@@ -4564,8 +4566,8 @@ describe("a model drawn only in the history above the live screen", () => {
     }
     const terminal = shown("codex", "working", "", codex, [null]);
     const answer = await paneConversation(terminal, join(root, ".codex")).catch((error: unknown) => error);
-    expect(answer).toBeInstanceOf(ConversationUnavailable);
-    expect((answer as ConversationUnavailable).screen).toBeUndefined();
+    expect(answer).toBeInstanceOf(ConversationReadPending);
+    expect(answer).not.toHaveProperty("screen");
   });
 });
 

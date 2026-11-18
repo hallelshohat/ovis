@@ -82,13 +82,6 @@ function installSidebarFixture(): void {
               { pane_id: target.pane_id, focused: false, rect: { ...layout.area, x: layout.area.x + half, width: half } },
             ];
           }
-          if (state.zoom.split) {
-            const half = layout.area.width / 2;
-            layout.panes = [
-              { pane_id: focused.pane_id, focused: true, rect: { ...layout.area, width: half } },
-              { pane_id: target.pane_id, focused: false, rect: { ...layout.area, x: layout.area.x + half, width: half } },
-            ];
-          }
         }
       }
     }
