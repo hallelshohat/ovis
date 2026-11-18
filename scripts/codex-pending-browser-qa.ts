@@ -31,7 +31,7 @@ async function checkCodexPendingRecovery(): Promise<void> {
   let workspaceId: string | undefined;
   let server: ReturnType<typeof createServer> | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
-  let writer: ReturnType<typeof Bun.spawn> | undefined;
+  let writer: Bun.Subprocess<"ignore", "pipe", "inherit"> | undefined;
   try {
     mkdirSync(join(home, "sessions"), { recursive: true });
     mkdirSync(join(home, "thread-writer-locks"));
