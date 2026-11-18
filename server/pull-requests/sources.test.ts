@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ConversationTurn } from "../../shared/protocol.ts";
@@ -127,8 +127,7 @@ describe("a chat's pull request sources", () => {
   it("reads a file again from its start when it was replaced", async () => {
     const path = file("replaced.jsonl", [native({ url: "https://github.com/acme/api/pull/1" })]);
     await fileSources(path);
-    rmSync(path);
-    file("replaced.jsonl", [native({ url: "https://github.com/acme/api/pull/2" })]);
+    renameSync(file("replacement.jsonl", [native({ url: "https://github.com/acme/api/pull/2" })]), path);
     expect((await fileSources(path)).urls.map((u) => u.url)).toEqual(["https://github.com/acme/api/pull/2"]);
   });
 
