@@ -7,6 +7,7 @@ import { chromium, type Page } from "playwright-core";
 import { demoPullRequests } from "../site/demo/pullRequests.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
+import { serveDemo } from "./demo-server.ts";
 import { chromePath } from "./chrome-path.ts";
 
 const app = mkdtempSync(join(tmpdir(), "ovis-sidebar-readable-"));
@@ -106,13 +107,7 @@ try {
   writeFileSync(join(app, "sidebar-readable.js"), patch);
   const index = join(app, "index.html");
   writeFileSync(index, readFileSync(index, "utf8").replace(/<script type="module"/, '<script src="./demo-transport.js"></script><script src="./sidebar-readable.js"></script><script type="module"'));
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    let file: string;
-    try { file = decodeURIComponent(new URL(request.url).pathname.slice(1)) || "index.html"; } catch { return new Response("bad path", { status: 400 }); }
-    if (file.split("/").includes("..") || file.includes("\\")) return new Response("bad path", { status: 400 });
-    const body = Bun.file(join(app, file));
-    return await body.exists() ? new Response(body) : new Response("not found", { status: 404 });
-  } });
+  const server = serveDemo(app, { prefix: "/" });
   try {
     const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
     try {
