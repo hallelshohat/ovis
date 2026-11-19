@@ -1,8 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { codexSteeringPending } from "./codex-steering.ts";
+import { readFileSync } from "node:fs";
+import { codexComposer, codexSteeringPending } from "./codex-steering.ts";
 
 const hint = "Messages to be submitted after next tool call (press esc to interrupt and send immediately)";
 const frame = (header = hint, composer = "› Ask Codex to do anything") => `› earlier input\n• Working (2s • esc to interrupt)\n• ${header}\n  ↳ send this now\n${composer}\n  gpt-6.1 default · /workspace\n`;
+const recorded169 = readFileSync(new URL("./fixtures/codex-chat-parity/0.169.0-steering-wrapped-footer.txt", import.meta.url), "utf8");
+const recordedMessage = "CONFIRM_BACKGROUND: acknowledge this marker and keep waiting.";
 
 describe("Codex's live steering buffer", () => {
   it("recognizes the recorded empty composer when the model footer wraps its thread title", () => {

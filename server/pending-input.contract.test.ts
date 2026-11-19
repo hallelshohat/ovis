@@ -14,7 +14,6 @@ import { OmoStatus } from "./omo-status.ts";
 import * as claudeStore from "./claude-store.ts";
 import * as agentLaunchModule from "./agent-launch.ts";
 import * as piModule from "./pi.ts";
-import * as conversation from "./conversation.ts";
 import { MachineManager } from "./machines.ts";
 import { DeviceStore } from "./devices.ts";
 import { DEVICE_COOKIE } from "./auth.ts";
