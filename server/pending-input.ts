@@ -277,7 +277,6 @@ export class PendingInputs<Owner, Lease> {
       ? { by, committed: true, sawWorking: true, completed: false, deadline: null, joined: now + this.startTimeoutMs, since: now }
       : { by, committed: true, sawWorking: false, completed: false, deadline: now + this.startTimeoutMs, since: now };
     this.gates.set(item.paneId, gate);
-
   }
 
   /**
