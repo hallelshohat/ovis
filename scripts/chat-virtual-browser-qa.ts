@@ -577,9 +577,17 @@ try {
       const box = await page.locator(".chat-view").boundingBox();
       assert.ok(box);
       const cdp = await context.newCDPSession(page);
-      await cdp.send("Input.synthesizeScrollGesture", { x: box.x + box.width / 2, y: box.y + box.height / 3, yDistance: 300, speed: 500, gestureSourceType: width === 390 ? "touch" : "mouse" });
+      const x = box.x + box.width / 2, y = box.y + box.height / 3;
+      if (width === 390) {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+        for (let step = 1; step <= 6; step++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + step * 50 }] });
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      } else {
+        await cdp.send("Input.synthesizeScrollGesture", { x, y, yDistance: 300, speed: 500, gestureSourceType: "mouse" });
+      }
       await cdp.detach();
       await page.getByRole("button", { name: "Jump to latest", exact: true }).waitFor();
+      await settled(page);
       const reading = await metrics(page);
       assert.ok(reading.anchor && reading.bottom > 1);
       const readingTrace = await recordScroll(page);
