@@ -68,7 +68,7 @@ it("asks the server to try an off PC now on Check again, once per hold however o
   jest.useFakeTimers();
   const asked: { url: string; method: string | undefined }[] = [];
   const fetched = spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
-    asked.push({ url: String(input), method: init?.method });
+    if (String(input).endsWith("/session")) asked.push({ url: String(input), method: init?.method });
     return new Response(JSON.stringify({ error: { code: "machine_offline", message: "This PC is disconnected" } }), { status: 503, headers: { "content-type": "application/json" } });
   }) as typeof fetch);
   try {
@@ -124,7 +124,8 @@ it("says nothing of an earlier ask that fails after a later one", async () => {
   jest.useFakeTimers();
   const first = Promise.withResolvers<Response>();
   let calls = 0;
-  const fetched = spyOn(globalThis, "fetch").mockImplementation((async (_input: RequestInfo | URL, _init?: RequestInit) => {
+  const fetched = spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL, _init?: RequestInit) => {
+    if (!String(input).endsWith("/session")) return new Response(null, { status: 404 });
     calls++;
     return calls === 1 ? first.promise : new Response(JSON.stringify({ error: { code: "machine_offline", message: "This PC is disconnected" } }), { status: 503, headers: { "content-type": "application/json" } });
   }) as typeof fetch);

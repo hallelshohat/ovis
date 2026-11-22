@@ -33,7 +33,7 @@ export function useFlip(container: RefObject<HTMLElement | null>, attr: string):
     }
     const animations: Animation[] = [];
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!reduced && typeof Element.prototype.animate === "function") {
+    if (!reduced && typeof Element !== "undefined" && typeof Element.prototype.animate === "function") {
       for (const [key, delta] of flipDeltas(tops.current, after)) {
         animations.push(rows.get(key)!.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], { duration: FLIP_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" }));
       }
