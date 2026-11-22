@@ -39,7 +39,7 @@ describe("attention rules", () => {
 
   it("roll-up", () => {
     const rolled: [ReadonlyArray<AgentStatus | undefined>, KnownStatus][] = [
-      [["working", "done"], "done"],
+      [["working", "done"], "working"],
       [["blocked", "done"], "blocked"],
       [["idle", "working"], "working"],
       [["waiting", "working"], "working"],

@@ -1420,7 +1420,7 @@ export function App() {
         {webPage !== null && !(viewing !== null && fileDocked) &&
           <WebPanel key={webPage} url={webPage} docked={filePanelAvailable} covered={webDialogCover} onClose={closeWebPage} panelStart={filePanelAvailable ? <FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} /> : undefined} />}
         {/* a tab open beside the pane takes the right panel's place: both would squeeze the conversation */}
-        {desktopBrowser !== null && filePanelAvailable && !inMode && !browserShown && <MachineContext.Provider value={selectedMachineId}>
+        {desktopBrowser !== null && filePanelAvailable && !inMode && !browserShown && !(prs.docked && prs.panelOpen && prs.shown) && <MachineContext.Provider value={selectedMachineId}>
           <BrowserSidePanel browser={desktopBrowser} pane={selectedPane ? { id: selectedPane.pane_id, agent: selectedAgent, status: selectedPane.agent_status } : null}
             agentOf={(paneId) => machines.find((machine) => machine.id === "local")?.snapshot?.panes.find((pane) => pane.pane_id === paneId)?.agent ?? null}
             onOpen={openBrowserTab} />
@@ -1428,7 +1428,7 @@ export function App() {
         {browserShown && <BrowserPanel tab={shownBrowserTab} covered={dialogCover || webDialogCover} onOpened={setOpeningTab} onClose={() => setBrowserTab(null)}
           panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
         {/* the workbench's inspector: the chat's pull requests beside the pane, where a file or a page is not docked */}
-        {prs.docked && prs.panelOpen && prs.shown && pullRequests && selectedPaneId !== null &&
+        {prs.docked && prs.panelOpen && prs.shown && pullRequests && selectedPaneId !== null && !browserShown &&
           <Inspector id="pull-requests" title={t("Pull requests")} onClose={() => prs.setPanelOpen(false)}>
             <PullRequestPanel data={pullRequests} machineId={selectedMachineId} paneId={selectedPaneId} agentName={agentDisplayLabel(selectedAgent)} />
           </Inspector>}

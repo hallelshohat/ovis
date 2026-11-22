@@ -1,7 +1,6 @@
 import { nonblank, type SidebarAgent } from "../../shared/agent-roster.ts";
 import type { AgentStatus, HerdrPane, TabInfo } from "../../shared/protocol.ts";
 import { customTabLabel, tabLabel } from "./tabName.ts";
-
 import { paneStatus, rollupStatus, type KnownStatus } from "./status.ts";
 
 export { sidebarAgents, type SidebarAgent } from "../../shared/agent-roster.ts";
