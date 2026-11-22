@@ -26,6 +26,7 @@ import { WorktreeDialog, type WorktreeDialogMode } from "./WorktreeDialog.tsx";
 import { focusWorkspaceListToggle } from "../lib/focus.ts";
 import { folderName, isHomeTitle, shortPathTitle, stripPaneChrome, tabTitle, unsaidLine, workspaceRowText } from "../lib/paneName.ts";
 import { useT } from "../lib/i18n.ts";
+import { ExternalLink, openExternal } from "../lib/externalLink.ts";
 import { contextLeftPercent, formatTokens } from "../lib/compose.ts";
 import { userErrorMessage } from "../lib/userError.ts";
 import { rosterPanes } from "../lib/dagPane.ts";
@@ -228,15 +229,15 @@ export function PrBadge({ workspace, compact = false, nested = false }: { worksp
     const open = (event: MouseEvent): void => {
       if (href === undefined) return;
       event.stopPropagation();
-      window.open(href, "_blank", "noopener,noreferrer");
+      openExternal(href, "link");
     };
     return <span className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge" data-href={href} onClick={open}>{parts}<span className="visually-hidden">{spoken}</span></span>;
   }
   return (
-    <a className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge"
-      href={href} target="_blank" rel="noreferrer" aria-label={spoken} tabIndex={href === undefined ? 0 : undefined}>
+    <ExternalLink kind="link" className={className} data-state={pr.state} data-checks={pr.checksTone} data-testid="pr-badge"
+      href={href} aria-label={spoken} tabIndex={href === undefined ? 0 : undefined}>
       {parts}
-    </a>
+    </ExternalLink>
   );
 }
 

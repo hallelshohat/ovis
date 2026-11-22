@@ -1,12 +1,13 @@
 import "./PullRequestPanel.css";
 
-import { Check, Circle, ExternalLink, GitBranch, GitPullRequest, X } from "lucide-react";
+import { Check, Circle, ExternalLink as ExternalLinkIcon, GitBranch, GitPullRequest, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { paneStorageId } from "../../shared/machines.ts";
 import { canMerge, prLabel, type GhStatus, type PanePullRequests, type PrCheck, type PullRequest } from "../../shared/pull-requests.ts";
 import { mergePullRequest } from "../lib/api.ts";
 import { composerDrafts } from "../lib/composerDraft.ts";
 import { useT } from "../lib/i18n.ts";
+import { ExternalLink } from "../lib/externalLink.ts";
 import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
@@ -147,7 +148,7 @@ function PrLine({ pr, ended = false }: { pr: PullRequest; ended?: boolean }) {
 
 function GitHubLink({ pr }: { pr: PullRequest }) {
   const t = useT();
-  return <a className="icon-button pr-card-link" href={pr.url} target="_blank" rel="noreferrer" aria-label={t("Open {label} on GitHub", { label: prLabel(pr) })} title={t("Open {label} on GitHub", { label: prLabel(pr) })}><ExternalLink aria-hidden="true" /></a>;
+  return <ExternalLink kind="link" className="icon-button pr-card-link" href={pr.url} aria-label={t("Open {label} on GitHub", { label: prLabel(pr) })} title={t("Open {label} on GitHub", { label: prLabel(pr) })}><ExternalLinkIcon aria-hidden="true" /></ExternalLink>;
 }
 
 /** The header's way in: the leading PR and its state; it shows and hides the inspector, or opens the sheet on a narrow window. */
