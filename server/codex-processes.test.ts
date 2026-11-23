@@ -4467,6 +4467,72 @@ describe("a Codex pane keeps its conversation beside a second Codex that only st
     expect(await resolve()).toBeNull();
   });
 
+  for (const change of ["append", "same-size replacement"] as const) {
+    heldIt(`refuses a rendered reply when a loaded competitor changes by ${change}`, async () => {
+      foreground = live;
+      writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+      startSecondCodex([cutToolOutput, startedTask("cut")]);
+      const other = "01a16b22-7e1f-7072-8897-d5e46a0d5f71";
+      const rival = elsewhereThread(other, turn("other", longPrompt.replace("which", "where"), bulletedReply.replace("verification", "confirmation")));
+      await loaded(other);
+      screen = bulletedScreen;
+      const read = herdrClient.paneRead;
+      let reads = 0;
+      const changing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+        if (++reads === 2) {
+          if (change === "append") appendFileSync(rival, lines(turn("twin", longPrompt, bulletedReply)));
+          else {
+            const previous = fs.readFileSync(rival, "utf8");
+            const next = previous.replaceAll(longPrompt.replace("which", "where"), longPrompt).replaceAll("confirmation", "verification");
+            expect(Buffer.byteLength(next)).toBe(Buffer.byteLength(previous));
+            writeFileSync(`${rival}.new`, next);
+            fs.renameSync(`${rival}.new`, rival);
+          }
+        }
+        return read(input);
+      });
+      try {
+        expect(await resolve()).toBeNull();
+        expect(reads).toBe(2);
+      } finally { changing.mockRestore(); }
+    });
+  }
+
+  heldIt("loads a completed reply while an unrelated background Codex exec writes", async () => {
+    foreground = live;
+    writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+    startSecondCodex([cutToolOutput, startedTask("cut")]);
+    const other = "01a16b22-7e1f-7072-8897-d5e46a0d5f71";
+    const background = elsewhereThread(other, [startedTask("background")], "exec");
+    const run = await loadedByExec(other);
+    screen = bulletedScreen;
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const writing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) appendFileSync(background, lines([{ type: "event_msg", payload: { type: "agent_message", message: "Background progress." } }]));
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBe(path);
+      expect(reads).toBe(2);
+      expect(run.exitCode).toBeNull();
+    } finally { writing.mockRestore(); }
+
+    const switching = spyOn(herdrClient, "paneRead").mockImplementation(async (input) => {
+      if (++reads === 4) {
+        run.kill();
+        await run.exited;
+        await loaded(other);
+      }
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(4);
+    } finally { switching.mockRestore(); }
+    expect(await resolve()).toBeNull();
+  });
+
   heldIt("loads a large Codex conversation after a completed bulleted reply", async () => {
     foreground = live;
     const toolBytes = "synthetic command output\n".repeat(132_000);
