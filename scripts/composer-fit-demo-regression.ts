@@ -170,7 +170,7 @@ try {
 
       // Queued text is not a transcript turn. Its selectable bubble has no action: the explicit
       // Send now button acts on the ID, and X discards it. The current fixture turn keeps running.
-      for (const agent of ["claude", "codex"] as const) for (const width of [350, 390, 1440]) await withCard(browser, width, { agent, model: "gpt-5.6" }, async (page) => {
+      for (const agent of ["claude", "codex"] as const) for (const width of [350, 390, 1440]) await withCard(browser, width, { agent, model: "gpt-5.6", autoSend: false }, async (page) => {
         const box = page.getByRole("textbox", { name: "Message", exact: true });
         await box.fill("check the first pending change");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -235,10 +235,10 @@ try {
         const sent = await page.evaluate(async (paneId) => await (await fetch(`/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`)).json(), panes.api);
         assert.equal(JSON.stringify(sent).split(text).length - 1, 1, "Send now delivers it once");
       });
-      // With automatic sending on, a follow-up is queued. One the bridge holds untyped as its connection closes comes
+      // A follow-up queued by an older client and held untyped as its connection closes comes
       // back held on the bridge's receipt, sent only by an explicit Send now on the new connection. Past the receipt's
       // ten minutes it proves nothing: the copy is uncertain and never offers an automatic or explicit retry.
-      for (const held of [false, true]) await withCard(browser, 390, { agent: "codex", model: "gpt-5.6", autoSend: true }, async (page) => {
+      for (const held of [false, true]) await withCard(browser, 390, { agent: "codex", model: "gpt-5.6", legacyQueue: true }, async (page) => {
         const text = held ? "confirmed held follow-up" : "follow-up past its receipt";
         await page.getByRole("textbox", { name: "Message", exact: true }).fill(text);
         await page.getByRole("button", { name: "Send message", exact: true }).click();

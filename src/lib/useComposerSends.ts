@@ -85,7 +85,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
     };
   }, [answering, answerPending, paneId, pendingAnswer, sendAnswer, setPendingAnswer]);
 
-  // the latest Send now, for a Ctrl+Enter send whose receipt comes after a render
+  // A steering receipt can arrive after a render, so use the latest Send now guards.
   const sendNowRef = useRef<(id: string) => Promise<void>>(async () => {});
 
   const composerSend = useCallback(
@@ -125,14 +125,12 @@ export function useComposerSends(deps: ComposerSendsDeps) {
         stillOpenNotedRef.current = true;
         return { note: stillOpenNote(open), anyway: true, plain: true };
       }
-      // an older bridge is told apart by the socket, once this connection's snapshot has said what it supports.
-      // A draft is cleared only by a send at once: one that waits its turn is checked when it goes
-      // with automatic sending off, a follow-up waits for Send now; the socket queues it on a PC too old to hold one
       // herdr reads an idle Claude with a live subagent as working (a braille title spinner, and
       // "Waiting for N background agents to finish"); its own box at rest says it can take the message
       const settled = composerDelivery(agent, agentStatus);
-      const queued = settled === "queue" && inputAtRest?.() === true ? "immediate" : settled;
-      const delivery: SubmitDelivery = hold ? "hold" : queued === "queue" && !settings.autoSendQueued ? "hold" : queued;
+      const working = settled === "queue" && inputAtRest?.() !== true;
+      const autoSteer = working && settings.autoSendQueued && !hold;
+      const delivery: SubmitDelivery = hold || working ? "hold" : "immediate";
       // Send anyway answered a box seen at once: an agent that started working since would queue it unchecked.
       // Send it too: queued, the draft's text could go again after the draft itself was sent in the terminal
       if ((sendAnyway || asDraft) && delivery !== "immediate") return t("Not sent: the agent started working since. Check the terminal, then send again.");
@@ -143,8 +141,8 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       const socket = socketRef.current, session = sessionRef.current;
       const sentAt = Date.now();
       const sentAfter = pane === null ? null : waitingBaseline(waitingKey(machineId, pane));
-      // a PC that cannot hold refuses a hold rather than queuing it to go on its own (HerdrSocket `holdOnly`)
-      const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway, undefined, undefined, agentOnly, hold);
+      // If steering can't finish, the bridge must never start this message on a later turn.
+      const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway, undefined, undefined, agentOnly, hold || autoSteer);
       return result === null ? false : result.then((answer) => {
         // Neither a dropped connection nor a cleared old draft proves this message was typed.
         // Without a receipt, leave the retryable composer text and report the uncertainty.
@@ -163,9 +161,11 @@ export function useComposerSends(deps: ComposerSendsDeps) {
           if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text, sentAt, stampedBaseline(sentAfter, answer.sendingAt, sentAt));
         }
         if (pane !== null && typedNow) showSentCommand(pane, text, known, seen);
-        // Ctrl+Enter: the row it was queued as goes now, by the same steer as its Send now. A refused steer
-        // leaves that row with its reason, as a refused Send now does (#2596)
-        if (now && answer.pending !== undefined) void sendNowRef.current(answer.pending.id);
+        const pending = answer.pending;
+        const canAutoSteer = autoSteer && pending?.state === "held" && !pending.error && !pending.waiting;
+        if (!hold && pending && (now || canAutoSteer) && paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
+          void sendNowRef.current(pending.id);
+        }
         return true;
       });
     },

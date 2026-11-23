@@ -322,7 +322,7 @@ export function composerSendShown(state: { working: boolean; text: string }): bo
   return !state.working || state.text.trim().length > 0;
 }
 
-/** While an agent works, Send accepts a follow-up for its next turn. A shell sends immediately. */
+/** While an agent works, the composer routes its follow-up through pending input. A shell sends immediately. */
 export function composerDelivery(agent: string | null, status?: AgentStatus): "queue" | "immediate" {
   return agent !== null && status === "working" ? "queue" : "immediate";
 }

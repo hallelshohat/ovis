@@ -4451,8 +4451,12 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   its chip's bar is, and its title names that tool and when, whatever the state of this PC's own
   sign-in of the account; a stale record is left out like a failed limit. This is not active-account detection. Mobile and
   remote panes omit it. The context ring only shows: its number is in the tooltip, and a press does nothing.
-- Working Send on a supporting bridge adds a pending message above the input card, before the
-  prompt dock. `PendingMessages` uses the chat's column and neutral user-bubble surface: plain
+- Working Send uses the CLI's steering input through the same bridge action as **Send now**.
+  This follows the [Codex app's Steer behavior](https://developers.openai.com/blog/mastering-codex-remote-for-engineering),
+  with Steer as Ovis's default. Turning **Steer active turns automatically** off keeps a follow-up
+  for **Send now**. The bridge holds the receipt during the steering attempt so a failure or a lost
+  connection cannot turn it into a next-turn send. The pending message sits above the input card,
+  before the prompt dock. `PendingMessages` uses the chat's column and neutral user-bubble surface: plain
   text aligned right, with no outer card. Its scrolling stack is capped by `--pending-max-h`
   (`min(20dvh, 12rem)`). The text stays selectable. Its separate ↑ Send now action sends it, and the small sibling X
   discards it. A sibling pencil **Edit queued message** withdraws only that exact unsent ID
@@ -4517,7 +4521,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   confirmation unavailable. Ovis does not claim that Pi queued or consumed
   the message until the transcript proves it. Next-turn delivery and an explicit Send
   now action claim the same server ID. Connection loss never resumes automatic input. A message its
-  sender held on purpose (`delivery: "hold"`: Alt+Enter, or a follow-up with automatic sending off) stays
+  sender held (`delivery: "hold"`, including while attempting to steer a follow-up) stays
   held, with **Send now** and **Discard**, through a lost connection, a reload, another tab and a restart
   or update of the server: the bridge never sends it by itself, so its saved copy is held on its own word,
   as before, and takes no receipt's end. The page knows it by the bridge holding it with no reason (every
@@ -4825,7 +4829,7 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - On a touch screen, picking a pane (drawer, palette, notification) or switching its lens never
   raises the keyboard: the user reads first, and a tap on the message box or the grid raises it.
   A desktop's picked pane takes typing at once.
-- With a mouse, Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. While Enter sends, Ctrl+Enter (not Cmd on a Mac, Claude Code's own key for this during a turn) sends now: the message is queued or held as Enter would, then that row goes by the same steer as its **Send now**, and a refused steer leaves the row with its reason; at rest it sends like Enter (#2596). On touch screens the same device setting is shown inverted as **Return inserts a new line**, with Send and hardware Mod+Enter explained below it, and is on until the device chooses, as in the ChatGPT and Claude phone apps: a soft keyboard's Return breaks the line and the Send button sends. The choice is kept in its own key (`ovis:enter-sends`); an older record's `enterSends: false` counts as chosen, its `true` (written by any save) does not. On a touch screen the text scrolls inside under a third of the visible height, so a long draft never pushes the row with Send under the keyboard. IME Enter is ignored. Stop sends Escape. While the agent works and a draft shows Send in Stop's place, Escape in the box is Stop; an open completion menu takes the first Escape, and its X in the top corner (`.composer-menu-close`, Close suggestions, sticky over the rows it scrolls; the first row leaves it room) does the same for a pointer or a phone, which has no Escape, keeping the text and the focus in the box. T3 Code's command menu closes on Escape alone. Working Send schedules a pending message; its Send now action submits that same message now.
+- With a mouse, Enter sends and Shift+Enter breaks by default; with **Enter sends** off, Mod+Enter sends. While Enter sends, Ctrl+Enter (not Cmd on a Mac, Claude Code's own key for this during a turn) steers even with automatic steering off. A refused steer leaves the row with its reason. At rest it sends like Enter (#2596). On touch screens the same device setting is shown inverted as **Return inserts a new line**, with Send and hardware Mod+Enter explained below it, and is on until the device chooses, as in the ChatGPT and Claude phone apps: a soft keyboard's Return breaks the line and the Send button sends. The choice is kept in its own key (`ovis:enter-sends`); an older record's `enterSends: false` counts as chosen, its `true` (written by any save) does not. On a touch screen the text scrolls inside under a third of the visible height, so a long draft never pushes the row with Send under the keyboard. IME Enter is ignored. Stop sends Escape. While the agent works and a draft shows Send in Stop's place, Escape in the box is Stop; an open completion menu takes the first Escape, and its X in the top corner (`.composer-menu-close`, Close suggestions, sticky over the rows it scrolls; the first row leaves it room) does the same for a pointer or a phone, which has no Escape, keeping the text and the focus in the box. T3 Code's command menu closes on Escape alone.
 
 ### Comments on a reply (`.reply-comment*`, `.reply-comments*`)
 - Selecting text inside the words of one agent reply offers **Quote** first (lucide `Quote`, labelled)

@@ -11,6 +11,7 @@ import { herdrRpc, paneSplit, tabCreate, tabRename, workspaceClose, workspaceCre
 import type { ClientMessage, PendingMessage, ServerMessage } from "../shared/protocol.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { chromePath } from "./chrome-path.ts";
+import { legacyQueuedSubmit } from "./legacy-queue-fixture.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-pending-switch-")));
 const workspaces: string[] = [];
@@ -23,7 +24,8 @@ async function until(check: () => boolean | Promise<boolean>, label: string): Pr
     await Bun.sleep(25);
   }
 }
-const paste = (text: string) => `\u001b[200~${text}\u001b[201~\r`;
+const paste = ({ text, submit = "\r" }: { text: string; submit?: string }) => `\u001b[200~${text}\u001b[201~${submit}`;
+const ctrlEnter = "\u001b[27;5;13~";
 try {
   const owner = await workspaceCreate({ cwd: root, label: "ovis-test-pending-owner" });
   workspaces.push(owner.workspace.workspace_id);
@@ -36,7 +38,7 @@ try {
   const script = join(root, "record.cjs");
   const log = join(root, "input.jsonl");
   copyFileSync(process.execPath, program); chmodSync(program, 0o755);
-  writeFileSync(script, `const fs=require("node:fs");const out=process.argv[2];process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write("\\x1b[?2004h\\n› Message\\n",()=>fs.writeFileSync(out,""));process.stdin.on("data",c=>fs.appendFileSync(out,JSON.stringify(c.toString("utf8"))+"\\n"));`);
+  writeFileSync(script, `const fs=require("node:fs");const out=process.argv[2];process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write("\\x1b[?2004h\\x1b[>4;2m\\n› Message\\n",()=>fs.writeFileSync(out,""));process.stdin.on("data",c=>fs.appendFileSync(out,JSON.stringify(c.toString("utf8"))+"\\n"));`);
   await herdrRpc("pane.send_text", { pane_id: pane, text: `exec '${program}' '${script}' '${log}'\n` });
   await until(() => existsSync(log), "the owned foreground agent records input");
   const bytes = () => readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string).join("");
@@ -63,6 +65,7 @@ try {
   const statuses = new Map<string, string>();
   let admit = true;
   let routed: WebSocketRoute | undefined;
+  let legacyQueue = false;
   let holdDiscard = false, delayedDiscard: (() => void) | undefined;
   // a Send now that left the page but whose fate the page never learns
   let swallowResend = false, swallowedResend = false;
@@ -75,7 +78,7 @@ try {
         delayedDiscard = () => upstream.send(data);
       } else if (swallowResend && frame.type === "submit" && frame.resend_id !== undefined) {
         swallowedResend = true;
-      } else upstream.send(data);
+      } else upstream.send(legacyQueue ? legacyQueuedSubmit({ raw: data }) : data);
     });
   });
   page.on("websocket", (socket) => {
@@ -112,7 +115,7 @@ try {
     await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state });
     await until(() => state === "idle" ? ["idle", "done"].includes(statuses.get(pane) ?? "") : statuses.get(pane) === state, `the bridge reports ${state}`);
   };
-  const queue = async (text: string, state = "queued"): Promise<PendingMessage> => {
+  const submit = async (text: string): Promise<PendingMessage> => {
     await current(pane).locator('.composer-status[data-status="working"]').waitFor();
     await inputReady(pane);
     const after = received.length;
@@ -121,9 +124,19 @@ try {
     await until(() => received.slice(after).some(({ frame }) => frame.type === "submit-result" && frame.pane_id === pane && frame.ok && frame.pending?.text === text), "the server accepts one pending ID");
     const result = received.slice(after).find(({ frame }) => frame.type === "submit-result" && frame.pane_id === pane && frame.pending?.text === text)!.frame;
     assert.ok(result.type === "submit-result" && result.pending);
-    await rows().filter({ hasText: text }).waitFor();
-    assert.equal(await rows().filter({ hasText: text }).getAttribute("data-state"), state);
     return result.pending;
+  };
+  const queue = async (text: string, state = "queued"): Promise<PendingMessage> => {
+    legacyQueue = state === "queued";
+    try {
+      const pending = await submit(text);
+      const row = rows().filter({ hasText: text });
+      await row.waitFor();
+      assert.equal(await row.getAttribute("data-state"), state);
+      return pending;
+    } finally {
+      legacyQueue = false;
+    }
   };
   await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`);
   await page.locator(".conn-live").waitFor();
@@ -136,10 +149,23 @@ try {
     await current(pane).screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `${name}.png`) });
   };
   let delivered = "";
+  {
+    await report("working");
+    const actionAt = sent.length;
+    const pending = await submit("steer the active turn");
+    delivered += paste({ text: pending.text, submit: ctrlEnter });
+    await until(() => bytes() === delivered, "normal Send steers Claude before the turn ends");
+    await rows().filter({ hasText: pending.text }).waitFor({ state: "detached" });
+    const actions = sent.slice(actionAt).flatMap(({ frame }) =>
+      frame.type === "pending-action" ? [[frame.pane_id, frame.pending_id, frame.action]] : []);
+    assert.deepEqual(actions, [[pane, pending.id, "steer"]]);
+    await report("idle");
+    await noBytes(delivered, "the end of the turn cannot resend the steering message");
+  }
   const automatic = async (enabled: boolean): Promise<void> => {
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
     await openSettingsPage(page, "Chat");
-    await page.getByRole("switch", { name: "Send queued messages automatically", exact: true }).setChecked(enabled);
+    await page.getByRole("switch", { name: "Steer active turns automatically", exact: true }).setChecked(enabled);
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
   };
   for (const destination of ["tab", "workspace"] as const) {
@@ -154,7 +180,7 @@ try {
     assert.equal(originalSocket.isClosed(), false, "navigation keeps the original connection");
     assert.equal(sockets.length, 1, "navigation shares one PC connection");
     await report("idle");
-    delivered += paste(pending.text);
+    delivered += paste({ text: pending.text });
     await until(() => bytes() === delivered, "the original pane receives its queued message while another pane is selected");
     assert.equal(sent.slice(sentAt).some(({ frame }) => frame.type === "pending-action" || frame.type === "submit"), false, "automatic delivery needs no browser replay or Send now");
     await report("working"); await report("idle");
@@ -216,7 +242,7 @@ try {
     await noBytes(delivered, "returning to a ready agent does not resume automatic delivery");
     const actionAt = sent.length;
     await row.getByRole("button", { name: /^Send now:/ }).click();
-    delivered += paste(pending.text);
+    delivered += paste({ text: pending.text });
     await until(() => bytes() === delivered, "Send now delivers the same pending ID exactly once");
     await row.waitFor({ state: "detached" });
     const actions = sent.slice(actionAt).filter(({ frame }) => frame.type === "pending-action");
@@ -236,7 +262,7 @@ try {
     await rows().filter({ hasText: pending.text }).getByRole("button", { name: /^Edit queued message:/ }).click();
     await until(() => delayedDiscard !== undefined, "the Edit withdrawal waits at the transport boundary");
     await report("idle");
-    delivered += paste(pending.text);
+    delivered += paste({ text: pending.text });
     await until(() => bytes() === delivered, "automatic delivery wins before withdrawal");
     await rows().filter({ hasText: pending.text }).waitFor({ state: "detached" });
     holdDiscard = false; delayedDiscard!(); delayedDiscard = undefined;
@@ -286,7 +312,7 @@ try {
     await current(pane).locator(".terminal-banner-draft").waitFor({ state: "detached" });
     await toggle(/^Chat transcript \(.+\)$/);
     await row.getByRole("button", { name: /^Send now:/ }).click();
-    delivered += paste(pending.text);
+    delivered += paste({ text: pending.text, submit: ctrlEnter });
     await until(() => bytes() === delivered, "Send now after the draft is discarded delivers the message once");
     await row.waitFor({ state: "detached" });
     await report("idle");
@@ -335,7 +361,7 @@ try {
     assert.equal(await row.locator(".pending-message-send").count(), 1, `${label}: a proven held copy offers Send now`);
     await report("idle"); await noBytes(delivered, `${label}: readiness never sends a held copy without Send now`);
     await row.getByRole("button", { name: /^Send now:/ }).click();
-    delivered += paste(text);
+    delivered += paste({ text });
     await until(() => bytes() === delivered, `${label}: Send now delivers the held copy once`);
     await row.waitFor({ state: "detached" });
     await noBytes(delivered, `${label}: Send now delivers the held copy once`);

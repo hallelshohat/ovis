@@ -382,7 +382,7 @@ async function foldedGroups(browser: import("playwright-core").Browser, url: str
 
       // a link to a group inside a fold opens it on that group
       await page.goto(`${url}?settings=chat&section=composer-more`);
-      const queued = page.getByRole("switch", { name: "Send queued messages automatically", exact: true });
+      const queued = page.getByRole("switch", { name: "Steer active turns automatically", exact: true });
       await queued.waitFor();
       assert.equal(await page.locator(".settings-body:not([hidden]) [data-section='composer-more']").evaluate((group) => group.closest("details")?.open === true && document.activeElement === group), true, `${width}px: the link opened the fold and focused its group`);
       assert.deepEqual(errors, []);
