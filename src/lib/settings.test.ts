@@ -78,6 +78,33 @@ describe("saved theme migration", () => {
     expect(loadSettings().terminalFontSize).toBe(18);
   });
 
+  it("uses Chat when an old save of an unrelated setting included the Auto default", () => {
+    const old = oldSanitizeSettings({ chatWidth: "wide" });
+    expect(old.defaultView).toBe("auto");
+    oldSaveSettings(old);
+    const saved = records.get(main);
+    expect(loadSettings()).toMatchObject({ defaultView: "chat", chatWidth: "wide" });
+    expect(records.get(main)).toBe(saved);
+    expect(records.has("ovis:default-view")).toBe(false);
+  });
+
+  it.each(["chat", "terminal"] as const)("keeps a legacy %s choice", (defaultView) => {
+    oldSaveSettings(oldSanitizeSettings({ defaultView }));
+    expect(loadSettings().defaultView).toBe(defaultView);
+    records.set("ovis:default-view", "invalid");
+    expect(loadSettings().defaultView).toBe(defaultView);
+  });
+
+  it("keeps a new Auto choice through an old tab's whole-record save", () => {
+    oldSaveSettings(oldSanitizeSettings({ defaultView: "terminal" }));
+    const stale = readOld();
+    expect(saveSettings({ ...loadSettings(), defaultView: "auto" })).toBe(true);
+    expect(readOld().defaultView).toBe("auto");
+    expect(loadSettings().defaultView).toBe("auto");
+    oldSaveSettings({ ...stale, chatWidth: "wide" });
+    expect(loadSettings()).toMatchObject({ defaultView: "auto", chatWidth: "wide" });
+  });
+
   it("keeps Return's default unchosen, and a choice, through an old tab's whole-record save", () => {
     // unchosen: the old tab reads the boolean it knows and writes it back, which is still no choice
     saveSettings(sanitizeSettings({}));
