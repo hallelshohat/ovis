@@ -335,7 +335,7 @@ it.each([
   { name: "Send held by the bridge", auto: true, now: false, changed: null, blocked: true, steers: false },
 ] as const)("$name acts only on its own receipt", async ({ name, auto, now, changed, blocked, steers }) => {
   const saved = savedStorage();
-  const pane = `send-now-${name}`, owner = paneStorageId("local", pane), actions: string[][] = [];
+  const pane = `send-now-${name}`, owner = paneStorageId("local", pane), actions: Array<[string, string, string, boolean]> = [];
   const paneRef = { current: pane };
   const pending = { id: `row-${name}`, request_id: 1, text: "stop and run the tests", state: "held" as const, created_at: "2026-11-05T00:00:00Z",
     ...(blocked ? { error: { code: "held_input", message: "The terminal has a draft" } } : {}),
@@ -343,8 +343,8 @@ it.each([
   const makeSocket = () => ({
     connected: true,
     on: () => () => {},
-    pendingAction: (paneId: string, id: string, action: string) => {
-      actions.push([paneId, id, action]);
+    pendingAction: (paneId: string, id: string, action: string, _generation: number, _withdrawalOnly: boolean, autoSteer: boolean) => {
+      actions.push([paneId, id, action, autoSteer]);
       return Promise.resolve({ ok: true });
     },
   } as unknown as HerdrSocket);
@@ -365,7 +365,7 @@ it.each([
       submitRetention: { retain: () => () => { settled(); } } as unknown as ComposerSendsDeps["submitRetention"],
     }).composerSend(pending.text, undefined, false, false, now);
     expect(result).toBe(true);
-    expect(actions).toEqual(steers ? [[pane, pending.id, "steer"]] : []);
+    expect(actions).toEqual(steers ? [[pane, pending.id, "steer", !now]] : []);
     if (steers) await steered;
   } finally {
     pendingMessages.removeCopy(owner, pending.id);

@@ -4454,8 +4454,11 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Working Send uses the CLI's steering input through the same bridge action as **Send now**.
   This follows the [Codex app's Steer behavior](https://developers.openai.com/blog/mastering-codex-remote-for-engineering),
   with Steer as Ovis's default. Turning **Steer active turns automatically** off keeps a follow-up
-  for **Send now**. The bridge holds the receipt during the steering attempt so a failure or a lost
-  connection cannot turn it into a next-turn send. The pending message sits above the input card,
+  for **Send now**. The client tags automatic steers on bridges that advertise
+  `pending-auto-steer`. A tagged attempt checks for an active turn and preserves a stopped
+  draft Claude Code restored. If the turn ends before the paste, the message stays held.
+  If the paste already reached the terminal, the message is shown as uncertain and its Enter
+  is held back. The pending message sits above the input card,
   before the prompt dock. `PendingMessages` uses the chat's column and neutral user-bubble surface: plain
   text aligned right, with no outer card. Its scrolling stack is capped by `--pending-max-h`
   (`min(20dvh, 12rem)`). The text stays selectable. Its separate ↑ Send now action sends it, and the small sibling X

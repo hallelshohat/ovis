@@ -86,7 +86,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
   }, [answering, answerPending, paneId, pendingAnswer, sendAnswer, setPendingAnswer]);
 
   // A steering receipt can arrive after a render, so use the latest Send now guards.
-  const sendNowRef = useRef<(id: string) => Promise<void>>(async () => {});
+  const sendNowRef = useRef<(request: { id: string; autoSteer: boolean }) => Promise<void>>(async () => {});
 
   const composerSend = useCallback(
     // `hold`: Alt+Enter, kept in the queued list for its Send now alone, whatever automatic sending or the agent's state says
@@ -164,7 +164,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
         const pending = answer.pending;
         const canAutoSteer = autoSteer && pending?.state === "held" && !pending.error && !pending.waiting;
         if (!hold && pending && (now || canAutoSteer) && paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
-          void sendNowRef.current(pending.id);
+          void sendNowRef.current({ id: pending.id, autoSteer: !now });
         }
         return true;
       });
@@ -172,7 +172,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
     [agent, agentStatus, answering, answerPending, heldByOpenQueue, sendAnswer, submitComposerMessage, queueStore, machineId, settings.autoSendQueued, showSentCommand, inputAtRest, inputRowNow, stillOpenNote],
   );
 
-  const actOnPending = useCallback(async (id: string, action: "steer" | "discard" | "edit"): Promise<void> => {
+  const actOnPending = useCallback(async (id: string, action: "steer" | "discard" | "edit", autoSteer = false): Promise<void> => {
     const perform = async (): Promise<void> => {
       const owner = queueOwner, pane = paneId;
       const socket = socketRef.current, scope = pendingScopeRef.current;
@@ -180,7 +180,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       // what another tab saved since: a copy it is sending again is not confirmed here either
       pendingMessages.refresh(owner);
       const message = pendingMessages.read(owner).find((item) => item.id === id);
-      if (!message || message.state === "sending") return;
+      if (!message || message.state === "sending" || (autoSteer && !message.serverOwned)) return;
       // Editing needs this connection's withdrawal authority, not just a saved held
       // copy. Uncertain Pi copies are receipts, not queued input.
       if (action === "edit" && (!message.serverOwned || message.state !== "queued" && message.state !== "held" || message.resendInFlight)) return;
@@ -219,7 +219,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
           try {
             const known = knownOutcomes(pane);
             const seen = inputRowNow() === "ready";
-            const result = socket?.pendingAction(pane, id, action === "edit" ? "discard" : action, message.resendGeneration ?? 0, action === "edit");
+            const result = socket?.pendingAction(pane, id, action === "edit" ? "discard" : action, message.resendGeneration ?? 0, action === "edit", autoSteer);
             // offline: no frame left (the row shows submitNote's wording, not this message)
             if (!result) {
               pendingMessages.fail(owner, id, { code: "not_transmitted", message: "the connection dropped before this message was sent" }, pendingActionUncertain("not_transmitted", message.state));
@@ -275,7 +275,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
     else await perform();
   }, [answering, ended, heldByOpenQueue, paneId, queueOwner, submitComposerMessage, submitRetention, showSentCommand, inputRowNow, stillOpenNote]);
 
-  sendNowRef.current = (id) => actOnPending(id, "steer");
+  sendNowRef.current = ({ id, autoSteer }) => actOnPending(id, "steer", autoSteer);
 
   return { composerSend, actOnPending, waitingAnswer };
 }

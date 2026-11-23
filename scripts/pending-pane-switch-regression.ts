@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { chromium, type Browser, type WebSocket as BrowserSocket, type WebSocketRoute } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { UsageService } from "../server/usage.ts";
-import { herdrRpc, paneSplit, tabCreate, tabRename, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { herdrRpc, paneRead, paneSplit, tabCreate, tabRename, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import type { ClientMessage, PendingMessage, ServerMessage } from "../shared/protocol.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { chromePath } from "./chrome-path.ts";
@@ -37,9 +37,11 @@ try {
   const program = join(root, "claude");
   const script = join(root, "record.cjs");
   const log = join(root, "input.jsonl");
+  const screen = join(root, "screen.txt");
+  writeFileSync(screen, "");
   copyFileSync(process.execPath, program); chmodSync(program, 0o755);
-  writeFileSync(script, `const fs=require("node:fs");const out=process.argv[2];process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write("\\x1b[?2004h\\x1b[>4;2m\\n› Message\\n",()=>fs.writeFileSync(out,""));process.stdin.on("data",c=>fs.appendFileSync(out,JSON.stringify(c.toString("utf8"))+"\\n"));`);
-  await herdrRpc("pane.send_text", { pane_id: pane, text: `exec '${program}' '${script}' '${log}'\n` });
+  writeFileSync(script, `const fs=require("node:fs");const [out,screen]=process.argv.slice(2);process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write("\\x1b[?2004h\\x1b[>4;2m\\n› Message\\n",()=>fs.writeFileSync(out,""));process.stdin.on("data",c=>fs.appendFileSync(out,JSON.stringify(c.toString("utf8"))+"\\n"));fs.watchFile(screen,{interval:25},()=>process.stdout.write("\\x1b[2J\\x1b[H"+fs.readFileSync(screen,"utf8")));`);
+  await herdrRpc("pane.send_text", { pane_id: pane, text: `exec '${program}' '${script}' '${log}' '${screen}'\n` });
   await until(() => existsSync(log), "the owned foreground agent records input");
   const bytes = () => readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string).join("");
   // An explicit observation interval, bounded and checked throughout, proves a negative:
@@ -66,6 +68,7 @@ try {
   let admit = true;
   let routed: WebSocketRoute | undefined;
   let legacyQueue = false;
+  let delayAutoSteer = false, delayedAutoSteer: (() => void) | undefined;
   let holdDiscard = false, delayedDiscard: (() => void) | undefined;
   // a Send now that left the page but whose fate the page never learns
   let swallowResend = false, swallowedResend = false;
@@ -76,6 +79,8 @@ try {
       const frame = JSON.parse(String(data)) as ClientMessage;
       if (holdDiscard && frame.type === "pending-action" && frame.action === "discard") {
         delayedDiscard = () => upstream.send(data);
+      } else if (delayAutoSteer && frame.type === "pending-action" && frame.auto_steer) {
+        delayedAutoSteer = () => upstream.send(data);
       } else if (swallowResend && frame.type === "submit" && frame.resend_id !== undefined) {
         swallowedResend = true;
       } else upstream.send(legacyQueue ? legacyQueuedSubmit({ raw: data }) : data);
@@ -157,10 +162,28 @@ try {
     await until(() => bytes() === delivered, "normal Send steers Claude before the turn ends");
     await rows().filter({ hasText: pending.text }).waitFor({ state: "detached" });
     const actions = sent.slice(actionAt).flatMap(({ frame }) =>
-      frame.type === "pending-action" ? [[frame.pane_id, frame.pending_id, frame.action]] : []);
-    assert.deepEqual(actions, [[pane, pending.id, "steer"]]);
+      frame.type === "pending-action" ? [[frame.pane_id, frame.pending_id, frame.action, frame.auto_steer]] : []);
+    assert.deepEqual(actions, [[pane, pending.id, "steer", true]]);
+
+    delayAutoSteer = true;
+    const followUp = await submit("follow up after the stopped turn");
+    await until(() => delayedAutoSteer !== undefined, "the automatic steer is delayed at the transport boundary");
+    const rule = "─".repeat(50);
+    writeFileSync(screen, `  ✻ Cooked for 1s\n${rule}\n❯ ${pending.text}\n${rule}\n  [Haiku 4.5] │ project\n`);
+    const terminal = async () => (await paneRead({ paneId: pane, source: "visible" })).text;
+    await until(async () => (await terminal()).includes(`❯ ${pending.text}`), "Claude's restored prompt is visible");
     await report("idle");
-    await noBytes(delivered, "the end of the turn cannot resend the steering message");
+    delayAutoSteer = false;
+    delayedAutoSteer!();
+    const row = rows().filter({ hasText: followUp.text });
+    await row.locator(".pending-message-note", { hasText: "input box in the terminal is not empty" }).waitFor();
+    assert.equal(await row.getAttribute("data-state"), "held");
+    await noBytes(delivered, "the restored prompt receives no Escape, paste, or Enter");
+    assert.ok((await terminal()).includes(`❯ ${pending.text}`), "the stopped prompt is still visible");
+    await row.getByRole("button", { name: "Discard", exact: true }).click();
+    await row.waitFor({ state: "detached" });
+    writeFileSync(screen, "› Message\n");
+    await until(async () => (await terminal()).includes("› Message"), "the fixture returns to its empty prompt");
   }
   const automatic = async (enabled: boolean): Promise<void> => {
     await page.keyboard.press("ControlOrMeta+Shift+Comma");
