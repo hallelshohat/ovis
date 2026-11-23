@@ -4408,6 +4408,42 @@ describe("a Codex pane keeps its conversation beside a second Codex that only st
     expect(await resolve()).toBe(path);
   });
 
+  it("loads a large Codex conversation after a completed bulleted reply", async () => {
+    foreground = live;
+    const latest = "The **verification** is complete.\n\n- [Open the report](https://example.test/report)\n- [Open the logs](https://example.test/logs)\n\nThe report lists the independent checks and gives detailed instructions for reproducing each result.";
+    const toolBytes = "synthetic command output\n".repeat(132_000);
+    const toolCall = { type: "response_item", payload: { type: "function_call", call_id: "earlier-call", name: "exec_command", arguments: '{"cmd":"verify"}' } };
+    const toolOutput = { type: "response_item", payload: { type: "function_call_output", call_id: "earlier-call", output: toolBytes } };
+    const startedTask = (turn_id: string) => ({ type: "event_msg", payload: { type: "task_started", turn_id } });
+    writeRollout(path, thread, []);
+    for (let index = 0; index < 6; index++) {
+      const id = `old-${index}`;
+      const records = turn(id, `Run check ${index}`, `Finished check ${index}`);
+      records.splice(2, 0, toolCall, toolOutput);
+      appendFileSync(path, lines([startedTask(id), ...records]));
+    }
+    appendFileSync(path, lines([startedTask("latest"), ...turn("latest", longPrompt, latest)]));
+    startSecondCodex([toolOutput, startedTask("unread")]);
+    screen = finished(longPrompt, [
+      "The verification is complete.", "", "  • Open the report (https://example.test/report)",
+      "  • Open the logs (https://example.test/logs)", "",
+      "  The report lists the independent checks and gives detailed instructions for reproducing each result.",
+    ].join("\n"), "16:14").replace("/tmp/proj · Reply with one word", "/tmp/proj ·\n  Check independent reports · Main [default]");
+    const bytes = statSync(path).size;
+    expect(bytes).toBeGreaterThan(16 * 1024 * 1024);
+    const started = performance.now();
+    const page = await conversationModule.paneConversation(root, home, { prompts: 10 });
+    const milliseconds = performance.now() - started;
+    console.log(JSON.stringify({ case: "large completed Codex chat", bytes, milliseconds }));
+    expect(page.source).toBe("codex-transcript");
+    expect(page.turns.at(-1)?.parts).toContainEqual({ kind: "text", text: latest });
+    expect(milliseconds).toBeLessThan(1_500);
+    if (!page.cursor) throw new Error("Expected a cursor into the large transcript");
+    const older = await conversationModule.paneConversation(root, home, { before: page.cursor, prompts: 10 });
+    expect(older.turns[0]?.parts).toContainEqual({ kind: "text", text: "Run check 0" });
+    expect(older.turns[1]?.parts).toContainEqual(expect.objectContaining({ kind: "tool", output_ref: "earlier-call" }));
+  });
+
   heldIt("keeps a pane showing an answer Codex renders its own way once a second Codex starts, through a draft, until /new", async () => {
     foreground = live;
     // Given a pane bound on a finished turn whose answer Codex rendered its own way: only the footed turn ties it

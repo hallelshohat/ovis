@@ -1231,7 +1231,7 @@ function codexShownText(nodes: InlineNode[]): string | null {
   return shownText(nodes.map(rendered), true);
 }
 
-/** Compare whole rendered paragraphs, tables and flat ordered lists, preserving punctuation and order. */
+/** Compare whole rendered paragraphs, tables and flat lists, preserving punctuation and order. */
 function completedAnswerMatches(answer: string, screen: string): boolean {
   if (completedRowsMatch(answer, screen)) return true;
   const words: string[] = [];
@@ -1250,12 +1250,13 @@ function completedAnswerMatches(answer: string, screen: string): boolean {
         if (cells.some((cell) => cell === null)) return false;
         words.push(cells.join(" "));
       }
-    } else if (block.type === "list" && block.ordered) {
+    } else if (block.type === "list") {
       for (const [index, item] of block.items.entries()) {
         if (item.checked !== undefined || item.blocks?.length) return false;
         const text = codexShownText(item.content);
         if (text === null) return false;
-        words.push(`${(block.start ?? 1) + index}. ${text}`);
+        const marker = block.ordered ? `${(block.start ?? 1) + index}.` : "•";
+        words.push(`${marker} ${text}`);
       }
     } else return false;
   }
@@ -1288,6 +1289,9 @@ function idleTurnFooter(lines: readonly string[]): number | null {
   const composer = rows.length - 1 - [...rows].reverse().findIndex(({ line }) => /^[\u203a\u00bb]/.test(line));
   if (composer >= rows.length || !/^[\u203a\u00bb](?:\s+Ask Codex to do anything)?$/.test(rows[composer]!.line.trim())) return null;
   const status = rows.slice(composer + 1);
+  // Codex can wrap its session title and agent label onto the row after the model and folder.
+  if (status[0]?.line.trimEnd().endsWith(" ·") && FOOTER.test(status[0].line.trim())
+    && status[1]?.line.startsWith("  ") && status[1].line.trimEnd().endsWith(" · Main [default]")) status.splice(1, 1);
   if (status.length === 0 || status.length > 4 || !status.every(({ line }) => FOOTER.test(line.trim()))) return null;
   let before = composer - 1;
   const notices = new Set<string>();
@@ -2025,7 +2029,11 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
       if (composer === null) return [];
       const clippedFooter = footed !== null && footed.rows.some((row) => row.trimEnd().endsWith("…"))
         && (footerOwners === null || footerOwners.has(candidate.path)) && endedOn(candidate) === text && completedAnswerMatches(text, footed.text);
-      const rendered = wholeBlocks.find((block) => completedAnswerMatches(text, block)) ?? (clippedFooter ? footed!.text : undefined);
+      // Let the caller check loaded peers before accepting a match that excludes a just-started thread.
+      const completed = footed !== null && turn?.path === candidate.path && text === turn.answer
+        && askedAsShown(turn.asked, footed.rows) && !turn.askedElsewhere(false) && completedAnswerMatches(text, footed.text)
+        && !candidates.some(onlyStarted);
+      const rendered = wholeBlocks.find((block) => completedAnswerMatches(text, block)) ?? (completed || clippedFooter ? footed!.text : undefined);
       if (rendered === undefined) return [];
       // A raw anchor can miss an equivalent entity spelling; it must still compete with a rendered match.
       const letters = normalizeDisplay(rendered), bare = bareLetters(rendered), words = wordsEnding(rendered, letters.length);
