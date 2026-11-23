@@ -37,6 +37,7 @@ import type { CspWatch } from "./csp-violations.ts";
 import { browserEvidencePage, browserEvidenceTracing, startBrowserEvidence } from "./browser-evidence.ts";
 import type { BrowserEvidenceSession } from "./browser-evidence.ts";
 import { chromePath } from "./chrome-path.ts";
+import { legacyQueuedSubmit } from "./legacy-queue-fixture.ts";
 import { openLens } from "./header-lens.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "ovis-ui-")));
@@ -131,8 +132,7 @@ try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.addInitScript((ids) => {
     // only the first load: a reload must keep what Settings stored, such as the language
-    // The pending-input cases exercise automatic queue delivery, which is opt-in.
-    if (!localStorage.getItem("ovis:settings")) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", autoSendQueued: true }));
+    if (!localStorage.getItem("ovis:settings")) localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
     for (const id of ids) localStorage.setItem(`ovis:view:${id}`, "chat");
   }, panes);
   await context.addInitScript(rewriteMachinesFrames);
@@ -150,6 +150,7 @@ try {
   // a connection's first frames held back: what the page does between a reconnect and the frame that
   // says what the bridge supports (features), and then its snapshot
   let holdSnapshot = false;
+  let legacyQueuePane: string | undefined;
   let releaseFeatures: (() => void) | null = null;
   let releaseSnapshot: (() => void) | null = null;
   const routed: Array<{ close: () => Promise<void> }> = [];
@@ -158,6 +159,9 @@ try {
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
     routed.push(socket);
     const upstream = socket.connectToServer();
+    socket.onMessage((raw) => upstream.send(legacyQueuePane === undefined
+      ? raw
+      : legacyQueuedSubmit({ raw, matches: (frame) => frame.pane_id === legacyQueuePane })));
     upstream.onMessage((raw) => {
       const message = JSON.parse(String(raw));
       if (message.type === "pending-messages" && Array.isArray(message.held)) heldReceipts.push(...message.held);
@@ -1003,6 +1007,7 @@ try {
   await page.locator('.composer-status[data-status="working"]').waitFor();
   await until(async () => await page.locator(".composer-agent-label").innerText() === "Claude", "foreground agent identity reached the composer");
   await pendingReady(pendingPane);
+  legacyQueuePane = pendingPane;
   const pendingRows = page.locator(".pending-messages .pending-message");
   const queuedTexts = ["first pending browser message", "# second pending message", "# third pending message"];
   for (const [index, text] of queuedTexts.entries()) {
@@ -1012,7 +1017,7 @@ try {
     await page.getByRole("button", { name: "Send message", exact: true }).click();
     await until(async () => await pendingRows.count() === index + 1 && await composer.inputValue() === "", "server accepted pending input");
     assert.equal(inputs.at(-1)?.pane_id, pendingPane);
-    assert.equal(inputs.at(-1)?.delivery, "queue");
+    assert.equal(inputs.at(-1)?.delivery, "hold");
   }
   assert.deepEqual(await pendingRows.locator(".pending-message-bubble").allTextContents(), queuedTexts);
   assert.equal(pendingBytes(), "", "accepted pending messages have not reached the pty");
@@ -1064,7 +1069,7 @@ try {
   await until(async () => await page.locator('.pending-message[data-state="queued"]').count() === 1, "the message sent before the snapshot is a live pending row");
   assert.notEqual(releaseSnapshot, null, "the snapshot was still held back when the message went");
   releaseSnapshot!();
-  assert.equal(inputs.at(-1)?.delivery, "queue");
+  assert.equal(inputs.at(-1)?.delivery, "hold");
   assert.equal(await page.locator(".composer-note").count(), 0);
   await page.getByRole("button", { name: "Discard", exact: true }).click();
   await until(async () => await pendingRows.count() === 2, "the live row was discarded on the bridge");
@@ -1237,6 +1242,7 @@ try {
   assert.equal(pendingBytes(), beforeQuickQueue, "working quick reply is not immediate input");
   await pendingRows.getByRole("button", { name: "Discard", exact: true }).click();
   await until(async () => await pendingRows.count() === 0, "quick reply discarded by id");
+  legacyQueuePane = undefined;
   await quickRow(false);
   assert.equal(await page.locator(".composer-quick").count(), 0);
   await composer.fill("");
@@ -2186,7 +2192,7 @@ try {
   await selectPane(pendingPane);
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   await openSettingsPage(page, "Chat");
-  await page.getByRole("switch", { name: "Send queued messages automatically", exact: true }).uncheck();
+  await page.getByRole("switch", { name: "Steer active turns automatically", exact: true }).uncheck();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await reportPending("working");
   await page.locator('.composer-status[data-status="working"]').waitFor();
@@ -2217,7 +2223,7 @@ try {
   await herdrRpc("pane.send_text", { pane_id: pendingPane, text: "\u0003" });
   await page.keyboard.press("ControlOrMeta+Shift+Comma");
   await openSettingsPage(page, "Chat");
-  await page.getByRole("switch", { name: "Send queued messages automatically", exact: true }).check();
+  await page.getByRole("switch", { name: "Steer active turns automatically", exact: true }).check();
   await page.getByRole("button", { name: "Close settings", exact: true }).click();
   await workspaceClose(pendingWorkspace.workspace.workspace_id);
   workspaces.splice(workspaces.indexOf(pendingWorkspace.workspace.workspace_id), 1);

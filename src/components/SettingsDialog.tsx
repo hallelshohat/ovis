@@ -725,8 +725,8 @@ function ChatPage() {
 
       <SettingsFold kind="more" keys={["autoSendQueued", "wrapCode", "editTextFiles", "reopenFileOnReturn", "filesPanel", "reuseExternalLinkTab", ...(settings.voiceInput === "off" ? [] : ["voiceLanguage", "voiceEngine", "voicePolishChat", "voicePolishTerminal"] as const)]}>
         <SettingsGroup title={t("Composer")} section="composer-more">
-          <SettingsRow icon={Send} label={t("Send queued messages automatically")} description={t("On every device, a message sent while the agent is working goes by itself when the agent finishes. When off, it waits until you press Send now.")} reset={["autoSendQueued"]}>
-            <Toggle label={t("Send queued messages automatically")} checked={settings.autoSendQueued} onChange={(autoSendQueued) => update({ autoSendQueued })} />
+          <SettingsRow icon={Send} label={t("Steer active turns automatically")} description={t("On every device, sending a message while the agent is working steers the current turn. When off, the message waits until you press Send now.")} reset={["autoSendQueued"]}>
+            <Toggle label={t("Steer active turns automatically")} checked={settings.autoSendQueued} onChange={(autoSendQueued) => update({ autoSendQueued })} />
           </SettingsRow>
         </SettingsGroup>
         <SettingsGroup title={t("Files")} section="file-viewer-more">

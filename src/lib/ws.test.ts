@@ -399,6 +399,27 @@ it("steers or discards an opaque pending ID once and waits for its action acknow
   client.close();
 });
 
+it("only transmits automatic steering after the bridge advertises its draft guard", async () => {
+  const client = new HerdrSocket("ws://test/ws");
+  client.connect();
+  const socket = FakeSocket.last;
+  socket.open();
+  socket.receive(snapshot(["submit", "pending-input", "pending-hold"]));
+  const steer = () => client.pendingAction("w1:p1", "pending-1", "steer", 0, false, true);
+  expect(await steer()).toMatchObject({ ok: false, code: "pending_auto_steer_unsupported" });
+  expect(socket.sent.filter((frame) => frame.type === "pending-action")).toEqual([]);
+
+  socket.receive(snapshot(["submit", "pending-input", "pending-hold", "pending-auto-steer"]));
+  const sent = new Promise<Record<string, unknown>>((resolve) => {
+    socket.addEventListener("sent", (frame) => { if (frame.type === "pending-action") resolve(frame); });
+  });
+  const result = steer();
+  expect(await sent).toMatchObject({ type: "pending-action", action: "steer", auto_steer: true });
+  socket.receive({ type: "pending-result", id: 1, pane_id: "w1:p1", pending_id: "pending-1", ok: true });
+  expect(await result).toEqual({ ok: true });
+  client.close();
+});
+
 it("requires acknowledgement kind and target to match, so pending results cannot confirm an immediate submit or secret", async () => {
   const client = new HerdrSocket("ws://test/ws");
   client.connect();
