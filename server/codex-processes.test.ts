@@ -4467,6 +4467,42 @@ describe("a Codex pane keeps its conversation beside a second Codex that only st
     expect(await resolve()).toBeNull();
   });
 
+  heldIt("opens a completed reply while a same-folder Codex peer streams", async () => {
+    foreground = live;
+    writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+    const peer = startSecondCodex([startedTask("peer"), ...turn("peer", "Inspect the unrelated build output.", "").slice(0, 2)]);
+    screen = bulletedScreen;
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const writing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads % 2 === 0) appendFileSync(peer, lines([{ type: "event_msg", payload: { type: "agent_reasoning", text: `Inspecting build step ${reads}.` } }]));
+      return read(input);
+    });
+    try {
+      for (let lookup = 1; lookup <= 5; lookup++) {
+        expect(await resolve()).toBe(path);
+        expect(reads).toBe(lookup * 2);
+      }
+    } finally { writing.mockRestore(); }
+  });
+
+  heldIt("refuses a local match when a same-folder Codex peer grows into a twin", async () => {
+    foreground = live;
+    writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+    const peer = startSecondCodex([startedTask("peer"), ...turn("peer", "Inspect the unrelated build output.", "").slice(0, 2)]);
+    screen = bulletedScreen;
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const writing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) appendFileSync(peer, lines(turn("twin", longPrompt, bulletedReply)));
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { writing.mockRestore(); }
+  });
+
   for (const change of ["append", "same-size replacement"] as const) {
     heldIt(`refuses a rendered reply when a loaded competitor changes by ${change}`, async () => {
       foreground = live;

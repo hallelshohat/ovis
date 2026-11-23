@@ -3801,20 +3801,54 @@ async function stillAsWeighed({ paneId, processes, screen, home, known, rendered
     if (threads === null) return false;
     const ignoreBackground = rendered?.ignoreBackground && !running.list.some(({ argv = [] }) => execRun(argv));
     if ([...threads].some(([path, thread]) => !known.has(path) && !(ignoreBackground && backgroundExec(thread)))) return false;
-    return rendered === undefined || [...rendered.files].every(([path, revision]) => rolloutRevision(path).stamp === revision.stamp);
+    return rendered === undefined || renderedReplyCurrent(rendered);
   } catch { return false; }
 }
 
-function rolloutRevision(path: string): FileIdentity & { stamp: string } {
+function rolloutRevision(path: string): FileIdentity & { size: bigint; stamp: string } {
   const { dev, ino, size, mtimeNs, ctimeNs } = statSync(path, { bigint: true });
-  return { dev, ino, stamp: `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}` };
+  return { dev, ino, size, stamp: `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}` };
 }
 
 const backgroundExec = (thread: LoadedThread | undefined): boolean => thread?.exec === true && !thread.offered;
 
+type RolloutRevisions = ReadonlyMap<string, ReturnType<typeof rolloutRevision>>;
+
 interface RenderedReplyProof {
-  files: ReadonlyMap<string, ReturnType<typeof rolloutRevision>>;
+  files: RolloutRevisions;
   ignoreBackground: boolean;
+  growingPeers: ReadonlySet<string>;
+  reweigh: () => RolloutRevisions | null;
+}
+
+const COMPLETED_REPLY_REWEIGHS = 2;
+const COMPLETED_REPLY_TAIL_BYTES = 1024 * 1024;
+
+function renderedReplyCurrent({ files, growingPeers, reweigh }: RenderedReplyProof): boolean {
+  const mayHaveGrown = ({ path, before, now }: {
+    path: string; before: ReturnType<typeof rolloutRevision>; now: ReturnType<typeof rolloutRevision>;
+  }): boolean => growingPeers.has(path) && now.dev === before.dev && now.ino === before.ino
+    && now.size > before.size && now.size - before.size <= BigInt(COMPLETED_REPLY_TAIL_BYTES);
+  for (let attempt = 0; attempt <= COMPLETED_REPLY_REWEIGHS; attempt++) {
+    let grew = false;
+    for (const [path, before] of files) {
+      const now = rolloutRevision(path);
+      if (now.stamp === before.stamp) continue;
+      if (!mayHaveGrown({ path, before, now })) return false;
+      grew = true;
+    }
+    if (!grew) return true;
+    if (attempt === COMPLETED_REPLY_REWEIGHS) return false;
+    const next = reweigh();
+    if (next === null || next.size !== files.size) return false;
+    // Keep the strict revisions pinned across the extra reads too.
+    for (const [path, before] of files) {
+      const now = next.get(path);
+      if (now === undefined || (now.stamp !== before.stamp && !mayHaveGrown({ path, before, now }))) return false;
+    }
+    files = next;
+  }
+  return false;
 }
 
 interface WeighedReply { found: string; known: ReadonlySet<string>; rendered?: RenderedReplyProof }
@@ -3869,20 +3903,34 @@ function completedReplyConversation({ view, store, resumed, owners, home, ignore
   if (resumed !== null && !owners.has(resumed)) return null;
   const beside = store.beside.filter((path) => !ignoreBackground || path === resumed || !backgroundExec(store.threads.get(path)));
   const known = new Set([...store.known].filter((path) => !store.beside.includes(path)).concat(beside));
-  const files = new Map<string, ReturnType<typeof rolloutRevision>>();
-  for (const path of known) {
-    if (!files.has(path)) files.set(path, rolloutRevision(path));
-    for (const segment of codexHistorySegments(path, home)) {
-      if (!files.has(segment.path)) files.set(segment.path, rolloutRevision(segment.path));
+  const weigh = () => {
+    const files = new Map<string, ReturnType<typeof rolloutRevision>>();
+    const inherited = new Set<string>();
+    for (const path of known) {
+      if (!files.has(path)) files.set(path, rolloutRevision(path));
+      for (const segment of codexHistorySegments(path, home)) {
+        if (segment.path !== path) inherited.add(segment.path);
+        if (!files.has(segment.path)) files.set(segment.path, rolloutRevision(segment.path));
+      }
+      if (!chainComplete(path, home)) return null;
     }
-    if (!chainComplete(path, home)) return null;
-  }
-  // Read the tails after recording every relevant revision, including the inherited segments.
-  return readBound([...files], () => {
-    const candidates = [...known].map((path) => ({ path, ...historyTailWithLead(path, 1024 * 1024, home) }));
-    const found = matchCompletedReply({ view, candidates, owners, beside, whole: readWhole });
-    return found === null ? null : { found, known, rendered: { files, ignoreBackground } };
-  });
+    // Read the tails after recording every relevant revision, including the inherited segments.
+    return readBound([...files], () => {
+      const candidates = [...known].map((path) => ({ path, ...historyTailWithLead(path, COMPLETED_REPLY_TAIL_BYTES, home) }));
+      const found = matchCompletedReply({ view, candidates, owners, beside, whole: readWhole });
+      return found === null ? null : { found, files, inherited };
+    });
+  };
+  const first = weigh();
+  if (first === null) return null;
+  const growingPeers = new Set([...known].filter((path) => owners.has(path) && path !== first.found && !first.inherited.has(path)));
+  return { found: first.found, known, rendered: {
+    files: first.files, ignoreBackground, growingPeers,
+    reweigh: () => {
+      const next = weigh();
+      return next?.found === first.found ? next.files : null;
+    },
+  } };
 }
 
 /** A complete rendered answer can settle a local turn once the possible resumed threads have been read. */
