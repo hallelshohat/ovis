@@ -689,8 +689,9 @@ one alert waiting.
 
 ### Using the app
 
+Agent panes open in Chat by default. Set a different preference in **Settings → Chat → Panes open in**.
+
 On a phone:
-- Agent panes open in the chat.
 - The terminal gets a key bar above the keyboard (Esc, Tab, Ctrl+C, Ctrl, Alt, Shift, Enter, arrows).
   Ctrl, Alt and Shift stay held until tapped again and combine with each other.
   The terminal starts in direct typing, where they combine with letters and symbols; the

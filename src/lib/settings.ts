@@ -7,6 +7,7 @@ import type { TelemetrySettings } from "../../shared/telemetry.ts";
 import { MAX_PINS, mirrorPalette, SHARED_SETTING_KEYS, type SharedSettingKey } from "../../shared/preferences.ts";
 import { browserBlockedSites } from "../../shared/browser-policy.ts";
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { z } from "zod/mini";
 import { DEFAULT_THEME, terminalColors, themeColor as themeTableColor, type DrawnTheme, type ThemeId } from "./themes.ts";
 import { bootRows, drawnTheme, NO_CUSTOM_THEMES, sanitizeCustomThemes, type CustomThemes } from "./customThemes.ts";
 import { LANGUAGE_SETTINGS, LOCALE_TAGS, resolveLanguage, setCurrentLanguage, type Language, type LanguageSetting } from "./i18n.ts";
@@ -46,7 +47,8 @@ export const DICTATION_LANGUAGES = [
   "sk-SK", "sv-SE", "th-TH", "tr-TR", "uk-UA", "vi-VN", "zh-CN", "zh-TW",
 ] as const;
 export type DictationLanguage = "auto" | (typeof DICTATION_LANGUAGES)[number];
-export type DefaultView = "auto" | "chat" | "terminal";
+const defaultViewSchema = z.enum(["auto", "chat", "terminal"]);
+export type DefaultView = z.infer<typeof defaultViewSchema>;
 export interface FileFontBase { size: number; chat: number; ui: number }
 import { sanitizeShortcutOverrides, type ShortcutOverrides } from "./shortcutBindings.ts";
 import type { StatusIndicators } from "./status.ts";
@@ -409,7 +411,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showUsage: false,
   usageCount: "left",
   usageGlance: "session",
-  defaultView: "auto",
+  defaultView: "chat",
   usageOrder: [],
   usageHidden: [],
   voiceInput: "off",
@@ -634,7 +636,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     showUsage: typeof record["showUsage"] === "boolean" ? record["showUsage"] : DEFAULT_SETTINGS.showUsage,
     usageCount: record["usageCount"] === "used" || record["usageCount"] === "left" ? record["usageCount"] : DEFAULT_SETTINGS.usageCount,
     usageGlance: record["usageGlance"] === "week" || record["usageGlance"] === "session" ? record["usageGlance"] : DEFAULT_SETTINGS.usageGlance,
-    defaultView: record["defaultView"] === "chat" || record["defaultView"] === "terminal" || record["defaultView"] === "auto" ? record["defaultView"] : DEFAULT_SETTINGS.defaultView,
+    defaultView: defaultViewSchema.safeParse(record["defaultView"]).data ?? DEFAULT_SETTINGS.defaultView,
     usageOrder: usageKeys(record["usageOrder"]),
     usageHidden: usageKeys(record["usageHidden"]),
     machineOrder: machineIds(record["machineOrder"]),
@@ -873,6 +875,19 @@ function readEnterSends(record: boolean | null): boolean | null {
   return record === false ? false : null;
 }
 
+const DEFAULT_VIEW_STORAGE_KEY = "ovis:default-view";
+
+function readDefaultView(record: DefaultView): DefaultView {
+  try {
+    const choice = defaultViewSchema.safeParse(window.localStorage.getItem(DEFAULT_VIEW_STORAGE_KEY));
+    if (choice.success) return choice.data;
+  } catch {
+    /* unreadable: use the legacy record */
+  }
+  // Older versions saved Auto on any settings change, so it carries no record of a choice.
+  return record === "auto" ? DEFAULT_SETTINGS.defaultView : record;
+}
+
 function coarsePointer(): boolean {
   return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
 }
@@ -893,7 +908,7 @@ export function loadSettings(): Settings {
   const stored = readStoredAppearance(() => window.localStorage);
   const settings = stored.main === null ? { ...DEFAULT_SETTINGS, theme: defaultThemeSetting() } : sanitizeSettings(stored.main.value);
   const merged = stored.themes === null ? settings : sanitizeSettings({ ...settings, ...stored.themes });
-  return { ...merged, enterSends: readEnterSends(merged.enterSends), uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter(), pcLoad: readPcLoad(), phoneTabs: readPhoneTabs(), voiceEngine: readVoiceEngine(), ...readAgentGroups(), ...readFileFont(), composerArtifacts: readComposerArtifacts(),
+  return { ...merged, defaultView: readDefaultView(merged.defaultView), enterSends: readEnterSends(merged.enterSends), uiFontFamily: readUiFontFamily(), terminalMirrorWrap: readMirrorWrap(), sidebarFilter: readSidebarFilter(), pcLoad: readPcLoad(), phoneTabs: readPhoneTabs(), voiceEngine: readVoiceEngine(), ...readAgentGroups(), ...readFileFont(), composerArtifacts: readComposerArtifacts(),
     expandThinking: readChatFold(EXPAND_THINKING_STORAGE_KEY, DEFAULT_SETTINGS.expandThinking), foldWork: readChatFold(FOLD_WORK_STORAGE_KEY, DEFAULT_SETTINGS.foldWork),
     reuseExternalLinkTab: readChatFold(REUSE_EXTERNAL_LINK_TAB_STORAGE_KEY, DEFAULT_SETTINGS.reuseExternalLinkTab),
     filesPanel: readChatFold(FILES_PANEL_STORAGE_KEY, DEFAULT_SETTINGS.filesPanel),
@@ -949,6 +964,7 @@ export function saveSettings(settings: Settings): boolean {
     window.localStorage.setItem(TERMINAL_KEYBOARD_ON_REQUEST_STORAGE_KEY, JSON.stringify(terminalKeyboardOnRequest));
     window.localStorage.setItem(TERMINAL_FOLD_KEY_BAR_STORAGE_KEY, JSON.stringify(terminalFoldKeyBar));
     window.localStorage.setItem(ENTER_SENDS_STORAGE_KEY, JSON.stringify(mirrored.enterSends));
+    window.localStorage.setItem(DEFAULT_VIEW_STORAGE_KEY, mirrored.defaultView);
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ ...main, enterSends: main.enterSends ?? true }));
     return true;
   } catch {
