@@ -4398,6 +4398,14 @@ describe("a Codex pane keeps its conversation beside a second Codex that only st
     [...top, `› ${prompt}`, "", "", `• ${reply}`, "", `  Worked for 1s • ${clock}`, ...composer].join("\n");
   /** The pane right after /new: the logo again, no turn. */
   const redrawn = [...header, "› Ask Codex to do anything", "", "  GPT-6-Luna low · /tmp/proj", "  ← for agents · ? for shortcuts"].join("\n");
+  const bulletedReply = "The **verification** is complete.\n\n- [Open the report](https://example.test/report)\n- [Open the logs](https://example.test/logs)\n\nThe report lists the independent checks and gives detailed instructions for reproducing each result.";
+  const bulletedScreen = finished(longPrompt, [
+    "The verification is complete.", "", "  • Open the report", "    (https://example.", "    test/report)",
+    "  • Open the logs (https://example.test/logs)", "",
+    "  The report lists the independent checks and gives detailed instructions for reproducing each result.",
+  ].join("\n"), "16:14").replace("/tmp/proj · Reply with one word", "/tmp/proj ·\n  Check independent reports · Main [default]");
+  const startedTask = (id: string) => ({ type: "event_msg", payload: { type: "task_started", turn_id: id } });
+  const cutToolOutput = { type: "response_item", payload: { type: "function_call_output", call_id: "cut", output: "x".repeat(2 * 1024 * 1024) } };
 
   it("keeps a pane whose long answer is still on screen: the answer matches again", async () => {
     foreground = live;
@@ -4408,13 +4416,62 @@ describe("a Codex pane keeps its conversation beside a second Codex that only st
     expect(await resolve()).toBe(path);
   });
 
-  it("loads a large Codex conversation after a completed bulleted reply", async () => {
+  for (const via of ["argv", "picker"] as const) {
+    heldIt(`does not select the local twin on a cross-folder Codex resume via ${via}`, async () => {
+      const resumed = "01a16b22-7e1f-7072-8897-d5e46a0d5f71";
+      foreground = [{ pid: 2147483645, argv: ["/usr/bin/codex", "resume", via === "argv" ? resumed : "--all"] }];
+      writeRollout(path, thread, [
+        ...turn("old-local", "Which conversation is this?", "Local twin only."),
+        ...turn("local", longPrompt, bulletedReply),
+      ]);
+      startSecondCodex([cutToolOutput, startedTask("cut")], -5);
+      const actual = elsewhereThread(resumed, [
+        ...turn("old-remote", "Which conversation is this?", "Actual resumed session."),
+        ...turn("remote", longPrompt, bulletedReply),
+      ]);
+      const db = new Database(join(home, "state_5.sqlite"));
+      db.query("UPDATE threads SET updated_at = ? WHERE id = ?").run(Math.floor(Date.now() / 1000), resumed);
+      db.close();
+      if (via === "picker") await loaded(resumed);
+      screen = bulletedScreen;
+      if (via === "argv") {
+        expect(await resolve()).toBe(actual);
+        const page = await conversationModule.paneConversation(root, home, { prompts: 10 });
+        const messages = page.turns.flatMap((item) => item.parts);
+        expect(messages).toContainEqual({ kind: "text", text: "Actual resumed session." });
+        expect(messages).not.toContainEqual({ kind: "text", text: "Local twin only." });
+      } else {
+        expect([null, actual]).toContain(await resolve());
+      }
+    });
+  }
+
+  heldIt("matches a completed bulleted reply below wrapped Codex status", async () => {
     foreground = live;
-    const latest = "The **verification** is complete.\n\n- [Open the report](https://example.test/report)\n- [Open the logs](https://example.test/logs)\n\nThe report lists the independent checks and gives detailed instructions for reproducing each result.";
+    writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+    const peer = startSecondCodex([cutToolOutput, startedTask("cut")]);
+    screen = bulletedScreen;
+    expect(await resolve()).toBe(path);
+    for (const altered of [
+      bulletedScreen.replace("test/report)", "test/report]"),
+      bulletedScreen.replace("Ask Codex to do anything", "Draft message"),
+      bulletedScreen.replace("Check independent reports · Main [default]", "Unrelated composer row"),
+    ]) {
+      screen = altered;
+      expect(await resolve()).toBeNull();
+    }
+    screen = bulletedScreen;
+    writeRollout(peer, secondThread, turn("peer", longPrompt, bulletedReply.replace("**verification**", "verification")));
+    expect(await resolve()).toBeNull();
+    writeRollout(peer, secondThread, [startedTask("peer"), ...turn("peer", longPrompt, "").slice(0, 2)]);
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("loads a large Codex conversation after a completed bulleted reply", async () => {
+    foreground = live;
     const toolBytes = "synthetic command output\n".repeat(132_000);
     const toolCall = { type: "response_item", payload: { type: "function_call", call_id: "earlier-call", name: "exec_command", arguments: '{"cmd":"verify"}' } };
     const toolOutput = { type: "response_item", payload: { type: "function_call_output", call_id: "earlier-call", output: toolBytes } };
-    const startedTask = (turn_id: string) => ({ type: "event_msg", payload: { type: "task_started", turn_id } });
     writeRollout(path, thread, []);
     for (let index = 0; index < 6; index++) {
       const id = `old-${index}`;
@@ -4422,13 +4479,9 @@ describe("a Codex pane keeps its conversation beside a second Codex that only st
       records.splice(2, 0, toolCall, toolOutput);
       appendFileSync(path, lines([startedTask(id), ...records]));
     }
-    appendFileSync(path, lines([startedTask("latest"), ...turn("latest", longPrompt, latest)]));
+    appendFileSync(path, lines([startedTask("latest"), ...turn("latest", longPrompt, bulletedReply)]));
     startSecondCodex([toolOutput, startedTask("unread")]);
-    screen = finished(longPrompt, [
-      "The verification is complete.", "", "  • Open the report (https://example.test/report)",
-      "  • Open the logs (https://example.test/logs)", "",
-      "  The report lists the independent checks and gives detailed instructions for reproducing each result.",
-    ].join("\n"), "16:14").replace("/tmp/proj · Reply with one word", "/tmp/proj ·\n  Check independent reports · Main [default]");
+    screen = bulletedScreen;
     const bytes = statSync(path).size;
     expect(bytes).toBeGreaterThan(16 * 1024 * 1024);
     const started = performance.now();
@@ -4436,7 +4489,7 @@ describe("a Codex pane keeps its conversation beside a second Codex that only st
     const milliseconds = performance.now() - started;
     console.log(JSON.stringify({ case: "large completed Codex chat", bytes, milliseconds }));
     expect(page.source).toBe("codex-transcript");
-    expect(page.turns.at(-1)?.parts).toContainEqual({ kind: "text", text: latest });
+    expect(page.turns.at(-1)?.parts).toContainEqual({ kind: "text", text: bulletedReply });
     expect(milliseconds).toBeLessThan(1_500);
     if (!page.cursor) throw new Error("Expected a cursor into the large transcript");
     const older = await conversationModule.paneConversation(root, home, { before: page.cursor, prompts: 10 });

@@ -1232,7 +1232,7 @@ function codexShownText(nodes: InlineNode[]): string | null {
 }
 
 /** Compare whole rendered paragraphs, tables and flat lists, preserving punctuation and order. */
-function completedAnswerMatches(answer: string, screen: string): boolean {
+function completedAnswerMatches({ answer, screen, unorderedLists = false }: { answer: string; screen: string; unorderedLists?: boolean }): boolean {
   if (completedRowsMatch(answer, screen)) return true;
   const words: string[] = [];
   let table = false;
@@ -1250,7 +1250,7 @@ function completedAnswerMatches(answer: string, screen: string): boolean {
         if (cells.some((cell) => cell === null)) return false;
         words.push(cells.join(" "));
       }
-    } else if (block.type === "list") {
+    } else if (block.type === "list" && (block.ordered || unorderedLists)) {
       for (const [index, item] of block.items.entries()) {
         if (item.checked !== undefined || item.blocks?.length) return false;
         const text = codexShownText(item.content);
@@ -1283,14 +1283,14 @@ function noticeStart(rows: readonly { line: string }[], end: number, kind: "limi
  * it but Codex's own status rows (FOOTER, at most four). Null when the screen shows no such turn: one still under
  * way, a message sent since, or a read cut before the composer.
  */
-function idleTurnFooter(lines: readonly string[]): number | null {
+function idleTurnFooter({ lines, wrappedStatus = false }: { lines: readonly string[]; wrappedStatus?: boolean }): number | null {
   const rows = lines.map((line, at) => ({ line, at })).filter(({ line }) => line.trim() !== "");
   // the composer's mark is "»" at Ultra reasoning effort (Codex 0.164 on)
   const composer = rows.length - 1 - [...rows].reverse().findIndex(({ line }) => /^[\u203a\u00bb]/.test(line));
   if (composer >= rows.length || !/^[\u203a\u00bb](?:\s+Ask Codex to do anything)?$/.test(rows[composer]!.line.trim())) return null;
   const status = rows.slice(composer + 1);
   // Codex can wrap its session title and agent label onto the row after the model and folder.
-  if (status[0]?.line.trimEnd().endsWith(" ·") && FOOTER.test(status[0].line.trim())
+  if (wrappedStatus && status[0]?.line.trimEnd().endsWith(" ·") && FOOTER.test(status[0].line.trim())
     && status[1]?.line.startsWith("  ") && status[1].line.trimEnd().endsWith(" · Main [default]")) status.splice(1, 1);
   if (status.length === 0 || status.length > 4 || !status.every(({ line }) => FOOTER.test(line.trim()))) return null;
   let before = composer - 1;
@@ -1325,9 +1325,9 @@ function idleTurnFooter(lines: readonly string[]): number | null {
  * the one asked the prompt with those rows pasted under it did. Null when the screen shows no such turn, or none
  * with its prompt (shownAnswers), whose answers fall back as before.
  */
-function footedAnswer(screen: string): { text: string; prompts: string[]; rows: string[] } | null {
+function footedAnswer({ screen, wrappedStatus }: { screen: string; wrappedStatus?: boolean }): { text: string; prompts: string[]; rows: string[] } | null {
   const lines = screen.split("\n").map((line) => line.replace(/\r$/, ""));
-  const index = idleTurnFooter(lines);
+  const index = idleTurnFooter({ lines, wrappedStatus });
   if (index === null) return null;
   let start = index - 2;
   while (start > 0 && /^(?:\s|$)/.test(lines[start]!)) start--;
@@ -1675,7 +1675,7 @@ export function footedTailTranscript(screen: string, candidates: { path: string;
   leads: () => { path: string; text: string }[] = () => []): string | null {
   const header = screen.lastIndexOf("OpenAI Codex (v");
   const lines = footedView(header < 0 ? screen : screen.slice(header)).split("\n").map((line) => line.replace(/\r$/, ""));
-  const footer = idleTurnFooter(lines);
+  const footer = idleTurnFooter({ lines });
   if (footer === null) return null;
   let above = footer - 1;
   while (above >= 0 && !CODEX_TURN_FOOTER.test(lines[above]!)) above--;
@@ -1700,7 +1700,7 @@ export function footedTailTranscript(screen: string, candidates: { path: string;
   const own = found[0];
   if (found.length !== 1 || own === undefined || !owners.has(own.path)) return null;
   // the prompt of that turn, where the screen shows it: the answer's "•" row with a "›" row above it
-  const footed = whole ? footedAnswer(lines.join("\n")) : null;
+  const footed = whole ? footedAnswer({ screen: lines.join("\n") }) : null;
   if (footed !== null) {
     const turn = footedTurnOwner(footed, candidates, [], owners, fits);
     if (turn === null || turn.path !== own.path || !askedAsShown(turn.asked, footed.rows) || turn.askedElsewhere(true)) return null;
@@ -1781,7 +1781,7 @@ function footedView(screen: string): string {
  * (lastTurnConversation).
  */
 export function footedShortTranscript(screen: string, candidates: { path: string; text: string }[], owners: ReadonlySet<string>, whole: (path: string) => boolean = () => false): string | null {
-  const footed = footedAnswer(footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v")))));
+  const footed = footedAnswer({ screen: footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v")))) });
   if (footed === null) return null;
   const shown = alnum(footed.text);
   if (shown === "" || footed.prompts.length === 0) return null;
@@ -1969,7 +1969,7 @@ function footedTurnOwner(footed: { text: string; prompts: readonly string[] }, c
     if (prompts.length === 0 && users.length === 0) return unread || unfinishedOf(candidate) && [lastAnswer].some((answer) => {
       if (answer === undefined) return false;
       const found = answerAnchor(answer);
-      return found === null || displays.some((display) => display.includes(found.anchor)) || completedAnswerMatches(answer, footed.text);
+      return found === null || displays.some((display) => display.includes(found.anchor)) || completedAnswerMatches({ answer, screen: footed.text });
     });
     // a prompt sent as several messages reads as its parts' run
     if (last !== null && prompts.at(-1) === last.asked) return users.length > 0 && endsAsShown(users.join(""));
@@ -2002,11 +2002,11 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   // an answer counts only shown whole, both ends, in one block: one more character either side is another answer
   const wholeBlocks = answerParts.flatMap(shownBlocks);
   const parsed = candidates.map(turnsOf);
-  const footed = blocks ? null : footedAnswer(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
+  const footed = blocks ? null : footedAnswer({ screen: screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))) });
   const turn = footed === null ? null : footedTurnOwner(footed, candidates, displays, footerOwners);
   // the same text binds while no other candidate records the prompt shown; a rendering only while no other's read may have cut it either
   const footedOwner = turn !== null && footed!.prompts.includes(collapsed(turn.asked)) && !turn.askedElsewhere(false)
-    && (collapsed(turn.answer) === collapsed(footed!.text) || !turn.askedElsewhere(true) && completedAnswerMatches(turn.answer, footed!.text)) ? turn.path : null;
+    && (collapsed(turn.answer) === collapsed(footed!.text) || !turn.askedElsewhere(true) && completedAnswerMatches({ answer: turn.answer, screen: footed!.text })) ? turn.path : null;
   // every answer each candidate gave, as answerAnchor reads one (cut at link targets), read once
   let shown: Said[] | undefined;
   const givenElsewhere = (index: number, { anchor, words }: Anchor) => (shown ??= parsed.map((turns, at) =>
@@ -2019,21 +2019,17 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
     // proves ownership under the same prompt, uniqueness and competing-prompt checks above.
     if (candidate.path === footedOwner && answersOf(parsed[index]!).some((text) => {
       const substantial = normalizeDisplay(text);
-      return substantial.length >= 64 && new Set(substantial).size >= 12 && completedAnswerMatches(text, footed!.text);
+      return substantial.length >= 64 && new Set(substantial).size >= 12 && completedAnswerMatches({ answer: text, screen: footed!.text });
     })) matching.add(candidate.path);
     const anchors = answersOf(parsed[index]!.slice(-100)).slice(-8).flatMap((text) => {
       const found = answerAnchor(text);
       if (found === null || !displays.some((display) => display.includes(found.anchor))) return [];
       if (wholeBlocks.some((block) => found.whole.test(markedDisplay(block)))
-        || (candidate.path === footedOwner && completedAnswerMatches(text, footed!.text))) return [found];
+        || (candidate.path === footedOwner && completedAnswerMatches({ answer: text, screen: footed!.text }))) return [found];
       if (composer === null) return [];
       const clippedFooter = footed !== null && footed.rows.some((row) => row.trimEnd().endsWith("…"))
-        && (footerOwners === null || footerOwners.has(candidate.path)) && endedOn(candidate) === text && completedAnswerMatches(text, footed.text);
-      // Let the caller check loaded peers before accepting a match that excludes a just-started thread.
-      const completed = footed !== null && turn?.path === candidate.path && text === turn.answer
-        && askedAsShown(turn.asked, footed.rows) && !turn.askedElsewhere(false) && completedAnswerMatches(text, footed.text)
-        && !candidates.some(onlyStarted);
-      const rendered = wholeBlocks.find((block) => completedAnswerMatches(text, block)) ?? (completed || clippedFooter ? footed!.text : undefined);
+        && (footerOwners === null || footerOwners.has(candidate.path)) && endedOn(candidate) === text && completedAnswerMatches({ answer: text, screen: footed.text });
+      const rendered = wholeBlocks.find((block) => completedAnswerMatches({ answer: text, screen: block })) ?? (clippedFooter ? footed!.text : undefined);
       if (rendered === undefined) return [];
       // A raw anchor can miss an equivalent entity spelling; it must still compete with a rendered match.
       const letters = normalizeDisplay(rendered), bare = bareLetters(rendered), words = wordsEnding(rendered, letters.length);
@@ -3820,9 +3816,9 @@ async function lastTurnConversation(paneId: string, processes: string, screen: s
   Promise<{ found: string; known: ReadonlySet<string> } | null> {
   // nothing to read unless the screen shows its last turn finished
   const view = footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
-  if (idleTurnFooter(view.split("\n").map((line) => line.replace(/\r$/, ""))) === null) return null;
+  if (idleTurnFooter({ lines: view.split("\n").map((line) => line.replace(/\r$/, "")), wrappedStatus: true }) === null) return null;
   try {
-    const store = await conversationsBeside("last turn", processes, screen, candidates, resumed, owners, home);
+    const store = await conversationsBeside(`last turn\n${resumed ?? ""}`, processes, screen, candidates, resumed, owners, home);
     if (store === null) return null;
     const found = answerKept<string | null>("last turn", paneId, store.weighed, () => {
       const wholeReads = new Map<string, boolean>();
@@ -3836,11 +3832,35 @@ async function lastTurnConversation(paneId: string, processes: string, screen: s
       // Each is weighed as a read of its own, so that the read it was cut from keeps what was found in it
       const leads = () => [...candidates.flatMap((candidate) => whole(candidate.path) ? [] : [{ path: candidate.path, text: historyTailWithLead(candidate.path, 1024 * 1024, home).lead }]),
         ...store.beside.map((path, at) => ({ path, text: others[at]!.lead }))].filter((lead) => lead.text !== "");
-      const tail = footedTailTranscript(screen, every, owners, whole, leads);
+      const tail = footedTailTranscript(screen, every, owners, whole, leads)
+        ?? matchCompletedReply({ view, candidates: every, owners, resumed, beside: store.beside, whole, leads });
       return tail !== null && every.some((candidate) => candidate.path !== tail && Object.keys(record(rolloutHeader(candidate.path)?.history_base)).length > 0 && !chainComplete(candidate.path, home)) ? null : tail;
     });
     return found === null ? null : { found, known: store.known };
   } catch { return null; }
+}
+
+/** A complete rendered answer can settle a local turn once the possible resumed threads have been read. */
+function matchCompletedReply({ view, candidates, owners, resumed, beside, whole, leads }: {
+  view: string; candidates: Candidate[]; owners: ReadonlySet<string>; resumed: string | null; beside: readonly string[];
+  whole: (path: string) => boolean; leads: () => Candidate[];
+}): string | null {
+  if (resumed !== null && !owners.has(resumed)) return null;
+  const footed = footedAnswer({ screen: view, wrappedStatus: true });
+  if (footed === null) return null;
+  const begun = candidates.filter((candidate) => !(turnless(candidate) && whole(candidate.path)));
+  const turn = footedTurnOwner(footed, begun, [], owners);
+  if (turn === null || !askedAsShown(turn.asked, footed.rows) || turn.askedElsewhere(false)) return null;
+  // A cut or still-running outside history may be the one the TUI resumed.
+  if (begun.some((candidate) => beside.includes(candidate.path)
+    && (underWay(candidate, whole) || lastTurnOf(candidate)?.asked == null))) return null;
+  const letters = normalizeDisplay(footed.text);
+  const anchor = answerAnchor(turn.answer);
+  if (anchor === null || !letters.includes(anchor.anchor)
+    || !completedAnswerMatches({ answer: turn.answer, screen: footed.text, unorderedLists: true })) return null;
+  const bare = bareLetters(footed.text), words = wordsEnding(footed.text, letters.length);
+  if (begun.some((candidate) => candidate.path !== turn.path && saidBy({ candidate, letters, bare, words, whole: true }))) return null;
+  return leads().some((lead) => lead.path !== turn.path && saidInLead(lead.text, letters, bare, words)) ? null : turn.path;
 }
 
 /**

@@ -919,32 +919,6 @@ describe("Codex rollout resolution", () => {
     ]) expect(matchCodexTranscript(shown, [own])).toBeNull();
   });
 
-  it("matches a completed bulleted reply below wrapped Codex status", () => {
-    const asked = "Where can I verify the two independent reports?";
-    const latest = "The **verification** produced these reports:\n\n- [First report](https://example.test/a)\n- [Second report](https://example.test/b)\n\nBoth reports include the independent checks and a detailed account of the steps used to reproduce the results.";
-    const prompt = (id: string) => event({ type: "item_completed", turn_id: id, item: { type: "UserMessage", content: [{ type: "input_text", text: asked }] } });
-    const finished = ({ path, answer }: { path: string; answer: string }) => ({
-      path, text: jsonl(prompt(path), message("assistant", answer, "final_answer"), event({ type: "task_complete", turn_id: path, last_agent_message: answer })),
-    });
-    const own = finished({ path: "own", answer: latest });
-    const cut = { path: "cut", text: jsonl(event({ type: "task_started", turn_id: "cut" })) };
-    const screen = [
-      `› ${asked}`, "", "• The verification produced these reports:", "", "  • First report",
-      "    (https://example.", "    test/a)", "  • Second report", "    (https://example.test/b)", "",
-      "  Both reports include the independent checks and a detailed account of the steps used to reproduce the results.",
-      "", "  Worked for 4s • 16:14", "", "› Ask Codex to do anything", "",
-      "  GPT-6.2-Sol medium · /project ·", "  Check independent reports · Main [default]",
-      "  ← for agents · ? for shortcuts      ⚠ 10 warnings · f2 to view",
-    ].join("\n");
-    expect(matchCodexTranscript(screen, [own, cut])).toBe(own.path);
-    const twin = finished({ path: "twin", answer: latest.replace("**verification**", "verification") });
-    expect(matchCodexTranscript(screen, [own, cut, twin])).toBeNull();
-    expect(matchCodexTranscript(screen, [own, { path: "same-prompt", text: jsonl(prompt("same-prompt")) }])).toBeNull();
-    expect(matchCodexTranscript(screen.replace("test/a)", "test/a]"), [own, cut])).toBeNull();
-    expect(matchCodexTranscript(screen.replace("Ask Codex to do anything", "Draft message"), [own, cut])).toBeNull();
-    expect(matchCodexTranscript(screen.replace("Check independent reports · Main [default]", "Unrelated composer row"), [own, cut])).toBeNull();
-  });
-
   it("matches an answer that links a file, which Codex shows as the label and a path relative to the cwd", () => {
     const linked = `${answer} [The report](/home/user/repo/output/test/REPORT.md)`;
     const candidates = [{ path: "linked", text: jsonl(message("assistant", linked, "final_answer")) }];
