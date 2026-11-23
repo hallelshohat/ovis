@@ -533,7 +533,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showUsage: false,
   usageCount: "left",
   usageGlance: "session",
-  defaultView: "auto",
+  defaultView: "chat",
   usageOrder: [],
   usageHidden: [],
   machineOrder: [],

@@ -1494,10 +1494,13 @@ describe("key bar settings", () => {
 });
 
 describe("default lens", () => {
-  it("keeps only a known choice, auto by default", () => {
-    expect(DEFAULT_SETTINGS.defaultView).toBe("auto");
+  it("defaults to chat and preserves saved choices", () => {
+    expect(DEFAULT_SETTINGS.defaultView).toBe("chat");
+    expect(sanitizeSettings({}).defaultView).toBe("chat");
+    expect(sanitizeSettings({ defaultView: "split" }).defaultView).toBe("chat");
+    expect(sanitizeSettings({ defaultView: "auto" }).defaultView).toBe("auto");
     expect(sanitizeSettings({ defaultView: "chat" }).defaultView).toBe("chat");
-    expect(sanitizeSettings({ defaultView: "split" }).defaultView).toBe("auto");
+    expect(sanitizeSettings({ defaultView: "terminal" }).defaultView).toBe("terminal");
   });
   it("forgets every pane's own lens and nothing else", () => {
     const data = new Map<string, string>([["ovis:view:local:w1:p1", "terminal"], ["ovis:view:remote:pc:w2:p1", "chat"], ["ovis:settings", "{}"]]);
