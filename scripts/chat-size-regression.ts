@@ -9,6 +9,7 @@ import { createServer } from "../server/index.ts";
 import { PtySession } from "../server/pty/session.ts";
 import { herdrRpc, herdrSocketPath, type WorkspaceCreateResult, paneRead, paneSendKeys, paneSendText, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { legacyQueuedSubmit } from "./legacy-queue-fixture.ts";
 import { shownRow, shownRows } from "./shown-rows.ts";
 import { clickTab } from "./tab-pick.ts";
 import { openLens } from "./header-lens.ts";
@@ -672,13 +673,13 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
             socket.onMessage((raw) => {
               const frame = JSON.parse(String(raw));
               record(raw, "out");
-              if (queueScenario && frame.type === "submit" && frame.delivery === "queue") {
+              if (queueScenario && frame.type === "submit" && frame.delivery === "hold") {
                 if (scenario === "queue-switch") {
                   // The component receives the real pending protocol; backend queue behavior has contract tests.
                   const receipt = JSON.stringify({ type: "submit-result", id: frame.id, pane_id: first, ok: true,
                     pending: { id: "lifecycle-queue", request_id: frame.id, text: frame.text, state: "queued", created_at: new Date().toISOString() } });
                   record(receipt, "in"); socket.send(receipt);
-                } else releaseSubmit = () => upstream.send(raw); // validation/acceptance still runs on the real server
+                } else releaseSubmit = () => upstream.send(legacyQueuedSubmit({ raw }));
               } else upstream.send(raw);
             });
           });
@@ -696,8 +697,6 @@ export async function checkInactiveAttachLifecycle(browser: Browser, origin: str
         }
         page = await openRecording(browser, contexts, origin, scenario === "held" ? heldPane : first,
           { viewport: { width: 1000, height: 700 } }, { language: "en", defaultView: queueScenario ? "chat" : "terminal",
-            // These scenarios exercise the automatic queue, which is off until chosen.
-            autoSendQueued: queueScenario,
             releasePaneAway: scenario === "mount-optin" || (!fresh && !reconnect && scenario !== "switch" && scenario !== "idle-off") },
           fresh, async (recording) => {
             // a tab in use from its first attach, on the page clock from the start: its quiet spell is counted there

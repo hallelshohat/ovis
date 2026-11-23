@@ -2564,7 +2564,7 @@ class DemoSocket extends EventTarget {
       const open = new Event("open");
       this.onopen?.(open);
       this.dispatchEvent(open);
-      this.push({ type: "snapshot", snapshot: readSnapshot(local)!, features: ["submit", "pending-input", "pending-hold", "secret-input", "input-ready", "conversation-watch", "ping", "terminal-insert", "agent-only", "conversation-search"], connection: this.connection });
+      this.push({ type: "snapshot", snapshot: readSnapshot(local)!, features: ["submit", "pending-input", "pending-hold", "pending-auto-steer", "secret-input", "input-ready", "conversation-watch", "ping", "terminal-insert", "agent-only", "conversation-search"], connection: this.connection });
     }, 20);
     this.timers.add(opening);
   }
@@ -2597,10 +2597,10 @@ class DemoSocket extends EventTarget {
 
   send(raw: string): void {
     if (this.readyState !== 1) return;
-    let message: { type: string; pane_id?: string; cols?: number; rows?: number; text?: string; payload?: string; keys?: string[]; id?: number; mode?: string; typed?: unknown; delivery?: unknown; clear_draft?: unknown; send_anyway?: unknown; resend_id?: unknown; resend_generation?: unknown; agent_only?: unknown; pending_id?: string; action?: unknown; enabled?: boolean; stop?: unknown; keep_size?: boolean };
+    let message: { type: string; pane_id?: string; cols?: number; rows?: number; text?: string; payload?: string; keys?: string[]; id?: number; mode?: string; typed?: unknown; delivery?: unknown; clear_draft?: unknown; send_anyway?: unknown; resend_id?: unknown; resend_generation?: unknown; agent_only?: unknown; pending_id?: string; action?: unknown; auto_steer?: unknown; enabled?: boolean; stop?: unknown; keep_size?: boolean };
     try { message = JSON.parse(raw); } catch { return; }
     if ((message.type === "submit" || message.type === "pending-action") && Number.isSafeInteger(message.id)) {
-      const signature = JSON.stringify({ type: message.type, pane_id: message.pane_id, text: message.text, payload: message.payload, typed: message.typed, delivery: message.delivery, clear_draft: message.clear_draft, send_anyway: message.send_anyway, resend_id: message.resend_id, resend_generation: message.resend_generation, agent_only: message.agent_only, pending_id: message.pending_id, action: message.action });
+      const signature = JSON.stringify({ type: message.type, pane_id: message.pane_id, text: message.text, payload: message.payload, typed: message.typed, delivery: message.delivery, clear_draft: message.clear_draft, send_anyway: message.send_anyway, resend_id: message.resend_id, resend_generation: message.resend_generation, agent_only: message.agent_only, pending_id: message.pending_id, action: message.action, auto_steer: message.auto_steer });
       const previous = this.requests.get(message.id!);
       if (previous) {
         if (previous.signature !== signature) {
@@ -2790,6 +2790,7 @@ class DemoSocket extends EventTarget {
         if (message.id !== undefined && message.pane_id && message.pending_id) {
           const result = (ok: boolean, code?: string) => this.completeRequest({ type: "pending-result", id: message.id!, pane_id: message.pane_id!, pending_id: message.pending_id!, ok, ...(code ? { code, message: "The demo pending message was not changed." } : {}) });
           if (message.action !== "steer" && message.action !== "discard") { result(false, "invalid_pending_action"); break; }
+          if (message.auto_steer !== undefined && (message.auto_steer !== true || message.action !== "steer")) { result(false, "invalid_pending_action"); break; }
           if (message.resend_generation !== undefined && (typeof message.resend_generation !== "number" || !Number.isSafeInteger(message.resend_generation) || message.resend_generation < 0)) {
             result(false, "invalid_pending_action"); break;
           }
@@ -2839,6 +2840,13 @@ class DemoSocket extends EventTarget {
             const code = this.pendingTargetError(message.pane_id);
             if (code) { resendResult(false, code); break; }
             if (pending.state === "uncertain") { result(false, "pending_uncertain"); break; }
+            if (message.auto_steer && paneOf(message.pane_id)?.agent_status !== "working") {
+              pending.state = "held";
+              pending.error = { code: "pending_wait", message: "The agent's turn ended before steering. Press Send now to send the message." };
+              this.publishPending(message.pane_id);
+              resendResult(false, "pending_wait");
+              break;
+            }
             const sent = this.deliverPending(message.pane_id, pending);
             resendResult(sent, sent ? undefined : pending.error?.code ?? "pending_changed");
           }

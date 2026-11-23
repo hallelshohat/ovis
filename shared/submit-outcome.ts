@@ -30,5 +30,5 @@ export function submitNotTyped(code: string): boolean {
     // a message for an agent alone was not sent to a bridge that cannot keep that rule (HerdrSocket)
     "agent_only_unsupported",
     // a hold that must never go on its own was not sent to a bridge that cannot hold one (HerdrSocket)
-    "pending_hold_unsupported"].includes(code);
+    "pending_hold_unsupported", "pending_auto_steer_unsupported", "pending_wait"].includes(code);
 }

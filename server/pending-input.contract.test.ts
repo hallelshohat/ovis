@@ -1542,6 +1542,53 @@ describe("connection-owned pending input", () => {
     expect(f.bytes()).toBe(before);
   }, 30_000);
 
+  it("holds an automatic steer rather than clearing the stopped prompt Claude restored", async () => {
+    const f = await setup("auto-steer-restored");
+    const previous = "write a story about a gardener";
+    const sent = await f.queue(1, previous);
+    await f.state("idle"); await f.removed(sent.id);
+    await f.waitBytes(`${paste(previous)}\r`);
+    await f.state("working");
+    f.socket.send({ type: "submit", id: 2, pane_id: f.pane, text: "then reply PONG", payload: "unused", delivery: "hold" });
+    const { pending } = await f.socket.result(2);
+    expect(pending.state).toBe("held");
+    const before = f.bytes();
+
+    const rule = "─".repeat(60);
+    const footer = "[Haiku 4.5] │ project";
+    await f.showScreen(`  ✻ Cooked for 1s\n${rule}\n❯ ${previous}\n${rule}\n  ${footer}\n`, footer);
+    await f.state("idle");
+    f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: pending.id, action: "steer", auto_steer: true });
+    expect(await f.socket.action(10)).toMatchObject({ ok: false, code: "input_draft" });
+    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) =>
+      item.id === pending.id && item.state === "held" && item.error?.code === "input_draft"));
+    expect(f.bytes()).toBe(before);
+    const response = await fetch(`http://localhost:${f.port}/api/pane/prompt?pane_id=${encodeURIComponent(f.pane)}`);
+    expect(await response.json()).toMatchObject({ restored: previous });
+  }, 30_000);
+
+  it.each(["before paste", "before Enter"] as const)("does not start a new turn when automatic steering loses its turn %s", async (when) => {
+    const f = await setup(`auto-steer-${when.replace(" ", "-")}`);
+    const text = "an active-turn follow-up";
+    f.socket.send({ type: "submit", id: 1, pane_id: f.pane, text, payload: "unused", delivery: "hold" });
+    const { pending } = await f.socket.result(1);
+    const beforePaste = when === "before paste";
+    const gate = beforePaste ? null : holdConnect("keys");
+    if (beforePaste) await f.state("idle");
+    f.socket.send({ type: "pending-action", id: 10, pane_id: f.pane, pending_id: pending.id, action: "steer", auto_steer: true });
+    if (gate !== null) {
+      try {
+        await gate.reached;
+        await f.state("idle");
+      } finally { gate.release(); }
+    }
+    const code = beforePaste ? "pending_wait" : "submit_changed";
+    expect(await f.socket.action(10)).toMatchObject({ ok: false, code });
+    await f.socket.wait((frame) => frame.type === "pending-messages" && frame.messages.some((item: PendingMessage) =>
+      item.id === pending.id && item.state === (beforePaste ? "held" : "uncertain") && item.error?.code === code));
+    expect(f.bytes()).toBe(beforePaste ? "" : paste(text));
+  }, 30_000);
+
   it("marks a queued send typed at once as typed now, and never its replay or a discarded row's", async () => {
     const f = await setup("typed-now");
     await f.state("idle");

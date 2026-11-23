@@ -143,7 +143,7 @@ export const SETTINGS_KO: Record<string, string> = {
   "Enter one character.": "한 글자를 입력하세요.",
   "Add combination": "조합 추가",
   "Already added": "이미 추가됨",
-  "Send queued messages automatically": "대기 메시지 자동 전송",
+  "Steer active turns automatically": "진행 중인 턴 자동 조정",
   "Clipboard from a pane": "패널에서 클립보드로 복사",
   "Show pictures in the terminal": "터미널에 그림 표시",
   "Keyboard only from the key bar": "키보드는 키 바에서만",
