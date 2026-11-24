@@ -82,7 +82,7 @@ async function checkWorkspaceTokens({ page, phone, capture }: { page: Page; phon
   await line.waitFor();
   assert.equal(await line.textContent(), `${APPROVAL} · 40% 32m`);
   await assertTokenColor({ token: board, variable: "--indicator-working" });
-  const emptyWorkspace = page.locator('li.workspace[data-workspace="w1E"]');
+  const emptyWorkspace = page.locator('li.workspace[data-workspace="w1C"]');
   assert.equal(await emptyWorkspace.count(), 1);
   assert.equal(await emptyWorkspace.locator(".workspace-tokens").count(), 0);
   const header = await page.locator(`${BOARD_WORKSPACE} > .workspace-header`).boundingBox();
@@ -91,7 +91,7 @@ async function checkWorkspaceTokens({ page, phone, capture }: { page: Page; phon
 
   if (evidence && capture) {
     await line.scrollIntoViewIfNeeded();
-    await page.locator(".sidebar-shell").screenshot({ path: join(evidence, `workspace-tokens-${phone ? "phone" : "desktop"}.png`) });
+    await page.locator(".sidebar-shell").screenshot({ path: join(evidence, `workspace-tokens-${phone ? "phone" : "desktop"}.png`), animations: "disabled" });
   }
 
   await reportWorkspace({ page, tokens: { board: "✗ failed · tests" } });
