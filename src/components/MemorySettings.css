@@ -288,11 +288,6 @@
   padding: var(--space-2) var(--space-4);
 }
 
-.memory-field-label {
-  color: var(--text-dim);
-  font-size: var(--fs-sm);
-}
-
 .memory-body-input {
   min-height: calc(var(--control-h) * 2.5);
   resize: vertical;

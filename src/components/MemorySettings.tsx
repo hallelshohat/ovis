@@ -236,7 +236,7 @@ function NoteForm({ view, item, scope: startScope, project, watching, onDone, re
   const draft = (notSecret: boolean): MemoryDraft => ({ scope, project: scope === "project" ? noteProject : null, kind, title: title.trim(), body, expires, ...(notSecret ? { notSecret } : {}) });
   const save = () => act((notSecret) => item === null ? memoryActions.add(draft(notSecret)) : memoryActions.edit({ ...draft(notSecret), id: item.id, rev: item.rev, digest: item.digest }), onDone);
   const field = (label: string, control: ReactNode, id?: string) => (
-    <div className="memory-field">{id === undefined ? <span className="memory-field-label">{label}</span> : <label className="memory-field-label" htmlFor={id}>{label}</label>}{control}</div>
+    <div className="memory-field">{id === undefined ? <span className="field-label">{label}</span> : <label className="field-label" htmlFor={id}>{label}</label>}{control}</div>
   );
   const fact = (label: string, value: string) => <div className="memory-fact"><span>{label}</span><span>{value}</span></div>;
   return <>

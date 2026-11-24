@@ -1882,7 +1882,7 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
           // Commentary may contain Markdown while tools are still running, so no
           // completed-turn footer exists yet. A whole rendered message is the
           // same substantial evidence as a whole plain one, never just a suffix.
-          || renderedBlocks.some((block) => block.letters.includes(found.anchor) && completedAnswerMatches(text, block.text))
+          || renderedBlocks.some((block) => block.letters.includes(found.anchor) && completedAnswerMatches({ answer: text, screen: block.text }))
           || (candidate.path === footedOwner && completedAnswerMatches({ answer: text, screen: footed!.text }))) return [found];
       if (composer === null) return [];
       const clippedFooter = footed !== null && footed.rows.some((row) => row.trimEnd().endsWith("…"))
