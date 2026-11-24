@@ -174,7 +174,7 @@ describe("Codex native command screen ownership", () => {
       const originalOpen = files.open;
       const opened = spyOn(files, "open");
       if (slow) opened.mockImplementation(async (...args) => {
-        await Bun.sleep(10); // fixed wait: model the reviewer's asynchronous filesystem latency.
+        await setImmediate();
         return originalOpen(...args);
       });
       try {
@@ -187,7 +187,7 @@ describe("Codex native command screen ownership", () => {
           rounds.push(await Promise.all(screens.map(peers)));
           if (slow) {
             if (rounds.at(-1)!.every((count) => count === total - 1)) break;
-            await Bun.sleep(2000); // fixed wait: preserve the client's two-second retry cadence from the review probe.
+            await setImmediate();
           }
         }
         const firstComplete = screens.map((_, index) => rounds.findIndex((round) => round[index] === total - 1) + 1);

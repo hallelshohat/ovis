@@ -1878,16 +1878,15 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
     const anchors = answersOf(parsed[index]!.slice(-100)).slice(-8).flatMap((text) => {
       const found = answerAnchor(text);
       if (found === null || !displays.some((display) => display.includes(found.anchor))) return [];
-      if (wholeBlocks.some((block) => found.whole.test(markedDisplay(block)))
-          // Commentary may contain Markdown while tools are still running, so no
-          // completed-turn footer exists yet. A whole rendered message is the
-          // same substantial evidence as a whole plain one, never just a suffix.
-          || renderedBlocks.some((block) => block.letters.includes(found.anchor) && completedAnswerMatches({ answer: text, screen: block.text }))
+      if (wholeBlocks.some((block) => found.whole.test(block))
           || (candidate.path === footedOwner && completedAnswerMatches({ answer: text, screen: footed!.text }))) return [found];
       if (composer === null) return [];
       const clippedFooter = footed !== null && footed.rows.some((row) => row.trimEnd().endsWith("…"))
         && (footerOwners === null || footerOwners.has(candidate.path)) && endedOn(candidate) === text && completedAnswerMatches({ answer: text, screen: footed.text });
-      const rendered = wholeBlocks.find((block) => completedAnswerMatches({ answer: text, screen: block })) ?? (clippedFooter ? footed!.text : undefined);
+      // Rendered commentary can be visible while a tool runs or after the pane rests.
+      const rendered = renderedBlocks.find((block) => block.letters.includes(found.anchor)
+        && completedAnswerMatches({ answer: text, screen: block.text }))?.text
+        ?? (clippedFooter ? footed!.text : undefined);
       if (rendered === undefined) return [];
       // A raw anchor can miss an equivalent entity spelling; it must still compete with a rendered match.
       const letters = normalizeDisplay(rendered), bare = bareLetters(rendered), words = wordsEnding(rendered, letters.length);
