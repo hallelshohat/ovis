@@ -1,7 +1,7 @@
 import type { AgentStatus } from "../../shared/protocol.ts";
 import { knownStatus, type KnownStatus } from "../../shared/attention.ts";
 
-export { knownStatus, rollupStatus, type KnownStatus } from "../../shared/attention.ts";
+export { knownStatus, rollupBrowserStatus as rollupStatus, type KnownStatus } from "../../shared/attention.ts";
 
 export const STATUS_WORD: Readonly<Record<KnownStatus, string>> = {
   idle: "READY",

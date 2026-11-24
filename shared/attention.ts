@@ -15,15 +15,25 @@ export function knownStatus(status?: AgentStatus): KnownStatus {
   return (status !== undefined && KNOWN[status]) || "unknown";
 }
 
-const ROLLUP: readonly KnownStatus[] = ["working", "blocked", "waiting", "idle", "unknown", "done"];
+const HERDR_ROLLUP: readonly KnownStatus[] = ["blocked", "done", "working", "waiting", "idle"];
+const BROWSER_ROLLUP: readonly KnownStatus[] = ["working", "blocked", "waiting", "idle", "unknown", "done"];
 
-/**
- * Active work stays visible until its last agent finishes. Even an idle or unknown agent
- * prevents a group from claiming all its agents are done.
- */
+/** Match Herdr's tab and workspace indicators in the TUI. */
 export function rollupStatus(statuses: ReadonlyArray<AgentStatus | undefined>): KnownStatus {
+  return rollupByPriority({ statuses, priority: HERDR_ROLLUP });
+}
+
+/** Keep browser workspace activity visible until its last agent finishes. */
+export function rollupBrowserStatus(statuses: ReadonlyArray<AgentStatus | undefined>): KnownStatus {
+  return rollupByPriority({ statuses, priority: BROWSER_ROLLUP });
+}
+
+function rollupByPriority({ statuses, priority }: {
+  statuses: ReadonlyArray<AgentStatus | undefined>;
+  priority: readonly KnownStatus[];
+}): KnownStatus {
   const known = statuses.map((status) => knownStatus(status));
-  return ROLLUP.find((state) => known.includes(state)) ?? "unknown";
+  return priority.find((state) => known.includes(state)) ?? "unknown";
 }
 
 /**
