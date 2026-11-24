@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type Page } from "playwright-core";
+import { chromium, type Locator, type Page } from "playwright-core";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
@@ -17,6 +17,9 @@ import { chromePath } from "./chrome-path.ts";
 const app = mkdtempSync(join(tmpdir(), "herdr-sidebar-tokens-"));
 const evidence = process.env["UI_EVIDENCE_DIR"];
 const LONG = "reviewing the authentication middleware and the session refresh path before the release branch is cut";
+const APPROVAL = "👀 approval · Approve to merge? Review: Pass";
+const BOARD_WORKSPACE = 'li.workspace[data-workspace="w1D"]';
+const WORKSPACE_TOKENS = `${BOARD_WORKSPACE} > .workspace-tokens`;
 const patch = `(() => {
   const EventSourceDemo = window.EventSource;
   const reports = {
@@ -24,9 +27,11 @@ const patch = `(() => {
     "w1D:p1": { tokens: { progress: "40% 12m", note: "<b>not markup</b>" } },
     [${JSON.stringify(panes.omp)}]: { display_agent: "needs a login · 8m ago" },
   };
+  const workspaceReports = { w1D: { tokens: { board: ${JSON.stringify(APPROVAL)}, progress: "40% 32m" } } };
   const roster = (machines) => machines.map((machine) => {
     const copy = structuredClone(machine);
     for (const list of [copy.snapshot?.panes ?? [], copy.snapshot?.agents ?? []]) for (const entry of list) Object.assign(entry, structuredClone(reports[entry.pane_id] ?? {}));
+    for (const entry of copy.snapshot?.workspaces ?? []) Object.assign(entry, structuredClone(workspaceReports[entry.workspace_id] ?? {}));
     return copy;
   });
   const sources = new Set();
@@ -45,6 +50,7 @@ const patch = `(() => {
   window.__tokens = {
     // a roster with a pane's tokens changed, as the server sends after herdr's pane.updated
     report(paneId, tokens) { reports[paneId] = { ...reports[paneId], tokens }; for (const source of sources) source.tell({ type: "machines", machines: roster(last) }); },
+    reportWorkspace(id, tokens) { workspaceReports[id] = { tokens }; for (const source of sources) source.tell({ type: "machines", machines: roster(last) }); },
     // a roster with what a waiting agent says it waits for (OSC 7501's message)
     says(paneId, agent_message) { reports[paneId] = { ...reports[paneId], agent_message }; for (const source of sources) source.tell({ type: "machines", machines: roster(last) }); },
     // herdr's agent rows, as the server tells them
@@ -69,6 +75,55 @@ const patch = `(() => {
 const row = (page: Page, pane: string) => page.locator(`.agent-list .agent-item[data-pane="${pane}"]`);
 const tokensOf = (page: Page, pane: string) => row(page, pane).locator(".agent-tokens");
 const box = async (page: Page, pane: string, selector: string) => (await row(page, pane).locator(selector).boundingBox())!;
+
+async function checkWorkspaceTokens({ page, phone, capture }: { page: Page; phone: boolean; capture: boolean }) {
+  const line = page.locator(WORKSPACE_TOKENS);
+  const board = line.locator('[data-token="board"]');
+  await line.waitFor();
+  assert.equal(await line.textContent(), `${APPROVAL} · 40% 32m`);
+  await assertTokenColor({ token: board, variable: "--indicator-working" });
+  const emptyWorkspace = page.locator('li.workspace[data-workspace="w1C"]');
+  assert.equal(await emptyWorkspace.count(), 1);
+  assert.equal(await emptyWorkspace.locator(".workspace-tokens").count(), 0);
+  const header = await page.locator(`${BOARD_WORKSPACE} > .workspace-header`).boundingBox();
+  const tokenBox = await line.boundingBox();
+  assert.ok(header && tokenBox && tokenBox.y >= header.y + header.height, "tokens sit under the workspace header");
+
+  if (evidence && capture) {
+    await line.scrollIntoViewIfNeeded();
+    await page.locator(".sidebar-shell").screenshot({ path: join(evidence, `workspace-tokens-${phone ? "phone" : "desktop"}.png`), animations: "disabled" });
+  }
+
+  await reportWorkspace({ page, tokens: { board: "✗ failed · tests" } });
+  await page.waitForFunction((selector) => document.querySelector(selector)?.textContent === "✗ failed · tests", WORKSPACE_TOKENS);
+  await assertTokenColor({ token: board, variable: "--indicator-blocked" });
+
+  await reportWorkspace({ page, tokens: { note: "<b>x</b>" } });
+  await page.waitForFunction((selector) => document.querySelector(selector)?.textContent === "<b>x</b>", WORKSPACE_TOKENS);
+  assert.equal(await line.locator("b").count(), 0, "workspace tokens are text");
+
+  await reportWorkspace({ page, tokens: {} });
+  await line.waitFor({ state: "detached" });
+}
+
+async function reportWorkspace({ page, tokens }: { page: Page; tokens: Record<string, string> }) {
+  await page.evaluate((values) => {
+    (window as Window & { __tokens: { reportWorkspace(id: string, tokens: Record<string, string>): void } }).__tokens.reportWorkspace("w1D", values);
+  }, tokens);
+}
+
+async function assertTokenColor({ token, variable }: { token: Locator; variable: string }) {
+  const { color, expected } = await token.evaluate((element, name) => {
+    const sample = document.createElement("span");
+    sample.style.color = `var(${name})`;
+    element.append(sample);
+    const colors = { color: getComputedStyle(element).color, expected: getComputedStyle(sample).color };
+    sample.remove();
+    return colors;
+  }, variable);
+  assert.equal(color, expected, `the board token uses ${variable}`);
+}
+
 /** the open sheet once it has come to rest: whether its title, its first action and Cancel can be tapped, and whether the long text scrolls in its own box */
 async function sheetReach(page: Page, scroller: string): Promise<{ title: boolean; pin: boolean; cancel: boolean; scrolls: boolean }> {
   await page.evaluate(() => Promise.all(document.getAnimations().filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity).map((animation) => animation.finished)));
@@ -207,8 +262,9 @@ try {
           await page.evaluate((pane) => (window as unknown as { __tokens: { report(paneId: string, tokens: object): void } }).__tokens.report(pane, { quota: "0% left" }), panes.api);
           await page.waitForFunction((pane) => document.querySelector(`.agent-list .agent-item[data-pane="${pane}"] .agent-tokens`) === null, panes.api);
           if (evidence && !phone && rows === "one") await page.locator(".agents-sidebar").screenshot({ path: join(evidence, "tokens-desktop-herdr-rows.png") });
+          await checkWorkspaceTokens({ page, phone, capture: rows === "one" });
           assert.deepEqual(errors, []);
-          console.log(`PASS ${label}: plugin tokens draw a dim line of their own, cut with the whole text in the tooltip${phone ? " and the sheet" : ""}, follow herdr's rows and change live`);
+          console.log(`PASS ${label}: pane tokens follow herdr's rows and workspace tokens draw under the workspace name; both change live`);
         } finally { await context.close(); }
       }
     } finally { await browser.close(); }
