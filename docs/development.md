@@ -5,6 +5,8 @@ what no code or test in the repository shows: how a release is cut, the settings
 the repository (the signing key, the hosted shell's deploy, the growth snapshot's secrets), and the
 rules for changing a stored format.
 
+Run `bun scripts/sidebar-tokens-demo-regression.ts` to check agent-row tokens and the workspace board state under a space's name, including tone, layout and live updates.
+
 ## Releasing
 
 On the maintainer's PC, where every merge goes through `pr-merge`, a release freezes the other

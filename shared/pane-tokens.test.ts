@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { paneTokenRuleMatches, paneTokenValues, type AgentRowTokens } from "./pane-tokens.ts";
+import { paneTokenRuleMatches, paneTokenValues, workspaceTokenParts, type AgentRowTokens } from "./pane-tokens.ts";
 
 describe("paneTokenValues", () => {
   const tokens = { quota: "5h 95% · Wk 67%", summary: "reviewing auth", progress: "40% 12m" };
@@ -78,5 +78,34 @@ describe("paneTokenRuleMatches", () => {
 
   test("a rule without a condition matches nothing", () => {
     expect(paneTokenRuleMatches({ hide: true }, "anything")).toBe(false);
+  });
+});
+
+describe("workspaceTokenParts", () => {
+  test("board first, then progress, then the rest by name", () => {
+    const parts = workspaceTokenParts({ zeta: "z", progress: "40% 32m", alpha: "a", board: "⚙ working" });
+    expect(parts.map(({ name }) => name)).toEqual(["board", "progress", "alpha", "zeta"]);
+  });
+
+  test("colours board by its leading glyph as herdr's config does", () => {
+    const tone = (board: string) => workspaceTokenParts({ board })[0]?.tone;
+    expect(tone(" ✗ failed · boom")).toBe("fail");
+    expect(tone("✋ blocked · question")).toBe("pending");
+    expect(tone("✋️ blocked")).toBe("pending");
+    expect(tone("👀 approval · Approve to merge? Review: Pass")).toBe("pending");
+    expect(tone("✓ done")).toBe("ok");
+    expect(tone("⚙ working")).toBe("neutral");
+    expect(tone("🔍 reviewing · The reviewer checks the plan")).toBe("neutral");
+  });
+
+  test("only board is toned", () => {
+    expect(workspaceTokenParts({ progress: "✗ odd" })[0]?.tone).toBe("neutral");
+  });
+
+  test("leaves out blank, non-string, PR and background tokens, and trims", () => {
+    expect(workspaceTokenParts({ board: "  ", progress: 3, pr: "● #7", pr_checks: "✓ 1/1", role: " Background ", note: " hi " }))
+      .toEqual([{ name: "note", value: "hi", tone: "neutral" }]);
+    expect(workspaceTokenParts({ pr: "● #7" })).toEqual([]);
+    expect(workspaceTokenParts(undefined)).toEqual([]);
   });
 });
