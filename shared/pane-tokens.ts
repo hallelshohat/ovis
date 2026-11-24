@@ -1,3 +1,5 @@
+import type { PrTone } from "./pr-status.ts";
+
 /**
  * herdr plugins attach short text values to a pane (`herdr pane report-metadata --token
  * name=value`): the Quota plugin's usage left, herdr-projects' summary and progress. herdr's own
@@ -104,4 +106,36 @@ export function paneTokenValues(layout: AgentRowTokens | null, agent: string | n
     shown.push(value.trim());
   }
   return shown;
+}
+
+export interface WorkspaceTokenPart {
+  name: string;
+  value: string;
+  tone: PrTone;
+}
+
+/** Sidebar tokens: board, progress, then the remaining text tokens by name, excluding PR and background metadata. */
+export function workspaceTokenParts(tokens: Readonly<Record<string, unknown>> | null | undefined): WorkspaceTokenPart[] {
+  if (!tokens) return [];
+  return Object.keys(tokens).sort((a, b) => workspaceTokenRank(a) - workspaceTokenRank(b) || a.localeCompare(b)).flatMap((name) => {
+    const rawValue = tokens[name];
+    if (typeof rawValue !== "string" || /^pr(_|$)/.test(name) || (name === ROLE_TOKEN && isBackgroundRole(rawValue))) return [];
+    const value = rawValue.trim();
+    if (!value) return [];
+    return [{ name, value, tone: name === "board" ? boardTokenTone(value) : "neutral" }];
+  });
+}
+
+function workspaceTokenRank(name: string): number {
+  if (name === "board") return 0;
+  if (name === "progress") return 1;
+  return 2;
+}
+
+const BOARD_TOKEN_TONES: ReadonlyArray<readonly [string, PrTone]> = [
+  ["✗", "fail"], ["✋", "pending"], ["👀", "pending"], ["✓", "ok"],
+];
+
+function boardTokenTone(value: string): PrTone {
+  return BOARD_TOKEN_TONES.find(([glyph]) => value.startsWith(glyph))?.[1] ?? "neutral";
 }
