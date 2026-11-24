@@ -77,7 +77,8 @@ export function useComposerSends(deps: ComposerSendsDeps) {
     };
   }, [answering, answerPending, paneId, pendingAnswer, sendAnswer, setPendingAnswer]);
 
-  const sendNowRef = useRef<(id: string) => Promise<void>>(async () => {});
+  // A steering receipt can arrive after a render, so use the latest Send now guards.
+  const sendNowRef = useRef<(request: { id: string; autoSteer: boolean }) => Promise<void>>(async () => {});
 
   const composerSend = useCallback(
     // `hold`: Alt+Enter, kept in the queued list for its Send now alone, whatever automatic sending or the agent's state says
@@ -122,8 +123,9 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       const listening = socketRef.current;
       const cardWaits = listening?.featuresListed?.() === true ? listening.typesArrows() : true;
       const settled = composerDelivery(agent, agentStatus, cardWaits);
-      const queued = settled === "queue" && inputAtRest?.() === true ? "immediate" : settled;
-      const delivery: SubmitDelivery = hold ? "hold" : queued === "queue" && !settings.autoSendQueued ? "hold" : queued;
+      const working = settled === "queue" && inputAtRest?.() !== true;
+      const autoSteer = working && agentStatus === "working" && settings.autoSendQueued && !hold;
+      const delivery: SubmitDelivery = hold || working ? "hold" : "immediate";
       // Send anyway answered a box seen at once: an agent that started working since would queue it unchecked.
       // Send it too: queued, the draft's text could go again after the draft itself was sent in the terminal
       if ((sendAnyway || asDraft) && delivery !== "immediate") return t("Not sent: the agent started working since. Check the terminal, then send again.");
@@ -136,7 +138,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
       // a PC that cannot hold refuses a hold rather than queuing it to go on its own (HerdrSocket `holdOnly`)
       const draftKey = pane === null ? null : composerDraftKey(paneStorageId(machineId, pane));
       const command = draftKey === null ? undefined : composerDrafts.commandKey(draftKey, text);
-      const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway, undefined, undefined, agentOnly, hold, command);
+      const result = submitComposerMessage(text, delivery, delivery === "immediate" ? clearDraft : undefined, sendAnyway, undefined, undefined, agentOnly, hold || autoSteer, command);
       return result === null ? false : result.then((answer) => {
         // Neither a dropped connection nor a cleared old draft proves this message was typed.
         // Without a receipt, leave the retryable composer text and report the uncertainty.
@@ -157,21 +159,25 @@ export function useComposerSends(deps: ComposerSendsDeps) {
           if (pane !== null) rememberWaitingSend(waitingKey(machineId, pane), text, sentAt, stampedBaseline(sentAfter, answer.sendingAt, sentAt));
         }
         if (pane !== null && typedNow) showSentCommand(pane, text, known, seen);
-        if (now && !answer.replayed && answer.pending !== undefined) void sendNowRef.current(answer.pending.id);
+        const pending = answer.pending;
+        const canAutoSteer = autoSteer && pending?.state === "held" && !pending.error && !pending.waiting;
+        if (!hold && !answer.replayed && pending && (now || canAutoSteer) && paneRef.current === pane && socketRef.current === socket && sessionRef.current === session) {
+          void sendNowRef.current({ id: pending.id, autoSteer: !now });
+        }
         return true;
       });
     },
     [agent, agentStatus, answering, answerPending, heldByOpenQueue, sendAnswer, submitComposerMessage, queueStore, machineId, settings.autoSendQueued, showSentCommand, inputAtRest, inputRowNow, stillOpenNote],
   );
 
-  const actOnPending = useCallback(async (id: string, action: "steer" | "discard" | "edit" | "dismiss"): Promise<void> => {
+  const actOnPending = useCallback(async (id: string, action: "steer" | "discard" | "edit" | "dismiss", autoSteer = false): Promise<void> => {
     const perform = async (): Promise<void> => {
       const owner = queueOwner, pane = paneId;
       const socket = socketRef.current, scope = pendingScopeRef.current;
       if (owner === null || pane === null || paneRef.current !== pane) return;
       pendingMessages.refresh(owner);
       const message = pendingMessages.read(owner).find((item) => item.id === id);
-      if (!message || message.state === "sending") return;
+      if (!message || message.state === "sending" || (autoSteer && !message.serverOwned)) return;
       // The X on an uncertain row dismisses only that copy, even offline, and never
       // turns into a queue discard if a later publish changed the row to queued/held.
       const dismiss = action === "dismiss" || action === "discard" && message.state === "uncertain";
@@ -222,7 +228,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
             const seen = inputRowNow() === "ready";
             const generation = message.resendGeneration ?? 0;
             const result = action === "steer"
-              ? socket?.pendingAction(pane, id, "steer", generation, false, () => {
+              ? socket?.pendingAction(pane, id, "steer", generation, false, autoSteer, () => {
                 if (paneRef.current === pane && socketRef.current === socket) dropSecondEscape();
               })
               : socket?.pendingAction(pane, id, "discard", generation, action === "edit");
@@ -286,7 +292,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
     else await perform();
   }, [answering, dropSecondEscape, ended, heldByOpenQueue, paneId, queueOwner, submitComposerMessage, submitRetention, showSentCommand, inputRowNow, stillOpenNote]);
 
-  sendNowRef.current = (id) => actOnPending(id, "steer");
+  sendNowRef.current = ({ id, autoSteer }) => actOnPending(id, "steer", autoSteer);
 
   return { composerSend, actOnPending, waitingAnswer };
 }

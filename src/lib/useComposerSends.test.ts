@@ -240,7 +240,7 @@ for (const autoSendQueued of [false, true]) {
         },
       });
       expect(await actions.composerSend("follow up")).toBe(true);
-      expect(deliveries).toEqual([immediate ? "immediate" : autoSendQueued ? "queue" : "hold"]);
+      expect(deliveries).toEqual([immediate ? "immediate" : "hold"]);
     } finally {
       term.dispose();
     }
@@ -335,9 +335,9 @@ it("a queued follow-up the bridge typed at once waits in the chat and follows it
   const pane = "queued-typed-at-once", key = waitingKey("local", pane), shown: string[] = [];
   let follows = 0;
   const actions = sends(pane, { ok: true, typedNow: true }, shown, {
-    agentStatus: "working", inputAtRest: () => false, settings: { autoSendQueued: true },
+    agentStatus: "working", inputAtRest: () => false,
     setChatLocalSend: () => { follows++; },
-    submitComposerMessage: (_text, delivery) => { expect(delivery).toBe("queue"); return Promise.resolve({ ok: true, typedNow: true }); },
+    submitComposerMessage: (_text, delivery) => { expect(delivery).toBe("hold"); return Promise.resolve({ ok: true, typedNow: true }); },
   });
   try {
     expect(await actions.composerSend("then list the tests")).toBe(true);
@@ -406,7 +406,7 @@ it("Send it sends the named draft over itself, only at once and never as an answ
 // Alt+Enter: held in the queued list for its row's Send now, whatever automatic sending says and also at rest;
 // the socket refuses it on a PC that cannot hold one, never queuing it to go on its own
 it.each([
-  ["working, automatic sending on", { agentStatus: "working", inputAtRest: (): boolean => false, settings: { autoSendQueued: true } }, "queue"],
+  ["working, automatic steering on", { agentStatus: "working", inputAtRest: (): boolean => false, settings: { autoSendQueued: true } }, "hold"],
   ["working, automatic sending off", { agentStatus: "working", inputAtRest: (): boolean => false, settings: { autoSendQueued: false } }, "hold"],
   ["idle", { agentStatus: "idle", settings: { autoSendQueued: true } }, "immediate"],
   ["working with Claude's box at rest", { agentStatus: "working", inputAtRest: (): boolean => true, settings: { autoSendQueued: true } }, "immediate"],
@@ -416,7 +416,10 @@ it.each([
   const deps: Partial<ComposerSendsDeps> = { ...extra, submitComposerMessage };
   expect(await sends("hold-pane", { ok: true }, [], deps).composerSend("for later", undefined, false, false, false, true)).toBe(true);
   expect(await sends("hold-pane", { ok: true }, [], deps).composerSend("for later")).toBe(true);
-  expect(calls.map((call) => [call[1], call[2], call[7]])).toEqual([["hold", undefined, true], [plain, undefined, false]]);
+  expect(calls.map((call) => [call[1], call[2], call[7]])).toEqual([
+    ["hold", undefined, true],
+    [plain, undefined, plain === "hold" && extra.settings.autoSendQueued],
+  ]);
 });
 
 it("a hold is never an answer to an open menu, nor stopped by a screen a peek left open, since nothing is typed", async () => {
@@ -435,34 +438,53 @@ it("a hold is never an answer to an open menu, nor stopped by a screen a peek le
   expect(calls.map((call) => [call[0], call[1], call[7]])).toEqual([["1", "hold", true], ["after the peek", "hold", true]]);
 });
 
-it("a hold a PC too old to hold refuses keeps the draft with the reason", async () => {
+it.each([false, true])("an unsupported hold keeps the draft with the reason (explicit hold: %p)", async (hold) => {
   const result = await sends("hold-old", { ok: false, code: "pending_hold_unsupported", message: "Update this PC to hold messages. Nothing was sent." }, [], { agentStatus: "working", settings: { autoSendQueued: true } })
-    .composerSend("for later", undefined, false, false, false, true);
+    .composerSend("keep this draft", undefined, false, false, false, hold);
   expect(result).toBe("Update this PC to hold messages. Your draft stayed here.");
 });
 
-it.each([[true, ["steer"]], [false, []]] as const)("a queued send with now=%p steers its own row", async (now, expected) => {
+it.each([
+  { name: "regular Send", auto: true, now: false, changed: null, blocked: false, steers: true },
+  { name: "opt-out Send", auto: false, now: false, changed: null, blocked: false, steers: false },
+  { name: "Ctrl+Enter with the opt-out", auto: false, now: true, changed: null, blocked: false, steers: true },
+  { name: "Send before switching panes", auto: true, now: false, changed: "pane", blocked: false, steers: false },
+  { name: "Send before changing sockets", auto: true, now: false, changed: "socket", blocked: false, steers: false },
+  { name: "Send held by the bridge", auto: true, now: false, changed: null, blocked: true, steers: false },
+] as const)("$name acts only on its own receipt", async ({ name, auto, now, changed, blocked, steers }) => {
   const saved = savedStorage();
-  const pane = `send-now-${now}`, owner = paneStorageId("local", pane), actions: string[] = [];
-  const pending = { id: `row-${now}`, request_id: 1, text: "stop and run the tests", state: "held" as const, created_at: "2026-11-05T00:00:00Z" };
-  const socket = {
+  const pane = `send-now-${name}`, owner = paneStorageId("local", pane), actions: Array<[string, string, string, boolean]> = [];
+  const paneRef = { current: pane };
+  const pending = { id: `row-${name}`, request_id: 1, text: "stop and run the tests", state: "held" as const, created_at: "2026-11-05T00:00:00Z",
+    ...(blocked ? { error: { code: "held_input", message: "The terminal has a draft" } } : {}),
+  };
+  const makeSocket = () => ({
     connected: true,
     on: () => () => {},
-    pendingAction: (paneId: string, id: string, action: string) => {
-      if (paneId === pane && id === pending.id) actions.push(action);
+    pendingAction: (paneId: string, id: string, action: string, _generation: number, _withdrawalOnly: boolean, autoSteer: boolean) => {
+      actions.push([paneId, id, action, autoSteer]);
       return Promise.resolve({ ok: true });
     },
-  } as unknown as HerdrSocket;
+  } as unknown as HerdrSocket);
+  const socketRef = { current: makeSocket() };
   const { promise: steered, resolve: settled } = Promise.withResolvers<void>();
   try {
     const result = await sends(pane, { ok: true }, [], {
-      agentStatus: "working", inputAtRest: () => false, socketRef: { current: socket },
-      submitComposerMessage: () => { pendingMessages.accept(owner, pending, "scope"); return Promise.resolve({ ok: true, pending }); },
+      agentStatus: "working", inputAtRest: () => false, socketRef, paneRef, settings: { autoSendQueued: auto },
+      // as useTerminalSends does before it answers: the receipt's row is in the list first
+      submitComposerMessage: (_text, delivery, _clear, _anyway, _id, _generation, _agentOnly, holdOnly) => {
+        expect(delivery).toBe("hold");
+        expect(holdOnly).toBe(auto);
+        pendingMessages.accept(owner, pending, "scope");
+        if (changed === "pane") paneRef.current = "another-pane";
+        if (changed === "socket") socketRef.current = makeSocket();
+        return Promise.resolve({ ok: true, pending });
+      },
       submitRetention: { retain: () => () => { settled(); } } as unknown as ComposerSendsDeps["submitRetention"],
     }).composerSend(pending.text, undefined, false, false, now);
     expect(result).toBe(true);
-    if (now) await steered;
-    expect(actions).toEqual([...expected]);
+    expect(actions).toEqual(steers ? [[pane, pending.id, "steer", !now]] : []);
+    if (steers) await steered;
   } finally {
     pendingMessages.removeCopy(owner, pending.id);
     saved.restore();

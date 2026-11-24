@@ -47,7 +47,7 @@ export const SETTINGS_HELP_KO: Record<string, string> = {
   "Where a web address opens when you press it; Shift-click opens it the other way. Only a page this PC serves, such as a dev server on localhost, can open in the app: any other site opens in a new tab.": "웹 주소를 눌렀을 때 열리는 자리이며, Shift-클릭하면 반대쪽으로 엽니다. localhost 개발 서버처럼 이 PC가 제공하는 페이지만 앱 안에서 열 수 있고, 다른 사이트는 항상 새 탭에서 열립니다.",
   "Only pages this PC serves can open beside the pane.": "이 PC가 제공하는 페이지만 패널 옆에 열립니다.",
   "Only pages this PC serves can open in the app.": "이 PC가 제공하는 페이지만 앱 안에서 열립니다.",
-  "On every device, a message sent while the agent is working goes by itself when the agent finishes. When off, it waits until you press Send now.": "모든 기기에서, 에이전트가 작업 중일 때 보낸 메시지를 에이전트가 끝나면 자동으로 보냅니다. 끄면 '지금 보내기'를 누를 때까지 기다립니다.",
+  "On every device, sending a message while the agent is working steers the current turn. When off, the message waits until you press Send now.": "모든 기기에서 에이전트가 작업 중일 때 메시지를 보내면 현재 턴에 지시를 추가합니다. 끄면 '지금 보내기'를 누를 때까지 기다립니다.",
   "On this device, a long line in the file viewer and in diffs continues on the next line. When off, it runs past the edge and scrolls sideways.": "이 기기에서 파일 보기와 비교 보기의 긴 줄을 다음 줄로 넘깁니다. 끄면 줄이 화면 밖으로 이어져 옆으로 스크롤합니다.",
   "Adds Edit to the file viewer for a text file in the pane's folder. Saving asks first, and refuses if the file changed after you opened it.": "패널 폴더 안의 텍스트 파일에 대해 파일 보기에 수정 버튼을 더합니다. 저장 전에 한 번 더 묻고, 연 뒤에 파일이 바뀌었으면 저장하지 않습니다.",
   "A file left open when you switch to another tab shows again when you come back to that tab. When off, the tab comes back without it.": "파일을 열어 둔 채 다른 탭으로 갔다가 돌아오면 그 파일을 다시 보여 줍니다. 끄면 돌아왔을 때 파일 없이 탭만 보입니다.",

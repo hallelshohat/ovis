@@ -47,7 +47,7 @@ export const SETTINGS_HELP_JA: Record<string, string> = {
   "Where a web address opens when you press it; Shift-click opens it the other way. Only a page this PC serves, such as a dev server on localhost, can open in the app: any other site opens in a new tab.": "Web アドレスを押したときに開く場所で、Shift を押しながらクリックするともう一方の方法で開きます。アプリ内で開けるのは、localhost の開発サーバーのように、この PC が配信するページだけで、それ以外のサイトは新しいタブで開きます。",
   "Only pages this PC serves can open beside the pane.": "ペインの横で開けるのは、この PC が配信するページだけです。",
   "Only pages this PC serves can open in the app.": "アプリ内で開けるのは、この PC が配信するページだけです。",
-  "On every device, a message sent while the agent is working goes by itself when the agent finishes. When off, it waits until you press Send now.": "すべてのデバイスで、エージェントの作業中に送ったメッセージを、エージェントが終わったときに自動で送信します。オフのときは「今すぐ送信」を押すまで待ちます。",
+  "On every device, sending a message while the agent is working steers the current turn. When off, the message waits until you press Send now.": "すべてのデバイスで、エージェントの作業中にメッセージを送ると、進行中のターンに指示を追加します。オフのときは「今すぐ送信」を押すまで待ちます。",
   "On this device, a long line in the file viewer and in diffs continues on the next line. When off, it runs past the edge and scrolls sideways.": "このデバイスで、ファイルビューアと差分表示の長い行を次の行に折り返します。オフのときは、行が端からはみ出し、横にスクロールします。",
   "Adds Edit to the file viewer for a text file in the pane's folder. Saving asks first, and refuses if the file changed after you opened it.": "ペインのフォルダにあるテキストファイルについて、ファイルビューアに「編集」を追加します。保存の前に確認し、開いたあとにファイルが変更されていた場合は保存しません。",
   "A file left open when you switch to another tab shows again when you come back to that tab. When off, the tab comes back without it.": "ファイルを開いたまま別のタブに切り替えたあと、そのタブに戻るとファイルをもう一度表示します。オフのときは、ファイルなしでタブに戻ります。",

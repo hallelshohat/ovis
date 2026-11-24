@@ -1388,7 +1388,8 @@ export type ClientMessage =
    * this optional field and retain their existing discard behaviour, without this protection.
    * `launch_ended`: the client tells first_message_launch_ended apart; an older one, which would take that
    * unknown code as maybe typed, is answered pending_target_changed for it */
-  | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard"; resend_generation?: number; launch_ended?: true; withdrawal_only?: true }
+  /** `auto_steer` (feature "pending-auto-steer") steers only while the agent works and preserves restored drafts. */
+  | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard"; resend_generation?: number; launch_ended?: true; withdrawal_only?: true; auto_steer?: true }
   /** the terminal's input line typed into the pane without Enter (feature "terminal-insert"), answered
    * with an insert-result of the same id once herdr has the bytes. `text` is one line of the draft,
    * as written: a line break is refused (`unsafe_multiline`), since nothing reports whether the pane's
@@ -1480,7 +1481,7 @@ export interface ClientConnectionTrace {
  * table P10, P15, T57). Only then may the server send `device-notice` and `device-notice-replay`, and only then does a
  * client send `notice-seen` and `notice-answer`.
  */
-export type ServerFeature = typeof ACCOUNT_OPENS_ALL_CAPABILITY | "submit" | "pending-input" | "pending-hold" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert" | "agent-only" | "machine-events" | "terminal-history" | "terminal-modes" | "input-receipt" | "conversation-search" | "conversation-watch-detached" | "prompt-watch" | "secret-prompts-2" | "secret-prompts-3";
+export type ServerFeature = typeof ACCOUNT_OPENS_ALL_CAPABILITY | "submit" | "pending-input" | "pending-hold" | "pending-auto-steer" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping" | "terminal-insert" | "agent-only" | "machine-events" | "terminal-history" | "terminal-modes" | "input-receipt" | "conversation-search" | "conversation-watch-detached" | "prompt-watch" | "secret-prompts-2" | "secret-prompts-3";
 
 export type ServerMessage =
   | { type: "machine-event"; event: MachineEvent }

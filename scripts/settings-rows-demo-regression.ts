@@ -332,7 +332,7 @@ async function foldedGroups(browser: import("playwright-core").Browser, url: str
       await closeSettings(page);
 
       await page.goto(`${url}?settings=chat&section=composer-more`);
-      const queued = page.getByRole("switch", { name: "Send queued messages automatically", exact: true });
+      const queued = page.getByRole("switch", { name: "Steer active turns automatically", exact: true });
       await queued.waitFor();
       assert.equal(await page.locator(".settings-body:not([hidden]) [data-section='composer-more']").evaluate((group) => group.closest("details")?.open === true && document.activeElement === group), true, `${width}px: the link opened the fold and focused its group`);
       assert.deepEqual(errors, []);
@@ -341,6 +341,18 @@ async function foldedGroups(browser: import("playwright-core").Browser, url: str
     }
   }
   console.log("PASS folded groups at 1440 and 390px: closed on opening with a count of what changed, opened by a click, a link to a group inside and a search");
+  const japanese = await browser.newContext({ locale: "ja" });
+  try {
+    await japanese.addInitScript((settings) => localStorage.setItem("ovis:settings", settings), JSON.stringify({ ...SETTINGS, language: "ja" }));
+    const page = await japanese.newPage();
+    await page.goto(`${url}?settings=chat&section=composer-more`);
+    const steer = page.getByRole("switch", { name: "実行中のターンに自動で指示を送る", exact: true });
+    await steer.waitFor();
+    const description = await steer.evaluate((node) => document.getElementById(node.getAttribute("aria-describedby") ?? "")?.textContent);
+    assert.match(description ?? "", /進行中のターンに指示を追加します/);
+  } finally {
+    await japanese.close();
+  }
 }
 
 async function runtimeInUse(browser: import("playwright-core").Browser, url: string): Promise<void> {

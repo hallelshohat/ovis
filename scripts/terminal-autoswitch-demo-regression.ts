@@ -29,6 +29,7 @@ window.sentFrames = [];
 window.receiptMode = "normal";
 window.releaseReceipt = null;
 window.discardOnSteer = false;
+window.queueNextFollowUp = false;
 })();</script><script src="/demo-transport.js"></script><script>(() => {
 const Socket = window.WebSocket;
 window.WebSocket = function(...args) {
@@ -37,6 +38,10 @@ window.WebSocket = function(...args) {
   const send = socket.send.bind(socket);
   socket.send = (raw) => {
     const frame = JSON.parse(raw);
+    if (window.queueNextFollowUp && frame.type === "submit" && frame.delivery === "hold") {
+      window.queueNextFollowUp = false;
+      raw = JSON.stringify({ ...frame, delivery: "queue" });
+    }
     window.sentFrames.push(frame);
     if (frame.type === "pending-action" && frame.action === "steer" && window.discardOnSteer) {
       send(JSON.stringify({...frame, id: frame.id + 10000, action: "discard"}));
@@ -139,7 +144,7 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: touch, hasTouch: touch, locale: "en-US" });
     try {
       await context.addInitScript(({ theme, pane }) => {
-        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme, darkTheme: "amber", lightTheme: "amber", autoSendQueued: true, voiceInput: "auto" }));
+        localStorage.setItem("ovis:settings", JSON.stringify({ language: "en", theme, darkTheme: "amber", lightTheme: "amber", autoSendQueued: false, voiceInput: "auto" }));
         localStorage.setItem(`ovis:view:${pane}`, "chat");
       }, { theme, pane: owner });
       const page = await context.newPage();
@@ -453,10 +458,11 @@ try {
       await expectReturned();
       await finish(page);
       await ready(page);
-      console.log(`PASS ${tag}: queue acceptance stays in Chat, explicit Send now opens a peek`);
+      console.log(`PASS ${tag}: a held message stays in Chat, explicit Send now opens a peek`);
 
       await send(page, "Start the automatic-delivery turn");
       await chat(page).locator('.composer-status[data-status="working"]').waitFor();
+      await page.evaluate("window.queueNextFollowUp = true");
       await send(page, "/config");
       await page.locator(".pending-message").waitFor();
       await finish(page);

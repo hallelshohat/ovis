@@ -1186,8 +1186,8 @@ function codexShownText(nodes: InlineNode[]): string | null {
   return shownText(nodes.map(rendered), true);
 }
 
-
-function completedAnswerMatches({ answer, screen, suffix = false }: { answer: string; screen: string; suffix?: boolean }): boolean {
+/** Compare whole rendered paragraphs, tables and flat lists, preserving punctuation and order. */
+function completedAnswerMatches({ answer, screen, suffix = false, unorderedLists = false }: { answer: string; screen: string; suffix?: boolean; unorderedLists?: boolean }): boolean {
   if (completedRowsMatch({ answer, screen, suffix })) return true;
   const words: string[] = [];
   let table = false;
@@ -1205,12 +1205,13 @@ function completedAnswerMatches({ answer, screen, suffix = false }: { answer: st
         if (cells.some((cell) => cell === null)) return false;
         words.push(cells.join(" "));
       }
-    } else if (block.type === "list" && block.ordered) {
+    } else if (block.type === "list" && (block.ordered || unorderedLists)) {
       for (const [index, item] of block.items.entries()) {
         if (item.checked !== undefined || item.blocks?.length) return false;
         const text = codexShownText(item.content);
         if (text === null) return false;
-        words.push(`${(block.start ?? 1) + index}. ${text}`);
+        const marker = block.ordered ? `${(block.start ?? 1) + index}.` : "•";
+        words.push(`${marker} ${text}`);
       }
     } else return false;
   }
@@ -1237,12 +1238,15 @@ function noticeStart(rows: readonly { line: string }[], end: number, kind: "limi
  * it but Codex's own status rows (FOOTER, at most four). Null when the screen shows no such turn: one still under
  * way, a message sent since, or a read cut before the composer.
  */
-function idleTurnFooter(lines: readonly string[]): number | null {
+function idleTurnFooter({ lines, wrappedStatus = false }: { lines: readonly string[]; wrappedStatus?: boolean }): number | null {
   const rows = lines.map((line, at) => ({ line, at })).filter(({ line }) => line.trim() !== "");
   // the composer's mark is "»" at Ultra reasoning effort (Codex 0.164 on)
   const composer = rows.length - 1 - [...rows].reverse().findIndex(({ line }) => /^[\u203a\u00bb]/.test(line));
   if (composer >= rows.length || !/^[\u203a\u00bb](?:\s+Ask Codex to do anything)?$/.test(rows[composer]!.line.trim())) return null;
   const status = rows.slice(composer + 1);
+  // Codex can wrap its session title and agent label onto the row after the model and folder.
+  if (wrappedStatus && status[0]?.line.trimEnd().endsWith(" ·") && FOOTER.test(status[0].line.trim())
+    && status[1]?.line.startsWith("  ") && status[1].line.trimEnd().endsWith(" · Main [default]")) status.splice(1, 1);
   if (status.length === 0 || status.length > 4 || !status.every(({ line }) => FOOTER.test(line.trim()))) return null;
   let before = composer - 1;
   const notices = new Set<string>();
@@ -1275,9 +1279,9 @@ function idleTurnFooter(lines: readonly string[]): number | null {
  * the conversation asked just that paragraph owned the turn of one asked all of it; read to the cell's end alone,
  * the one asked the prompt with those rows pasted under it did.
  */
-function footedAnswer(screen: string): { text: string; prompts: string[]; rows: string[] } | null {
+function footedAnswer({ screen, wrappedStatus }: { screen: string; wrappedStatus?: boolean }): { text: string; prompts: string[]; rows: string[] } | null {
   const lines = screen.split("\n").map((line) => line.replace(/\r$/, ""));
-  const index = idleTurnFooter(lines);
+  const index = idleTurnFooter({ lines, wrappedStatus });
   if (index === null) return null;
   let start = index - 2;
   while (start > 0 && /^(?:\s|$)/.test(lines[start]!)) start--;
@@ -1320,7 +1324,7 @@ export function unmarkedFinalTranscript({ screen, candidates, owners }: {
 function unmarkedFinalRows(screen: string): string[] | null {
   const view = footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
   const lines = view.split("\n").map((line) => line.replace(/\r$/, ""));
-  const footer = idleTurnFooter(lines);
+  const footer = idleTurnFooter({ lines });
   if (footer === null) return null;
   let prompt = footer - 2;
   while (prompt >= 0 && /^(?:\s|$)/.test(lines[prompt]!)) prompt--;
@@ -1601,7 +1605,7 @@ export function footedTailTranscript(screen: string, candidates: { path: string;
   leads: () => { path: string; text: string }[] = () => []): string | null {
   const header = screen.lastIndexOf("OpenAI Codex (v");
   const lines = footedView(header < 0 ? screen : screen.slice(header)).split("\n").map((line) => line.replace(/\r$/, ""));
-  const footer = idleTurnFooter(lines);
+  const footer = idleTurnFooter({ lines });
   if (footer === null) return null;
   let above = footer - 1;
   while (above >= 0 && !CODEX_TURN_FOOTER.test(lines[above]!)) above--;
@@ -1622,7 +1626,8 @@ export function footedTailTranscript(screen: string, candidates: { path: string;
   const found = candidates.filter((candidate) => { const answer = endedOn(candidate); return answer !== null && fits(answer); });
   const own = found[0];
   if (found.length !== 1 || own === undefined || !owners.has(own.path)) return null;
-  const footed = whole ? footedAnswer(lines.join("\n")) : null;
+  // the prompt of that turn, where the screen shows it: the answer's "•" row with a "›" row above it
+  const footed = whole ? footedAnswer({ screen: lines.join("\n") }) : null;
   if (footed !== null) {
     const turn = footedTurnOwner(footed, candidates, [], owners, fits);
     if (turn === null || turn.path !== own.path || !askedAsShown(turn.asked, footed.rows) || turn.askedElsewhere(true)) return null;
@@ -1680,7 +1685,7 @@ function footedView(screen: string): string {
 }
 
 export function footedShortTranscript(screen: string, candidates: { path: string; text: string }[], owners: ReadonlySet<string>, whole: (path: string) => boolean = () => false): string | null {
-  const footed = footedAnswer(footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v")))));
+  const footed = footedAnswer({ screen: footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v")))) });
   if (footed === null) return null;
   const shown = alnum(footed.text);
   if (shown === "" || footed.prompts.length === 0) return null;
@@ -1860,10 +1865,11 @@ export function matchCodexTranscript(screen: string, candidates: { path: string;
   // tool's output whose first row the read cut. Each block's letters first: rendering an answer parses all its markdown
   const renderedBlocks = screenBlocks.flatMap((block) => block.bulleted ? [{ text: block.text, letters: normalizeDisplay(block.text) }] : []);
   const parsed = candidates.map(turnsOf);
-  const footed = blocks ? null : footedAnswer(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
+  const footed = blocks ? null : footedAnswer({ screen: screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))) });
   const turn = footed === null ? null : footedTurnOwner(footed, candidates, displays, footerOwners);
   const footedOwner = turn !== null && footed!.prompts.includes(collapsed(turn.asked)) && !turn.askedElsewhere(false)
     && (collapsed(turn.answer) === collapsed(footed!.text) || !turn.askedElsewhere(true) && completedAnswerMatches({ answer: turn.answer, screen: footed!.text })) ? turn.path : null;
+  // every answer each candidate gave, as answerAnchor reads one (cut at link targets), read once
   let shown: Said[] | undefined;
   const givenElsewhere = (index: number, { anchor, words }: Anchor) => (shown ??= parsed.map((turns, at) =>
     said.get(candidates[at]!.path) ?? { text: answersOf(turns).flatMap(saidText).join(""), ends: [] }))
@@ -3397,14 +3403,14 @@ const lookupAnswers = new Map<string, { weighed: string; found: unknown }>();
  * one missing): the conversation shown may then be none of the candidates.
  */
 async function conversationsBeside(asked: string, processes: string, screen: string, candidates: { path: string; text: string }[], resumed: string | null, owners: ReadonlySet<string>, home: string):
-  Promise<{ beside: string[]; weighed: string; known: ReadonlySet<string> } | null> {
+  Promise<{ beside: string[]; weighed: string; known: ReadonlySet<string>; threads: ReadonlyMap<string, LoadedThread> } | null> {
   const threads = await loadedRollouts(home);
   if (threads === null) return null;
   const folder = new Set(candidates.map((candidate) => candidate.path));
   const beside = [...new Set([...(resumed === null ? [] : [resumed]), ...threads.keys()])].filter((path) => !folder.has(path));
   const weighed = [asked, processes, `${screen.length}:${Bun.hash(screen)}`, [...owners].sort().join("\n"), ...candidates.map((candidate) => `${candidate.path}\n${stampOf(candidate)}`),
     ...beside.map((path) => { const file = statSync(path); return `${path}\n${file.ino}:${file.size}:${file.mtimeMs}`; })].join("\0");
-  return { beside, weighed, known: new Set([...folder, ...beside]) };
+  return { beside, weighed, known: new Set([...folder, ...beside]), threads };
 }
 
 function answerKept<Found>(kind: string, paneId: string, weighed: string, weigh: () => Found): Found {
@@ -3424,23 +3430,92 @@ function answerKept<Found>(kind: string, paneId: string, weighed: string, weigh:
  * order, the screen again and then the loaded threads again: a thread loaded before that last screen read is
  * then among them.
  */
-async function stillAsWeighed(paneId: string, processes: string, screen: string, home: string, known: ReadonlySet<string>): Promise<boolean> {
+async function stillAsWeighed({ paneId, processes, screen, home, known, rendered }: {
+  paneId: string; processes: string; screen: string; home: string; known: ReadonlySet<string>; rendered?: RenderedReplyProof;
+}): Promise<boolean> {
   try {
     const [now, running] = await Promise.all([paneRead({ paneId, source: "recent", lines: 400, stripAnsi: true }), codexProcessesOf(paneId)]);
     if (running.key !== processes || shownScreen(now.text) !== shownScreen(screen)) return false;
     const threads = await loadedRollouts(home);
-    return threads !== null && [...threads.keys()].every((path) => known.has(path));
+    if (threads === null) return false;
+    const ignoreBackground = rendered?.ignoreBackground && !running.list.some(({ argv = [] }) => execRun(argv));
+    if ([...threads].some(([path, thread]) => !known.has(path) && !(ignoreBackground && backgroundExec(thread)))) return false;
+    return rendered === undefined || renderedReplyCurrent(rendered);
   } catch { return false; }
 }
 
-async function lastTurnConversation(paneId: string, processes: string, screen: string, candidates: { path: string; text: string }[], resumed: string | null, owners: ReadonlySet<string>, home: string):
-  Promise<{ found: string; known: ReadonlySet<string>; files?: CodexHistoryScan<PromptHistory>["files"] } | null> {
+function rolloutRevision(path: string): FileIdentity & { size: bigint; stamp: string } {
+  const { dev, ino, size, mtimeNs, ctimeNs } = statSync(path, { bigint: true });
+  return { dev, ino, size, stamp: `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}` };
+}
+
+const backgroundExec = (thread: LoadedThread | undefined): boolean => thread?.exec === true && !thread.offered;
+
+type RolloutRevisions = ReadonlyMap<string, ReturnType<typeof rolloutRevision>>;
+
+interface RenderedReplyProof {
+  files: RolloutRevisions;
+  ignoreBackground: boolean;
+  growingPeers: ReadonlySet<string>;
+  reweigh: () => RolloutRevisions | null;
+}
+
+const COMPLETED_REPLY_REWEIGHS = 2;
+const COMPLETED_REPLY_TAIL_BYTES = 1024 * 1024;
+
+function renderedReplyCurrent({ files, growingPeers, reweigh }: RenderedReplyProof): boolean {
+  const mayHaveGrown = ({ path, before, now }: {
+    path: string; before: ReturnType<typeof rolloutRevision>; now: ReturnType<typeof rolloutRevision>;
+  }): boolean => growingPeers.has(path) && now.dev === before.dev && now.ino === before.ino
+    && now.size > before.size && now.size - before.size <= BigInt(COMPLETED_REPLY_TAIL_BYTES);
+  for (let attempt = 0; attempt <= COMPLETED_REPLY_REWEIGHS; attempt++) {
+    let grew = false;
+    for (const [path, before] of files) {
+      const now = rolloutRevision(path);
+      if (now.stamp === before.stamp) continue;
+      if (!mayHaveGrown({ path, before, now })) return false;
+      grew = true;
+    }
+    if (!grew) return true;
+    if (attempt === COMPLETED_REPLY_REWEIGHS) return false;
+    const next = reweigh();
+    if (next === null || next.size !== files.size) return false;
+    // Keep the strict revisions pinned across the extra reads too.
+    for (const [path, before] of files) {
+      const now = next.get(path);
+      if (now === undefined || (now.stamp !== before.stamp && !mayHaveGrown({ path, before, now }))) return false;
+    }
+    files = next;
+  }
+  return false;
+}
+
+interface WeighedReply { found: string; known: ReadonlySet<string>; rendered?: RenderedReplyProof; files?: CodexHistoryScan<PromptHistory>["files"] }
+
+/**
+ * The conversation the last finished turn on a pane's screen ties it to, where no long answer shown whole does
+ * (#3262): footedShortTranscript, then footedTailTranscript. Both prove less than a long answer, so both are also
+ * weighed against the conversations of other folders the pane may be running (conversationsBeside); where those
+ * cannot be read, neither binds. Nor does the end of a long answer beside a candidate that continues a rollout
+ * which was not found (a fork, a backtrack): it shows what its parent said, and its read holds none of it.
+ *
+ * Nothing found here is remembered as a binding: the screen is asked again on every lookup, so a pane that moved
+ * on (a resume in the same TUI makes no thread, and may even draw the same rows) is weighed against what the
+ * store holds then. Only the answer to the very same question is kept (lookupAnswers). With every rollout weighed
+ * (`known`), for the caller to hold the pane's last read to (stillAsWeighed).
+ */
+async function lastTurnConversation({ paneId, processes, screen, candidates, resumed, owners, home, ignoreBackground }: {
+  paneId: string; processes: string; screen: string; candidates: Candidate[]; resumed: string | null;
+  owners: ReadonlySet<string>; home: string; ignoreBackground: boolean;
+}): Promise<WeighedReply | null> {
+  // nothing to read unless the screen shows its last turn finished
   const view = footedView(screen.slice(Math.max(0, screen.lastIndexOf("OpenAI Codex (v"))));
-  if (idleTurnFooter(view.split("\n").map((line) => line.replace(/\r$/, ""))) === null) return null;
+  const lines = view.split("\n").map((line) => line.replace(/\r$/, ""));
+  if (idleTurnFooter({ lines, wrappedStatus: true }) === null) return null;
   try {
-    const store = await conversationsBeside("last turn", processes, screen, candidates, resumed, owners, home);
+    const store = await conversationsBeside(`last turn\n${resumed ?? ""}`, processes, screen, candidates, resumed, owners, home);
     if (store === null) return null;
-    const found = answerKept<string | null>("last turn", paneId, store.weighed, () => {
+    const found = idleTurnFooter({ lines }) === null ? null : answerKept<string | null>("last turn", paneId, store.weighed, () => {
       const wholeReads = new Map<string, boolean>();
       const whole = (path: string): boolean => wholeReads.get(path) ?? (wholeReads.set(path, readWhole(path)), wholeReads.get(path)!);
       const others = store.beside.map((path) => historyTailWithLead(path, 1024 * 1024, home));
@@ -3453,6 +3528,8 @@ async function lastTurnConversation(paneId: string, processes: string, screen: s
       return tail !== null && every.some((candidate) => candidate.path !== tail && Object.keys(record(rolloutHeader(candidate.path)?.history_base)).length > 0 && !chainComplete(candidate.path, home)) ? null : tail;
     });
     if (found !== null) return { found, known: store.known };
+    const completed = completedReplyConversation({ view, store, resumed, owners, home, ignoreBackground });
+    if (completed !== null) return completed;
     // Pending scans are deliberately outside answerKept: an unchanged screen must retry them.
     const unmarked = await unmarkedConversation({ screen, paths: store.known, owners, home });
     return unmarked === null ? null : { ...unmarked, known: store.known };
@@ -3517,6 +3594,65 @@ function readPromptHistory({ history, line }: { history: PromptHistory; line: st
   if (history.onlyStarted && (user || assistant || payload["item"] !== undefined || turnUnderWay(line) !== null)) history.onlyStarted = false;
   if (assistant && deepStrings(payload).some(endsInTurnFooter)) history.footerEnded = true;
   return true;
+}
+
+function completedReplyConversation({ view, store, resumed, owners, home, ignoreBackground }: {
+  view: string; store: NonNullable<Awaited<ReturnType<typeof conversationsBeside>>>; resumed: string | null;
+  owners: ReadonlySet<string>; home: string; ignoreBackground: boolean;
+}): WeighedReply | null {
+  if (resumed !== null && !owners.has(resumed)) return null;
+  const beside = store.beside.filter((path) => !ignoreBackground || path === resumed || !backgroundExec(store.threads.get(path)));
+  const known = new Set([...store.known].filter((path) => !store.beside.includes(path)).concat(beside));
+  const weigh = () => {
+    const files = new Map<string, ReturnType<typeof rolloutRevision>>();
+    const inherited = new Set<string>();
+    for (const path of known) {
+      if (!files.has(path)) files.set(path, rolloutRevision(path));
+      for (const segment of codexHistorySegments(path, home)) {
+        if (segment.path !== path) inherited.add(segment.path);
+        if (!files.has(segment.path)) files.set(segment.path, rolloutRevision(segment.path));
+      }
+      if (!chainComplete(path, home)) return null;
+    }
+    // Read the tails after recording every relevant revision, including the inherited segments.
+    return readBound([...files], () => {
+      const candidates = [...known].map((path) => ({ path, ...historyTailWithLead(path, COMPLETED_REPLY_TAIL_BYTES, home) }));
+      const found = matchCompletedReply({ view, candidates, owners, beside, whole: readWhole });
+      return found === null ? null : { found, files, inherited };
+    });
+  };
+  const first = weigh();
+  if (first === null) return null;
+  const growingPeers = new Set([...known].filter((path) => owners.has(path) && path !== first.found && !first.inherited.has(path)));
+  return { found: first.found, known, rendered: {
+    files: first.files, ignoreBackground, growingPeers,
+    reweigh: () => {
+      const next = weigh();
+      return next?.found === first.found ? next.files : null;
+    },
+  } };
+}
+
+/** A complete rendered answer can settle a local turn once the possible resumed threads have been read. */
+function matchCompletedReply({ view, candidates, owners, beside, whole }: {
+  view: string; candidates: (Candidate & { lead: string })[]; owners: ReadonlySet<string>; beside: readonly string[];
+  whole: (path: string) => boolean;
+}): string | null {
+  const footed = footedAnswer({ screen: view, wrappedStatus: true });
+  if (footed === null) return null;
+  const begun = candidates.filter((candidate) => !(turnless(candidate) && whole(candidate.path)));
+  const turn = footedTurnOwner(footed, begun, [], owners);
+  if (turn === null || !askedAsShown(turn.asked, footed.rows) || turn.askedElsewhere(false)) return null;
+  // A cut or still-running outside history may be the one the TUI resumed.
+  if (begun.some((candidate) => beside.includes(candidate.path)
+    && (underWay(candidate, whole) || lastTurnOf(candidate)?.asked == null))) return null;
+  const letters = normalizeDisplay(footed.text);
+  const anchor = answerAnchor(turn.answer);
+  if (anchor === null || !letters.includes(anchor.anchor)
+    || !completedAnswerMatches({ answer: turn.answer, screen: footed.text, unorderedLists: true })) return null;
+  const bare = bareLetters(footed.text), words = wordsEnding(footed.text, letters.length);
+  if (begun.some((candidate) => candidate.path !== turn.path && saidBy({ candidate, letters, bare, words, whole: true }))) return null;
+  return candidates.some(({ path, lead }) => path !== turn.path && lead !== "" && saidInLead(lead, letters, bare, words)) ? null : turn.path;
 }
 
 /**
@@ -3672,7 +3808,7 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
         boundNewer = [];
       }
     } else if (retried !== null) {
-      if (!await stillAsWeighed(paneId, processes, screen.text, home, retried.known)) return null;
+      if (!await stillAsWeighed({ paneId, processes, screen: screen.text, home, known: retried.known })) return null;
       matched = retried.found;
     }
   }
@@ -3696,9 +3832,11 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
   }
   if (screen !== null && listed && candidates.length === paths.length && !agent.nestedTerminal && !agent.unlabelled && (resumed === null || resumedPath !== null)
     && !codexProcesses.some(({ argv = [] }) => argv.some((arg) => arg === "--remote" || arg.startsWith("--remote=")))) {
-    const tied = await lastTurnConversation(paneId, processes, screen.text, candidates, resumedPath, folderRollouts, home);
+    const tied = await lastTurnConversation({ paneId, processes, screen: screen.text, candidates, resumed: resumedPath, owners: folderRollouts, home,
+      ignoreBackground: !codexProcesses.some(({ argv = [] }) => execRun(argv)) });
     if (tied !== null) {
-      if (!await stillAsWeighed(paneId, processes, screen.text, home, tied.known)) return null;
+      // the loaded threads were read since the screen was: a pane that moved on meanwhile is answered nothing
+      if (!await stillAsWeighed({ paneId, processes, screen: screen.text, home, known: tied.known, rendered: tied.rendered })) return null;
       if (tied.files?.some(({ path, stat: before }) => {
         const now = statSync(path, { throwIfNoEntry: false });
         return now === undefined || now.dev !== before.dev || now.ino !== before.ino || now.size !== before.size
@@ -3849,7 +3987,7 @@ async function soleLoadedResume({ paneId, processes, screen, home, resumedPath, 
     if (newer.some((path) => codexRolloutPath(path, home) === null)) return null;
     const loaded = await loadedRollouts(home);
     if (loaded?.size !== 1 || !loaded.get(resumedPath)?.offered) return null;
-    if (!await stillAsWeighed(paneId, processes, screen, home, new Set(loaded.keys()))) return null;
+    if (!await stillAsWeighed({ paneId, processes, screen, home, known: new Set(loaded.keys()) })) return null;
     // The last screen read may precede an unload or a replacement; keep the resumed thread held too.
     const now = await loadedRollouts(home);
     return now?.size === 1 && now.get(resumedPath)?.offered ? resumedPath : null;

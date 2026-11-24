@@ -47,7 +47,7 @@ export const SETTINGS_HELP_ZH: Record<string, string> = {
   "Where a web address opens when you press it; Shift-click opens it the other way. Only a page this PC serves, such as a dev server on localhost, can open in the app: any other site opens in a new tab.": "点按网址时在哪里打开；按住 Shift 点击则以另一种方式打开。只有此 PC 提供的页面（例如 localhost 上的开发服务器）可以在应用内打开，其他网站都在新标签页中打开。",
   "Only pages this PC serves can open beside the pane.": "只有此 PC 提供的页面可以在窗格旁打开。",
   "Only pages this PC serves can open in the app.": "只有此 PC 提供的页面可以在应用内打开。",
-  "On every device, a message sent while the agent is working goes by itself when the agent finishes. When off, it waits until you press Send now.": "在所有设备上，Agent 工作期间发送的消息会在 Agent 完成后自动发出。关闭时，会一直等到你按下“立即发送”。",
+  "On every device, sending a message while the agent is working steers the current turn. When off, the message waits until you press Send now.": "在所有设备上，Agent 工作期间发送的消息会引导当前轮次。关闭时，会一直等到你按下“立即发送”。",
   "On this device, a long line in the file viewer and in diffs continues on the next line. When off, it runs past the edge and scrolls sideways.": "在此设备上，文件查看器和差异视图中的长行会折到下一行。关闭时，长行会超出边缘，需要横向滚动。",
   "Adds Edit to the file viewer for a text file in the pane's folder. Saving asks first, and refuses if the file changed after you opened it.": "对窗格文件夹中的文本文件，在文件查看器中添加“编辑”。保存前会先询问；如果文件在你打开之后被改动过，则不会保存。",
   "A file left open when you switch to another tab shows again when you come back to that tab. When off, the tab comes back without it.": "切换到其他标签页时仍开着的文件，在你回到那个标签页时会再次显示。关闭时，回到标签页后不再显示该文件。",

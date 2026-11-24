@@ -119,7 +119,7 @@ export const SETTINGS_ZH: Record<string, string> = {
   "Enter one character.": "请输入一个字符。",
   "Add combination": "添加组合键",
   "Already added": "已添加",
-  "Send queued messages automatically": "自动发送排队消息",
+  "Steer active turns automatically": "自动引导当前轮次",
   "Clipboard from a pane": "从窗格写入剪贴板",
   "Show pictures in the terminal": "在终端显示图片",
   "Keyboard only from the key bar": "仅从按键栏打开键盘",

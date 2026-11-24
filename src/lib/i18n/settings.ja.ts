@@ -119,7 +119,7 @@ export const SETTINGS_JA: Record<string, string> = {
   "Enter one character.": "1文字を入力してください。",
   "Add combination": "組み合わせを追加",
   "Already added": "追加済み",
-  "Send queued messages automatically": "送信待ちメッセージを自動で送信",
+  "Steer active turns automatically": "実行中のターンに自動で指示を送る",
   "Clipboard from a pane": "ペインからクリップボードへ",
   "Show pictures in the terminal": "ターミナルに画像を表示",
   "Keyboard only from the key bar": "キーボードはキーバーからのみ",

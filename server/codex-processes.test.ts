@@ -4407,6 +4407,14 @@ describe("a Codex pane keeps its conversation beside a second Codex that only st
   const finished = (prompt: string, reply: string, clock: string, top: readonly string[] = header): string =>
     [...top, `› ${prompt}`, "", "", `• ${reply}`, "", `  Worked for 1s • ${clock}`, ...composer].join("\n");
   const redrawn = [...header, "› Ask Codex to do anything", "", "  GPT-6-Luna low · /tmp/proj", "  ← for agents · ? for shortcuts"].join("\n");
+  const bulletedReply = "The **verification** is complete.\n\n- [Open the report](https://example.test/report)\n- [Open the logs](https://example.test/logs)\n\nThe report lists the independent checks and gives detailed instructions for reproducing each result.";
+  const bulletedScreen = finished(longPrompt, [
+    "The verification is complete.", "", "  • Open the report", "    (https://example.", "    test/report)",
+    "  • Open the logs (https://example.test/logs)", "",
+    "  The report lists the independent checks and gives detailed instructions for reproducing each result.",
+  ].join("\n"), "16:14").replace("/tmp/proj · Reply with one word", "/tmp/proj ·\n  Check independent reports · Main [default]");
+  const startedTask = (id: string) => ({ type: "event_msg", payload: { type: "task_started", turn_id: id } });
+  const cutToolOutput = { type: "response_item", payload: { type: "function_call_output", call_id: "cut", output: "x".repeat(2 * 1024 * 1024) } };
 
   it("keeps a pane whose long answer is still on screen: the answer matches again", async () => {
     foreground = live;
@@ -4415,6 +4423,189 @@ describe("a Codex pane keeps its conversation beside a second Codex that only st
     expect(await resolve()).toBe(path);
     startSecondCodex();
     expect(await resolve()).toBe(path);
+  });
+
+  for (const via of ["argv", "picker"] as const) {
+    heldIt(`does not select the local twin on a cross-folder Codex resume via ${via}`, async () => {
+      const resumed = "01a16b22-7e1f-7072-8897-d5e46a0d5f71";
+      foreground = [{ pid: 2147483645, argv: ["/usr/bin/codex", "resume", via === "argv" ? resumed : "--all"] }];
+      writeRollout(path, thread, [
+        ...turn("old-local", "Which conversation is this?", "Local twin only."),
+        ...turn("local", longPrompt, bulletedReply),
+      ]);
+      startSecondCodex([cutToolOutput, startedTask("cut")], -5);
+      const actual = elsewhereThread(resumed, [
+        ...turn("old-remote", "Which conversation is this?", "Actual resumed session."),
+        ...turn("remote", longPrompt, bulletedReply),
+      ]);
+      const db = new Database(join(home, "state_5.sqlite"));
+      db.query("UPDATE threads SET updated_at = ? WHERE id = ?").run(Math.floor(Date.now() / 1000), resumed);
+      db.close();
+      if (via === "picker") await loaded(resumed);
+      screen = bulletedScreen;
+      if (via === "argv") {
+        expect(await resolve()).toBe(actual);
+        const page = await conversationModule.paneConversation(root, home, { prompts: 10 });
+        const messages = page.turns.flatMap((item) => item.parts);
+        expect(messages).toContainEqual({ kind: "text", text: "Actual resumed session." });
+        expect(messages).not.toContainEqual({ kind: "text", text: "Local twin only." });
+      } else {
+        expect([null, actual]).toContain(await resolve());
+      }
+    });
+  }
+
+  heldIt("matches a completed bulleted reply below wrapped Codex status", async () => {
+    foreground = live;
+    writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+    const peer = startSecondCodex([cutToolOutput, startedTask("cut")]);
+    screen = bulletedScreen;
+    expect(await resolve()).toBe(path);
+    for (const altered of [
+      bulletedScreen.replace("test/report)", "test/report]"),
+      bulletedScreen.replace("Ask Codex to do anything", "Draft message"),
+      bulletedScreen.replace("Check independent reports · Main [default]", "Unrelated composer row"),
+    ]) {
+      screen = altered;
+      expect(await resolve()).toBeNull();
+    }
+    screen = bulletedScreen;
+    writeRollout(peer, secondThread, turn("peer", longPrompt, bulletedReply.replace("**verification**", "verification")));
+    expect(await resolve()).toBeNull();
+    writeRollout(peer, secondThread, [startedTask("peer"), ...turn("peer", longPrompt, "").slice(0, 2)]);
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("opens a completed reply while a same-folder Codex peer streams", async () => {
+    foreground = live;
+    writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+    const peer = startSecondCodex([startedTask("peer"), ...turn("peer", "Inspect the unrelated build output.", "").slice(0, 2)]);
+    screen = bulletedScreen;
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const writing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads % 2 === 0) appendFileSync(peer, lines([{ type: "event_msg", payload: { type: "agent_reasoning", text: `Inspecting build step ${reads}.` } }]));
+      return read(input);
+    });
+    try {
+      for (let lookup = 1; lookup <= 5; lookup++) {
+        expect(await resolve()).toBe(path);
+        expect(reads).toBe(lookup * 2);
+      }
+    } finally { writing.mockRestore(); }
+  });
+
+  heldIt("refuses a local match when a same-folder Codex peer grows into a twin", async () => {
+    foreground = live;
+    writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+    const peer = startSecondCodex([startedTask("peer"), ...turn("peer", "Inspect the unrelated build output.", "").slice(0, 2)]);
+    screen = bulletedScreen;
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const writing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) appendFileSync(peer, lines(turn("twin", longPrompt, bulletedReply)));
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(2);
+    } finally { writing.mockRestore(); }
+  });
+
+  for (const change of ["append", "same-size replacement"] as const) {
+    heldIt(`refuses a rendered reply when a loaded competitor changes by ${change}`, async () => {
+      foreground = live;
+      writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+      startSecondCodex([cutToolOutput, startedTask("cut")]);
+      const other = "01a16b22-7e1f-7072-8897-d5e46a0d5f71";
+      const rival = elsewhereThread(other, turn("other", longPrompt.replace("which", "where"), bulletedReply.replace("verification", "confirmation")));
+      await loaded(other);
+      screen = bulletedScreen;
+      const read = herdrClient.paneRead;
+      let reads = 0;
+      const changing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+        if (++reads === 2) {
+          if (change === "append") appendFileSync(rival, lines(turn("twin", longPrompt, bulletedReply)));
+          else {
+            const previous = fs.readFileSync(rival, "utf8");
+            const next = previous.replaceAll(longPrompt.replace("which", "where"), longPrompt).replaceAll("confirmation", "verification");
+            expect(Buffer.byteLength(next)).toBe(Buffer.byteLength(previous));
+            writeFileSync(`${rival}.new`, next);
+            fs.renameSync(`${rival}.new`, rival);
+          }
+        }
+        return read(input);
+      });
+      try {
+        expect(await resolve()).toBeNull();
+        expect(reads).toBe(2);
+      } finally { changing.mockRestore(); }
+    });
+  }
+
+  heldIt("loads a completed reply while an unrelated background Codex exec writes", async () => {
+    foreground = live;
+    writeRollout(path, thread, turn("local", longPrompt, bulletedReply));
+    startSecondCodex([cutToolOutput, startedTask("cut")]);
+    const other = "01a16b22-7e1f-7072-8897-d5e46a0d5f71";
+    const background = elsewhereThread(other, [startedTask("background")], "exec");
+    const run = await loadedByExec(other);
+    screen = bulletedScreen;
+    const read = herdrClient.paneRead;
+    let reads = 0;
+    const writing = spyOn(herdrClient, "paneRead").mockImplementation((input) => {
+      if (++reads === 2) appendFileSync(background, lines([{ type: "event_msg", payload: { type: "agent_message", message: "Background progress." } }]));
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBe(path);
+      expect(reads).toBe(2);
+      expect(run.exitCode).toBeNull();
+    } finally { writing.mockRestore(); }
+
+    const switching = spyOn(herdrClient, "paneRead").mockImplementation(async (input) => {
+      if (++reads === 4) {
+        run.kill();
+        await run.exited;
+        await loaded(other);
+      }
+      return read(input);
+    });
+    try {
+      expect(await resolve()).toBeNull();
+      expect(reads).toBe(4);
+    } finally { switching.mockRestore(); }
+    expect(await resolve()).toBeNull();
+  });
+
+  heldIt("loads a large Codex conversation after a completed bulleted reply", async () => {
+    foreground = live;
+    const toolBytes = "synthetic command output\n".repeat(132_000);
+    const toolCall = { type: "response_item", payload: { type: "function_call", call_id: "earlier-call", name: "exec_command", arguments: '{"cmd":"verify"}' } };
+    const toolOutput = { type: "response_item", payload: { type: "function_call_output", call_id: "earlier-call", output: toolBytes } };
+    writeRollout(path, thread, []);
+    for (let index = 0; index < 6; index++) {
+      const id = `old-${index}`;
+      const records = turn(id, `Run check ${index}`, `Finished check ${index}`);
+      records.splice(2, 0, toolCall, toolOutput);
+      appendFileSync(path, lines([startedTask(id), ...records]));
+    }
+    appendFileSync(path, lines([startedTask("latest"), ...turn("latest", longPrompt, bulletedReply)]));
+    startSecondCodex([toolOutput, startedTask("unread")]);
+    screen = bulletedScreen;
+    const bytes = statSync(path).size;
+    expect(bytes).toBeGreaterThan(16 * 1024 * 1024);
+    const started = performance.now();
+    const page = await conversationModule.paneConversation(root, home, { prompts: 10 });
+    const milliseconds = performance.now() - started;
+    console.log(JSON.stringify({ case: "large completed Codex chat", bytes, milliseconds }));
+    expect(page.source).toBe("codex-transcript");
+    expect(page.turns.at(-1)?.parts).toContainEqual({ kind: "text", text: bulletedReply });
+    expect(milliseconds).toBeLessThan(1_500);
+    if (!page.cursor) throw new Error("Expected a cursor into the large transcript");
+    const older = await conversationModule.paneConversation(root, home, { before: page.cursor, prompts: 10 });
+    expect(older.turns[0]?.parts).toContainEqual({ kind: "text", text: "Run check 0" });
+    expect(older.turns[1]?.parts).toContainEqual(expect.objectContaining({ kind: "tool", output_ref: "earlier-call" }));
   });
 
   heldIt("keeps a pane showing an answer Codex renders its own way once a second Codex starts, through a draft, until /new", async () => {

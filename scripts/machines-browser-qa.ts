@@ -1,3 +1,4 @@
+/** Run against SSH_TEST_KEEP=1's fixture against real remote bridges. */
 import assert from "node:assert/strict";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import { herdrRpc } from "../server/herdr/client.ts";
 import { paneStorageId } from "../shared/machines.ts";
 import { openSettingsPage } from "./settings-page.ts";
 import { chromePath } from "./chrome-path.ts";
+import { legacyQueuedSubmit } from "./legacy-queue-fixture.ts";
 const fixture = JSON.parse(readFileSync(process.argv[2]!, "utf8")) as { root: string; remoteHome: string; port: number; machineId: string; secondMachineId: string; paneId: string };
 const { machineId: a, secondMachineId: b, paneId } = fixture;
 const origin = `http://127.0.0.1:${fixture.port}`;
@@ -16,6 +18,13 @@ const page = await context.newPage(); page.setDefaultTimeout(15_000);
 const errors: string[] = []; page.on("pageerror", (e) => errors.push(e.message));
 const inputs: { machine: string; pane: string }[] = [];
 const pendingActions: { machine: string; pane: string; action: string }[] = [];
+await page.routeWebSocket((url) => url.pathname === "/ws" && url.searchParams.get("machine_id") === a, (socket) => {
+  const upstream = socket.connectToServer();
+  socket.onMessage((raw) => {
+    // Seed legacy queued receipts to exercise disconnect recovery through the remote bridge.
+    upstream.send(legacyQueuedSubmit({ raw, matches: (frame) => frame.text.startsWith("PENDING_A_") }));
+  });
+});
 page.on("websocket", (socket) => socket.on("framesent", ({ payload }) => {
   const message = JSON.parse(String(payload));
   const machine = new URL(socket.url()).searchParams.get("machine_id")!;
@@ -97,7 +106,7 @@ try {
     await until(async () => await pendingRows.count() === index + 1 && await composer.inputValue() === "", "remote pending accepted");
     assert.deepEqual(inputs.at(-1), { machine: a, pane: paneId });
   }
-  assert.equal(bytes(), "", "working Send retains text at the bridge");
+  assert.equal(bytes(), "", "legacy queued input stays at the bridge");
   await pendingRows.first().getByRole("button", { name: /^Send now:/ }).click();
   await until(async () => await pendingRows.count() === 1 && bytes().endsWith("\r"), "remote explicit Send now");
   const delivered = "\u001b[200~PENDING_A_SEND_NOW\u001b[201~\r";
