@@ -989,6 +989,14 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 .pr-badge[href]:hover .pr-badge-mark { text-decoration: underline; }
 .pr-badge:focus-visible { outline: var(--ring); outline-offset: var(--ring-offset); }
 
+.workspace-tokens {
+  margin: 0 var(--space-2) var(--space-1) calc(var(--side-box) * 2);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  overflow-wrap: anywhere;
+}
+
 .pr-badge-mark {
   display: inline-flex;
   align-items: center;
@@ -1004,11 +1012,16 @@ button.sidebar-section-label:focus-visible { outline-offset: calc(var(--ring-off
 }
 
 .pr-badge[data-state="open"][data-checks="ok"] .pr-badge-mark,
+.workspace-token[data-tone="ok"],
 .pr-badge-part[data-tone="ok"] { color: var(--indicator-idle); }
 .pr-badge[data-state="open"][data-checks="pending"] .pr-badge-mark,
+.workspace-token[data-tone="pending"],
 .pr-badge-part[data-tone="pending"] { color: var(--indicator-working); }
 .pr-badge[data-state="open"][data-checks="fail"] .pr-badge-mark,
+.workspace-token[data-tone="fail"],
 .pr-badge-part[data-tone="fail"] { color: var(--indicator-blocked); }
+.workspace-token[data-tone="pending"],
+.workspace-token[data-tone="fail"] { font-weight: 600; }
 .pr-badge[data-state="merged"] .pr-badge-mark,
 .pr-badge[data-state="merged"] .pr-badge-state { color: var(--syntax-meta); }
 .pr-badge[data-state="closed"] .pr-badge-mark,

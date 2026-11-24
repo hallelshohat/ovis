@@ -7,6 +7,7 @@ import "./Sidebar.css";
 
 import type { AgentStatus, PaneContext, PaneInfo, PlanSummary, SessionSnapshot, WorkspaceInfo } from "../../shared/protocol.ts";
 import { paneTitle } from "../../shared/notify-policy.ts";
+import { workspaceTokenParts } from "../../shared/pane-tokens.ts";
 import { prStatus, prStatusWord } from "../../shared/pr-status.ts";
 import { boardTaskOf } from "../../shared/board-tasks.ts";
 import { MAX_LABEL_CHARS } from "../../shared/labels.ts";
@@ -210,6 +211,17 @@ function useRepoPage(workspace: WorkspaceInfo | undefined, wanted: boolean): str
  * `<span>` that opens the page itself and keeps the click from the row.
  * Hover or keyboard focus shows the status in words (StatusTip); a native title never shows on focus.
  */
+export function WorkspaceTokens({ workspace }: { workspace: WorkspaceInfo | undefined }) {
+  const parts = workspaceTokenParts(workspace?.tokens);
+  if (!parts.length) return null;
+  return <p className="workspace-tokens" data-testid="workspace-tokens">
+    {parts.map(({ name, value, tone }, index) => <Fragment key={name}>
+      {index > 0 && " · "}
+      <span className="workspace-token" data-token={name} data-tone={tone}>{value}</span>
+    </Fragment>)}
+  </p>;
+}
+
 export function PrBadge({ workspace, compact = false, nested = false }: { workspace: WorkspaceInfo | undefined; compact?: boolean; nested?: boolean }) {
   const t = useT();
   const pr = prStatus(workspace?.tokens);
@@ -1062,6 +1074,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions, watching = 
           </button>
         </div>
       </div>
+      <WorkspaceTokens workspace={workspace} />
       <PrBadge workspace={workspace} />
       {boardPending && <p className="workspace-board-pending" role="status">{boardPending.word}</p>}
       {inlineError?.workspaceId === workspace.workspace_id && <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>}
