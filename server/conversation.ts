@@ -1113,7 +1113,16 @@ function omoAsksBefore(path: string, stream: TranscriptStream, before: number): 
   return open;
 }
 
-function parseTurns(source: RecognizedConversation["source"], path: string, text: string, taskTitles?: Map<string, string>, noticed?: Set<string>, baseOffset?: number, omoAskIds?: Map<string, OmoAskState>, codexInput?: CodexInputState): ConversationTurn[] {
+function parseTurns({ source, path, text, taskTitles, noticed, baseOffset, omoAskIds, codexInput }: {
+  source: RecognizedConversation["source"];
+  path: string;
+  text: string;
+  taskTitles?: Map<string, string>;
+  noticed?: Set<string>;
+  baseOffset?: number;
+  omoAskIds?: Map<string, OmoAskState>;
+  codexInput?: CodexInputState;
+}): ConversationTurn[] {
   if (source === "copilot-transcript") return parseCopilotTranscript(text, Infinity, baseOffset);
   if (source === "grok-transcript") {
     try { return parseGrokTranscript(text, path); } catch (error) {
@@ -1290,7 +1299,7 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
     if (kept !== undefined) {
       const from = kept.end <= start ? kept.end : kept.start;
       const to = Math.min(start, kept.observedEnd);
-      if (to > from) parseTurns(source, path, readStream(stream, from, to).toString("utf8"), inherited, undefined, from);
+      if (to > from) parseTurns({ source, path, text: readStream(stream, from, to).toString("utf8"), taskTitles: inherited, baseOffset: from });
     }
     const fold: MetadataFold = { piProvider: null };
     settled = { source, id: stream.id, start, end: start, turns: [], codexInput: codexInputBefore({ stream, source, start }), metadata: parseConversationMetadata(`${head}
@@ -1299,7 +1308,10 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
   if (settled.end < last) {
     const text = readStream(stream, settled.end, last).toString("utf8");
     const fold = { ...settled.fold };
-    settled = { ...settled, end: last, turns: [...settled.turns, ...parseTurns(source, path, text, settled.taskTitles, settled.noticed, settled.end, source === "omo-transcript" ? settled.omoAsks : undefined, settled.codexInput)], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir, fold), tail: bytesBefore(stream, last), fold };
+    settled = { ...settled, end: last, turns: [...settled.turns, ...parseTurns({
+      source, path, text, taskTitles: settled.taskTitles, noticed: settled.noticed, baseOffset: settled.end,
+      omoAskIds: source === "omo-transcript" ? settled.omoAsks : undefined, codexInput: settled.codexInput,
+    })], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir, fold), tail: bytesBefore(stream, last), fold };
   }
   settled.observedEnd = stream.length;
   rememberPage(settledTurns, key, settled, 8);
@@ -1308,7 +1320,7 @@ function liveTurns(path: string, stream: TranscriptStream, source: RecognizedCon
     return { turns: [...settled.turns, ...live.turns], metadata: live.metadata };
   }
   const text = readStream(stream, last, stream.length).toString("utf8");
-  return { turns: [...settled.turns, ...parseTurns(source, path, text, new Map(settled.taskTitles), new Set(settled.noticed), last)], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir, { ...settled.fold }) };
+  return { turns: [...settled.turns, ...parseTurns({ source, path, text, taskTitles: new Map(settled.taskTitles), noticed: new Set(settled.noticed), baseOffset: last })], metadata: parseConversationMetadata(text, source, settled.metadata, piAgentDir, { ...settled.fold }) };
 }
 
 /** The preceding task can end on another page, even when no earlier page was cached. */
@@ -2834,7 +2846,10 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
     throw new ConversationUnavailable("transcript_missing");
   }
 
-  const parsed = live?.turns ?? parseTurns(source, path, text, undefined, undefined, start, source === "omo-transcript" ? omoAsksBefore(path, stream, start) : undefined, codexInput);
+  const parsed = live?.turns ?? parseTurns({
+    source, path, text, baseOffset: start,
+    omoAskIds: source === "omo-transcript" ? omoAsksBefore(path, stream, start) : undefined, codexInput,
+  });
   const turns = parsed.some((turn, index) => turn.parts[0]?.kind === "goal_wait" && (page.before !== undefined || index < parsed.length - 1))
     ? parsed.filter((turn, index) => turn.parts[0]?.kind !== "goal_wait" || (page.before === undefined && index === parsed.length - 1))
     : parsed;

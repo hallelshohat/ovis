@@ -579,6 +579,7 @@ export function AgentSidebar({ machines, selectedMachineId, selectedPaneId, stat
           event.dataTransfer.setData(PANE_DRAG_TYPE, paneDragData({ machineId: machine.id, paneId: pane.pane_id }));
         }}>
         {missingContext && <span className="visually-hidden">{missingContext} · </span>}
+        <AgentRowBody mark={mark} markKind={markKind} title={title} name={name} context={context} tokens={tokens} backgroundTasks={online ? pane.background_tasks : 0} plan={online ? pane.plan : undefined} paneContext={online && settings.sidebarContext ? pane.context : undefined} status={status} note={filterContext && selected ? t("Selected") : null} muted={muted?.includes(paneMuteKey(machine.id, pane.pane_id)) === true} locked={locked.has(pinKey)} blockedNote={blocked} blockedLabel={blockedShort} progress={online ? pane.agent_progress : undefined} helper={depth > 0} since={since} held={online && pane.acp_hold !== undefined} pullRequest={online ? <PaneLeadBadge machineId={machine.id} paneId={pane.pane_id} /> : null} />
         {/* a saved roster's state is not news: a PC that is away says nothing about its agents */}
       </button>
       {/* the workspace's pull request, asked of the row's own PC */}

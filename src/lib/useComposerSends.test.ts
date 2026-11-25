@@ -85,7 +85,7 @@ it("a live owner's uncertain dismissal asks the bridge to dismiss it, never as a
   try {
     const actions = sends(pane, { ok: true }, shown, { socketRef: { current: socket }, submitComposerMessage: (...args) => { wire.push(args); return Promise.resolve({ ok: true }); } });
     await actions.actOnPending(pending.id, "dismiss");
-    expect(wire).toEqual([[pane, pending.id, "discard", 0, false]]); expect(shown).toEqual([]);
+    expect(wire).toEqual([[pane, pending.id, "discard", 0, false, false]]); expect(shown).toEqual([]);
     expect(composerDrafts.read(key).text).toBe("keep my existing draft");
     expect(pendingMessages.read(owner)).toEqual([]);
   } finally { composerDrafts.set(key, ""); saved.restore(); }
@@ -98,7 +98,7 @@ it.each(["pending_uncertain", "pending_not_found"])("a live owner's dismissal th
   const socket = { connected: true, on: () => () => {}, pendingAction: (...args: unknown[]) => { wire.push(args); return Promise.resolve({ ok: false, code, message: "refused" }); } } as unknown as HerdrSocket;
   try {
     await sends(pane, { ok: true }, [], { socketRef: { current: socket } }).actOnPending(pending.id, "dismiss");
-    expect(wire).toEqual([[pane, pending.id, "discard", 0, false]]);
+    expect(wire).toEqual([[pane, pending.id, "discard", 0, false, false]]);
     expect(pendingMessages.read(owner)).toEqual([]);
     expect(new PendingMessageStore(() => saved.storage).read(owner)).toEqual([]);
     pendingMessages.publish(owner, [pending], [], "scope");
@@ -117,7 +117,7 @@ it.each(["disconnected", "not_transmitted"])("a live owner's dismissal whose con
   } } as unknown as HerdrSocket;
   try {
     await sends(pane, { ok: true }, [], { socketRef: { current: socket } }).actOnPending(pending.id, "dismiss");
-    expect(wire).toEqual([[pane, pending.id, "discard", 0, false]]);
+    expect(wire).toEqual([[pane, pending.id, "discard", 0, false, false]]);
     expect(pendingMessages.read(owner)).toEqual([]);
     expect(new PendingMessageStore(() => saved.storage).read(owner)).toEqual([]);
   } finally { saved.restore(); }
@@ -135,7 +135,7 @@ it("a dismissal whose pane moved while it waited, and whose connection then ende
   } } as unknown as HerdrSocket;
   try {
     await sends(pane, { ok: true }, [], { socketRef: { current: socket } }).actOnPending(pending.id, "dismiss");
-    expect(wire).toEqual([[pane, pending.id, "discard", 0, false]]);
+    expect(wire).toEqual([[pane, pending.id, "discard", 0, false, false]]);
     expect(pendingMessages.read(owner)).toEqual([]);
     expect(pendingMessages.read(moved)).toEqual([]);
     expect(new PendingMessageStore(() => saved.storage).read(moved)).toEqual([]);
@@ -156,7 +156,7 @@ it("another tab's dismissal of its uncertain copy leaves this tab's live row wit
     expect(pendingMessages.read(owner)).toMatchObject([{ id: live.id, state: "queued", serverOwned: true }]);
     const actions = sends(pane, { ok: true }, [], { socketRef: { current: socket } });
     for (const action of ["edit", "steer", "discard"] as const) await actions.actOnPending(live.id, action);
-    expect(wire).toEqual([[pane, live.id, "discard", 0, true], [pane, live.id, "steer", 0, false, expect.any(Function)], [pane, live.id, "discard", 0, false]]);
+    expect(wire).toEqual([[pane, live.id, "discard", 0, true, false], [pane, live.id, "steer", 0, false, false, expect.any(Function)], [pane, live.id, "discard", 0, false, false]]);
     pendingMessages.publish(owner, [{ ...live, state: "held", error: { code: "agent_blocked", message: "waits for Send now" } }], [], "scope");
     expect(pendingMessages.read(owner)).toMatchObject([{ id: live.id, state: "held", serverOwned: true }]);
     otherTab.refresh(owner);
