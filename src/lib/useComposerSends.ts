@@ -231,7 +231,7 @@ export function useComposerSends(deps: ComposerSendsDeps) {
               ? socket?.pendingAction(pane, id, "steer", generation, false, autoSteer, () => {
                 if (paneRef.current === pane && socketRef.current === socket) dropSecondEscape();
               })
-              : socket?.pendingAction(pane, id, "discard", generation, action === "edit");
+              : socket?.pendingAction(pane, id, "discard", generation, action === "edit", false);
             if (!result && dismiss) { hideLocally = true; return; }
             if (!result) {
               pendingMessages.fail(owner, id, { code: "not_transmitted", message: "the connection dropped before this message was sent" }, pendingActionUncertain("not_transmitted", message.state));

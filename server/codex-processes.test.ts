@@ -3049,6 +3049,7 @@ describe("another session's conversation is never shown for a plain Codex pane",
     const starts = new Map([[900001, 1_000_000], [900002, 990_000], [900003, 1_005_000]]);
     const bound = spyOn(processStart, "processStartLowerBound").mockImplementation((pid) => starts.get(pid) ?? null);
     const upper = spyOn(processStart, "processStartUpperBound").mockImplementation((pid) => starts.get(pid) ?? null);
+    const exact = spyOn(processStart, "processStartedAt").mockImplementation((pid) => starts.get(pid) ?? null);
     const setCreated = (seconds: number) => {
       const db = new Database(join(home, "state_5.sqlite"));
       db.query("UPDATE threads SET created_at = ?").run(seconds);
@@ -3078,6 +3079,7 @@ describe("another session's conversation is never shown for a plain Codex pane",
       starts.set(900004, 1_000_500);
       foreground = [{ pid: 900004, argv: ["/usr/bin/codex"] }];
       upper.mockImplementation((pid) => pid === 900004 ? 1_001_500 : starts.get(pid) ?? null);
+      exact.mockImplementation((pid) => pid === 900004 ? 1_001_499 : starts.get(pid) ?? null);
       expect(await resolve()).toBeNull();
       foreground = [{ pid: 900001, argv: ["/usr/bin/codex"] }];
       upper.mockImplementation((pid) => starts.get(pid) ?? null);
@@ -3085,7 +3087,7 @@ describe("another session's conversation is never shown for a plain Codex pane",
       db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, 1002, 1002, 'cli')").run("01a0c7a1-56d9-7e20-9f08-f7a2d973bc02", join(home, "sessions", "missing.jsonl"), root);
       db.close();
       expect(await resolve()).toBeNull();
-    } finally { bound.mockRestore(); upper.mockRestore(); }
+    } finally { bound.mockRestore(); upper.mockRestore(); exact.mockRestore(); }
   });
 
   it("reads nothing from a screen once the pane's last process lookup finds no Codex", async () => {

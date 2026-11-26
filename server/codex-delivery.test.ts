@@ -170,15 +170,15 @@ it.each([
   "<skill>\n<name>example</name>\n<path>/example/SKILL.md</path>\n</skill>",
 ])("confirms literal user content independently of chat display filters: %s", (literal) => {
   const line = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: literal }] } }) + "\n";
-  expect(codexDeliveryAccepted({ anchor: snapshot(user), current: snapshot(user + line), text: literal })).toBe(true);
+  expect(codexDeliveryAccepted({ anchor: snapshot(literalUser), current: snapshot(literalUser + line), text: literal })).toBe(true);
 });
 
 it("matches the full raw content across text blocks without dropping context-shaped blocks", () => {
   const parts = ["literal example:", "<environment_context>example context</environment_context>", "한글 👩🏽‍💻"];
   const line = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: parts.map((text) => ({ type: "input_text", text })) } }) + "\n";
-  const current = snapshot(user + line);
-  expect(codexDeliveryAccepted({ anchor: snapshot(user), current, text: parts.join("\r\n") })).toBe(true);
-  expect(codexDeliveryAccepted({ anchor: snapshot(user), current, text: [parts[0], parts[2]].join("\n") })).toBe(false);
+  const current = snapshot(literalUser + line);
+  expect(codexDeliveryAccepted({ anchor: snapshot(literalUser), current, text: parts.join("\r\n") })).toBe(true);
+  expect(codexDeliveryAccepted({ anchor: snapshot(literalUser), current, text: [parts[0], parts[2]].join("\n") })).toBe(false);
 });
 
 it("does not reuse an identical historical record or a partial record begun before Enter", () => {

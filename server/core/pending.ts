@@ -141,7 +141,7 @@ const TYPED_WHILE_WAITING = { code: "typed_while_waiting", message: "Something w
 const FIRST_MESSAGE_RECEIPTS = 8;
 
 export function createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, typedInto = () => 0, submitText, authorizeSocket, clientSnapshot, omo, queueHeld = () => false, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS }: {
-  options: { acp?: Pick<AcpChildren, "forPane"> | null; pendingStartTimeoutMs?: number; piReceiptLimit?: number; submitDeadlineMs?: number; submitDelayMs?: number; ompReportPollMs?: number; ompStartupMs?: number; openCodeStateDir?: string; codexServers?: Pick<CodexServers, "steerTarget">; stateDir?: string; herdrFailure?: HerdrFailureView };
+  options: { acp?: Pick<AcpChildren, "forPane"> | null; pendingStartTimeoutMs?: number; piReceiptLimit?: number; submitDeadlineMs?: number; submitDelayMs?: number; ompReportPollMs?: number; ompStartupMs?: number; openCodeStateDir?: string; codexHome?: string; codexServers?: Pick<CodexServers, "steerTarget">; stateDir?: string; herdrFailure?: HerdrFailureView };
   clients: Set<Client>;
   attachments: ReadonlyMap<string, AttachmentView>;
   sight: (client: Client, paneId: string) => TerminalSighting;
@@ -848,7 +848,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
       let attached: string[] = [];
       let prompt: PromptPiece[] = [{ pasted: closeMention(sent) }];
       watch = startOpenCodeWatch(context.pane, command, options.openCodeStateDir);
-      if (sendNow && nativeItem && context.working && context.agentInFront && context.identity.agent === "codex"
+      if (!automatic && nativeItem && context.working && context.agentInFront && context.identity.agent === "codex"
         && !context.collapsed && !command && !/(?:^|\s)[!/@$]\S*/u.test(text) && sent === text && closeMention(sent) === text) {
         const argv = context.processes?.foreground_processes?.find((p) => p.pid === context.identity.processPid)?.argv ?? [];
         const target = options.codexServers?.steerTarget(paneId, argv);
@@ -857,11 +857,13 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
           const clientId = crypto.randomUUID(), at = Date.now();
           const reply = await target.send(text, clientId, async () => {
             const current = await pendingContext(owner, paneId, lease, identity, false, true);
+            requireWorkingTurn(current);
             if (!current.working || current.collapsed || codexDisagrees(current.pane, target.threadId))
               throw new HerdrError(TARGET_CHANGED.code, TARGET_CHANGED.message);
             await noMaskedPrompt(paneId, lease.sighting.facts().cols, identity);
           }, () => {
             authorizePending(owner, paneId, lease);
+            if (newerRest()) throw turnEnded();
             if (row.withdrawn?.() || Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS))
               throw new HerdrError("submit_timeout", "The message expired before delivery");
             committing(true);
@@ -878,7 +880,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
           }
           // No steer went. Start the terminal path from its first guard, without trying the RPC again.
           return await dispatchPendingText(owner, paneId, text, lease, identity, automatic, arrivedAt, committing,
-            sendNow, requestId, agentOnly, queued, row);
+            requestId, agentOnly, queued, row);
         }
       }
       if (Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) throw new HerdrError("submit_timeout", "The pending message waited too long; nothing was typed");

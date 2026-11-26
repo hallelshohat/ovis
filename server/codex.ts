@@ -3597,7 +3597,7 @@ function readPromptHistory({ history, line }: { history: PromptHistory; line: st
 }
 
 function completedReplyConversation({ view, store, resumed, owners, home, ignoreBackground }: {
-  view: string; store: NonNullable<Awaited<ReturnType<typeof conversationsBeside>>>; resumed: string | null;
+  view: string; store: Pick<NonNullable<Awaited<ReturnType<typeof conversationsBeside>>>, "known" | "beside" | "threads">; resumed: string | null;
   owners: ReadonlySet<string>; home: string; ignoreBackground: boolean;
 }): WeighedReply | null {
   if (resumed !== null && !owners.has(resumed)) return null;
@@ -3820,7 +3820,7 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
       if (loaded === null
         || ([...loaded.keys()].some((path) => path !== matched)
           && await loadedConversation(screen.text, paths.filter((path) => path !== matched), home, loaded) !== matched)
-        || !await stillAsWeighed(paneId, processes, screen.text, home, new Set(loaded.keys()))) {
+        || !await stillAsWeighed({ paneId, processes, screen: screen.text, home, known: new Set(loaded.keys()) })) {
         boundRollouts.delete(paneId);
         return null;
       }
@@ -3911,6 +3911,15 @@ export async function codexTranscriptPath(paneId: string, cwd: string, home = de
     // A verified launch ID is still useful before any answer is visible (including terminals
     // with tool output only). A visible answer that fits no candidate is not launch evidence.
     if ((!screenHasAnswer && onlyPlausible(resumedPath)) || withoutAnswer(resumedPath) || visibleMatch(resumedPath)) return resumedPath;
+    // An explicit cross-folder launch can resolve a rendered twin only when no other thread is loaded.
+    if (resumedPath === addedResume && screen !== null && listed && loaded !== null && noLoadedCompetitor(resumedPath)
+      && !agent.nestedTerminal && !agent.unlabelled) {
+      const known = new Set([resumedPath]);
+      const view = footedView(screen.text.slice(Math.max(0, screen.text.lastIndexOf("OpenAI Codex (v"))));
+      const rendered = completedReplyConversation({ view, store: { known, beside: [resumedPath], threads: loaded },
+        resumed: resumedPath, owners: known, home, ignoreBackground: true });
+      if (rendered !== null && await stillAsWeighed({ paneId, processes, screen: screen.text, home, known, rendered: rendered.rendered })) return resumedPath;
+    }
   }
   if (agent.nestedTerminal || agent.unlabelled) return null;
   const short = screen === null ? null : await (async () => {

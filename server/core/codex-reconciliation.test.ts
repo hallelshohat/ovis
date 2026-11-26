@@ -8,10 +8,9 @@ import type { TerminalSighting } from "./terminals.ts";
 import { connectionData, type Client } from "./connections.ts";
 import * as codex from "../codex.ts";
 import * as herdr from "../herdr/client.ts";
-import * as steering from "../codex-steering.ts";
 import { createPendingDelivery } from "./pending.ts";
 
-const original = { home: codex.paneCodexHomePlaced, rollout: codex.codexOpenRollout, info: herdr.paneProcessInfo, read: herdr.paneRead, text: herdr.paneSendText, keys: herdr.paneSendKeys, interrupt: steering.interruptCodexSteering };
+const original = { home: codex.paneCodexHomePlaced, rollout: codex.codexOpenRollout, info: herdr.paneProcessInfo, read: herdr.paneRead, text: herdr.paneSendText, keys: herdr.paneSendKeys };
 let path = "", pid = process.pid, loseEnterReply = false, failedIdentityReads = 0, realPlacement = false, infoReads = 0, failInfoAt = -1, missingRollouts = 0, replaceProcessOnRollout = false;
 const writes: string[] = [];
 mock.module("../codex.ts", () => ({ ...codex, paneCodexHomePlaced: async (...args: Parameters<typeof original.home>) => realPlacement ? original.home(...args) : { home: "/test-store", placed: true }, codexOpenRollout: async () => {
@@ -25,13 +24,11 @@ mock.module("../herdr/client.ts", () => ({ ...herdr,
   paneSendText: async (_pane: string, text: string, _socket: unknown, guard: () => boolean) => { if (guard()) writes.push(text); },
   paneSendKeys: async (_pane: string, keys: string[]) => { writes.push(keys.join(" ")); if (loseEnterReply) throw new Error("Enter was written but its reply was lost"); },
 }));
-mock.module("../codex-steering.ts", () => ({ ...steering, interruptCodexSteering: async () => { throw new Error("interruption check timed out after Enter"); } }));
 const roots: string[] = [];
 afterEach(() => { pid = process.pid; loseEnterReply = false; failedIdentityReads = 0; realPlacement = false; infoReads = 0; failInfoAt = -1; missingRollouts = 0; replaceProcessOnRollout = false; writes.length = 0; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 afterAll(() => {
   mock.module("../codex.ts", () => ({ ...codex, paneCodexHomePlaced: original.home, codexOpenRollout: original.rollout }));
   mock.module("../herdr/client.ts", () => ({ ...herdr, paneProcessInfo: original.info, paneRead: original.read, paneSendText: original.text, paneSendKeys: original.keys }));
-  mock.module("../codex-steering.ts", () => ({ ...steering, interruptCodexSteering: original.interrupt }));
 });
 const ready: SightingFacts = { attached: true, origin: true, sameAttachment: true, samePty: true, sameClaim: true, claimed: true, member: true, ready: true, held: false, currentHeld: false, mirror: false, cols: 80 };
 function fixture(managed = true, acknowledged = false, turnEnded = false, stateDir?: string) {
@@ -84,7 +81,7 @@ function fixture(managed = true, acknowledged = false, turnEnded = false, stateD
     refuseTypedDraft: (value: boolean) => { refuseTypedDraft = value; }, barrier: () => serialize("p", () => {}) };
 }
 
-describe("a Codex send whose interruption check timed out", () => {
+describe("Codex delivery reconciliation", () => {
   it("does not write a transcript-consumed ID again on a fresh bridge", async () => {
     const first = fixture(), row = await first.queue(1, "my pending text");
     await first.steer(row.id);
@@ -183,12 +180,14 @@ describe("a Codex send whose interruption check timed out", () => {
     expect(f.delivery.pending.list(f.owner, "p")).toEqual([]);
   });
 
-  it("reserves an Enter whose acknowledgement was lost before another held identical send", async () => {
+  it("keeps a lost Enter acknowledgement uncertain and steers the next message without Escape", async () => {
     const f = fixture(false), first = await f.queue(1, "repeat"), second = await f.queue(2, "repeat");
     loseEnterReply = true; await f.steer(first.id); loseEnterReply = false;
     await f.steer(second.id);
     f.append("repeat"); await f.delivery.reconcileCodexDeliveries("p");
-    expect(f.delivery.pending.list(f.owner, "p")).toMatchObject([{ id: first.id, state: "uncertain" }, { id: second.id, state: "uncertain" }]);
+    expect(f.delivery.pending.list(f.owner, "p")).toMatchObject([{ id: first.id, state: "uncertain" }]);
+    expect(writes).toHaveLength(4);
+    expect(writes.filter((write) => write === "Enter")).toHaveLength(2);
   });
 
   it("does not give a terminal-line submission's native record to an uncertain Chat send", async () => {
